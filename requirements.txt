@@ -1,0 +1,12 @@
+absl-py
+dill
+dm-haiku
+jax
+jaxline @ git+https://github.com/deepmind/jaxline.git
+ml_collections
+numpy
+optax
+scipy
+tensorflow
+tensorflow_datasets
+tensorflow_privacy
