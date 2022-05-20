@@ -32,7 +32,7 @@ from jax_privacy.src.training.image_classification.data import mnist_cifar_svhn
 
 from jaxline import train
 import ml_collections
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 import tensorflow_datasets as tfds
 
 
@@ -90,7 +90,6 @@ def get_config(config):
           },
           'data': {
               'dataset': data.get_dataset('cifar10', 'train', 'valid'),
-              'resize': None,
               'random_flip': True,
               'random_crop': True,
               'augmult': 16,  # implements arxiv.org/abs/2105.13343
@@ -117,7 +116,8 @@ class HermeticExperiment(experiment.Experiment):
   """Experiment but with a dummy dataset to make the test hermetic."""
 
   def _preprocess_batch(self, x, y, is_training):
-    return mnist_cifar_svhn.preprocess_batch(
+    """Pre-process the mini-batch like CIFAR data."""
+    x, y = mnist_cifar_svhn.preprocess_batch(
         x,
         y,
         is_training=is_training,
@@ -127,6 +127,7 @@ class HermeticExperiment(experiment.Experiment):
         dataset=self.config.data.dataset,
         image_resize=None,
     )
+    return {'images': x, 'labels': y}
 
   def _build_train_input(self):
     """See base class."""
@@ -137,7 +138,8 @@ class HermeticExperiment(experiment.Experiment):
         .map(lambda x, y: self._preprocess_batch(x, y, is_training=True))
         .batch(self.config.training.batch_size.per_device_per_step,
                drop_remainder=True)
-        .batch(jax.local_device_count(), drop_remainder=True))
+        .batch(jax.local_device_count(), drop_remainder=True)
+    )
 
   def _build_eval_input(self):
     """Builds the evaluation input pipeline."""
@@ -146,7 +148,8 @@ class HermeticExperiment(experiment.Experiment):
         tf.data.Dataset.from_tensors((tf.ones((32, 32, 3)), tf.constant([0])))
         .repeat(10)
         .map(lambda x, y: self._preprocess_batch(x, y, is_training=False))
-        .batch(2))
+        .batch(2)
+    )
 
 
 class ExperimentTest(chex.TestCase):

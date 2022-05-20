@@ -16,13 +16,13 @@
 """Data loading functions for MNIST / CIFAR / SVHN."""
 
 import functools
-from typing import Iterator, Optional, Tuple
+from typing import Dict, Iterator, Optional, Tuple
 
 import chex
 import jax.numpy as jnp
 from jax_privacy.src.training.image_classification.data import data_info
 from jax_privacy.src.training.image_classification.data import image_dataset_loader
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 import tensorflow_datasets as tfds
 
 
@@ -34,7 +34,7 @@ def build_train_input_dataset(
     random_crop: bool,
     random_flip: bool,
     batch_size_per_device_per_step: int,
-) -> Iterator[Tuple[chex.Array, chex.Array]]:
+) -> Iterator[Dict[str, chex.Array]]:
   """Builds the training input pipeline for MNIST / SVHN / CIFAR.
 
   Args:
@@ -51,7 +51,8 @@ def build_train_input_dataset(
       `augmult=8`, each device will effectively use 8*16 samples at each
       iteration.
   Returns:
-    Iterator of (images, labels) pairs of training samples.
+    Iterator of pairs of training samples with format
+    `{'images': images, 'labels': labels}`.
   """
   ds = tfds.load(
       name=dataset.name,
@@ -80,7 +81,7 @@ def build_eval_input_dataset(
     dataset: data_info.Dataset,
     image_size_eval: Tuple[int, int],
     batch_size_eval: int,
-) -> Iterator[Tuple[chex.Array, chex.Array]]:
+) -> Iterator[Dict[str, chex.Array]]:
   """Builds the evaluation input pipeline for MNIST / SVHN / CIFAR.
 
   Args:
@@ -88,7 +89,8 @@ def build_eval_input_dataset(
     image_size_eval: size of the images at evaluation time.
     batch_size_eval: batch-size for the evaluation.
   Returns:
-    Iterator of (images, labels) pairs of evaluation samples.
+    Iterator of pairs of evaluation samples with format
+    `{'images': images, 'labels': labels}`.
   """
   ds = tfds.load(
       name=dataset.name,

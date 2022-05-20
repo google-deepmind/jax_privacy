@@ -15,7 +15,7 @@
 
 """Data loading functions."""
 
-from typing import Iterator, Tuple
+from typing import Dict, Iterator, Tuple
 
 import chex
 from jax_privacy.src.training.image_classification.data import data_info
@@ -32,7 +32,7 @@ def build_train_input(
     random_crop: bool,
     random_flip: bool,
     batch_size_per_device_per_step: int,
-) -> Iterator[Tuple[chex.Array, chex.Array]]:
+) -> Iterator[Dict[str, chex.Array]]:
   """Builds the training input pipeline for the specified dataset.
 
   Args:
@@ -49,7 +49,8 @@ def build_train_input(
       `augmult=8`, each device will effectively use 8*16 samples at each
       iteration.
   Returns:
-    Iterator of (images, labels) pairs of training samples.
+    Iterator of pairs of training samples with format
+    `{'images': images, 'labels': labels}`.
   """
   if dataset.name.lower() in ('cifar10', 'cifar100', 'mnist', 'svhn_cropped'):
     return mnist_cifar_svhn.build_train_input_dataset(
@@ -87,7 +88,7 @@ def build_eval_input(
     dataset: data_info.Dataset,
     image_size_eval: Tuple[int, int],
     batch_size_eval: int,
-) -> Iterator[Tuple[chex.Array, chex.Array]]:
+) -> Iterator[Dict[str, chex.Array]]:
   """Builds the evaluation input pipeline for the specified dataset.
 
   Args:
@@ -95,7 +96,8 @@ def build_eval_input(
     image_size_eval: size of the images at evaluation time.
     batch_size_eval: batch-size for the evaluation.
   Returns:
-    Iterator of (images, labels) pairs of evaluation samples.
+    Iterator of pairs of evaluation samples with format
+    `{'images': images, 'labels': labels}`.
   """
   if dataset.name.lower() in ('cifar10', 'cifar100', 'mnist', 'svhn_cropped'):
     return mnist_cifar_svhn.build_eval_input_dataset(

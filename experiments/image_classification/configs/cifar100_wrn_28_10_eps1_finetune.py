@@ -57,7 +57,7 @@ def get_config(config):
                       path=config_base.MODEL_CKPT.WRN_28_10_IMAGENET32,
                       params_key='params',
                       network_state_key='network_state',
-                      reset_classifier=True,
+                      layer_to_reset='wide_res_net/Softmax',
                   ),
               ),
               training=dict(
@@ -102,11 +102,10 @@ def get_config(config):
               ),
               data=dict(
                   dataset=data.get_dataset(
-                      name='cifar10',
+                      name='cifar100',
                       train_split='train_valid',  # 'train' or 'train_valid'
                       eval_split='test',  # 'valid' or 'test'
                   ),
-                  resize=None,
                   random_flip=True,
                   random_crop=True,
                   augmult=16,  # implements arxiv.org/abs/2105.13343

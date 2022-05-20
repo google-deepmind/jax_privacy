@@ -9,4 +9,4 @@ optax
 scipy
 tensorflow
 tensorflow_datasets
-tensorflow_privacy
+dp_accounting @ git+https://github.com/google/differential-privacy/#egg=dp-accounting&subdirectory=python

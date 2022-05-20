@@ -15,14 +15,14 @@
 
 """Image dataset loader with typical pre-processing and advanced augs."""
 
-from typing import Callable, Iterator, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterator, Optional, Sequence, Tuple
 
 import chex
 import jax
 import jax.numpy as jnp
 from jax_privacy.src.training.image_classification.data import augmult as augmult_module
 import numpy as np
-import tensorflow.compat.v2 as tf
+import tensorflow as tf
 import tensorflow_datasets as tfds
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -42,7 +42,7 @@ def load_image_dataset(
     random_crop: bool = False,
     random_flip: bool = False,
     augmult: int = 0,
-) -> Iterator[Tuple[chex.Array, chex.Array]]:
+) -> Iterator[Dict[str, chex.Array]]:
   """Loads the given split of the dataset.
 
   Args:
@@ -146,6 +146,7 @@ def load_image_dataset(
       # this causes stalls while TF and JAX battle for the accelerator.
       ds = ds.map(cast_fn)
 
+  ds = ds.map(lambda images, labels: {'images': images, 'labels': labels})
   ds = ds.prefetch(AUTOTUNE)
   ds = tfds.as_numpy(ds)
   yield from ds
@@ -290,6 +291,7 @@ def load_32x32_image_dataset(
       batch_size_per_device_per_step, drop_remainder=True)
   if is_training:
     ds = ds.batch(jax.local_device_count(), drop_remainder=True)
+  ds = ds.map(lambda images, labels: {'images': images, 'labels': labels})
   ds = ds.prefetch(AUTOTUNE)
   ds = tfds.as_numpy(ds)
   return ds

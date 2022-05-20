@@ -39,7 +39,7 @@ setup(
     author='DeepMind',
     author_email='jax-privacy-dev@deepmind.com',
     # Contained modules and scripts.
-    packages=find_namespace_packages(exclude=['*_test.py']),
+    packages=find_namespace_packages(exclude=['*_test.py', 'experiments.*']),
     install_requires=_parse_requirements('requirements.txt'),
     requires_python='>=3.7',
     platforms=['any'],

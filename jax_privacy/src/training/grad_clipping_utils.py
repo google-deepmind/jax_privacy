@@ -20,17 +20,47 @@ import jax.numpy as jnp
 
 
 def _should_average_array(array_batched, array_vec):
-  """Determine whether array_vec should be averaged based on array_batched."""
-  if array_batched.size == array_vec.size:
+  """Determine whether array_vec should be averaged based on array_batched.
+
+  In `ShapeEvaluator`, both `batched_shapes` and `_grad_fn_vectorized` return
+  trees of the form `((loss, aux), (param_grads, clipping_aux))`.
+  This function will be invoked on all leaf arrays of their outputs.
+
+  Expected shapes are as follows:
+
+  | output                     | batched shape | vectorised shape | action  |
+  | -------------------------- | ------------- | ---------------- | ------- |
+  | loss                       | ()            | (b,)             | average |
+  | aux - per-example elements | (b, ...)      | (b, 1, ...)      | stack   |
+  | aux - aggregate elements   | (...)         | (b, ...)         | average |
+  | param_grads                | (...)         | (b, ...)         | average |
+  | clipping_aux               | (b, ...)      | (b, ...)         | stack   |
+
+  This assumes that `aux` never contains any arrays whose leading dimension has
+  length 1, unless the batch size is 1.
+
+  Args:
+    array_batched: Placeholder array arising from applying the loss value /
+      clipped gradient computation to a batch of examples.
+    array_vec: Placeholder array arising from applying the loss value /
+      clipped gradient computation to a singleton example (batch size one),
+      then vectorising.
+
+  Returns:
+    Whether the vectorised array should be averaged (as opposed to stacking
+    per-example values), in order to match the batched array.
+  """
+  if array_vec.shape in (
+      array_batched.shape,
+      (*array_batched.shape[:1], 1, *array_batched.shape[1:]),
+  ):
     # The batched shape is compatible with the vectorized shape, so there
-    # is no need to average (the array was supposed to be vectorized in the
-    # batched forward pass). We directly compare sizes instead of shapes
-    # because shapes might look like (b, ...), or (b, 1, ...), both of which
-    # are valid options.
+    # is no need to average: the array was supposed to be vectorized in
+    # the batched forward pass.
     return False
   elif array_vec.shape[1:] == array_batched.shape:
-    # The vectorized array does not have the same leading dimension as the
-    # batched array, so it should be averaged.
+    # The vectorised array has an additional leading batch dimension,
+    # so it should be averaged.
     return True
   else:
     raise ValueError(
@@ -38,7 +68,17 @@ def _should_average_array(array_batched, array_vec):
 
 
 class ShapeEvaluator:
-  """Evaluate shapes."""
+  """Evaluate shapes to determine which outputs are per-example.
+
+  Loss value / clipped gradient computation returns trees of the form
+  `((loss, aux), (param_grads, clipping_aux))`, where `loss` is a scalar and
+  the other elements are themselves trees.
+
+  Shapes of this tree are evaluated in two ways: Once on a batch, and once
+  on a single input (batch size one) vectorised over the batch. Comparing the
+  shapes between these two methods allows us to infer which output arrays are
+  per-example, and which are aggregated (so should be averaged).
+  """
 
   def __init__(
       self,
