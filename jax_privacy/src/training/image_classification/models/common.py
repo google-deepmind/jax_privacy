@@ -181,7 +181,7 @@ def restore_from_path(
     restore_path: str,
     params_key: str,
     network_state_key: str,
-    reset_classifier: bool,
+    layer_to_reset: Optional[str],
     params_init: chex.ArrayTree,
     network_state_init: chex.ArrayTree,
 ) -> Tuple[chex.ArrayTree, chex.ArrayTree]:
@@ -192,12 +192,11 @@ def restore_from_path(
       be loaded through dill.
     params_key: key of the dict corresponding to the model parameters.
     network_state_key: key of the dict corresponding to the model state.
-    reset_classifier: whether to reset the classifier layer (which is identified
-      by the use of 'linear' or 'Softmax' in its name).
+    layer_to_reset: name of the layer to reset (exact match required).
     params_init: initial value for the model parameters (used only if
-      `reset_classifier` is True).
+      a layer matches with `layer_to_reset`).
     network_state_init: initial value for the model state (used only if
-      `reset_classifier` is True).
+      a layer matches with `layer_to_reset`).
   Returns:
     params: model parameters loaded from the checkpoint (with the classifier
       potentially reset).
@@ -212,24 +211,14 @@ def restore_from_path(
   network_state_loaded = utils.bcast_local_devices(
       ckpt_state[network_state_key])
 
-  # Sanitize layer names (due to a change in the model definition).
-  params_loaded = {
-      k.replace('~norm_fn/', '').replace('~conv_fn/', ''): v
-      for k, v in params_loaded.items()}
+  def should_reset_layer(module_name, *_):
+    return module_name == layer_to_reset
 
-  def is_classifier(module_name, *_):
-    if 'linear' in module_name:
-      return True
-    elif 'Softmax' in module_name:
-      return True
-    else:
-      return False
-
-  if reset_classifier:
+  if layer_to_reset:
     _, params_loaded = hk.data_structures.partition(
-        is_classifier, params_loaded)
+        should_reset_layer, params_loaded)
     _, network_state_loaded = hk.data_structures.partition(
-        is_classifier, network_state_loaded)
+        should_reset_layer, network_state_loaded)
 
   # Note that the 'loaded' version must be last in the merge to get priority.
   params = hk.data_structures.merge(params_init, params_loaded)

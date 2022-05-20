@@ -25,7 +25,7 @@ References:
 
 from typing import Optional, Sequence, Tuple
 
-import tensorflow.compat.v1 as tf
+import tensorflow.compat.v2 as tf
 
 
 def apply_augmult(

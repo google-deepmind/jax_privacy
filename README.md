@@ -11,38 +11,53 @@ transparency and reproducibility, so (some) rough edges should be expected.
 
 ## Installation<a id="installation"></a>
 
+**Note:** to ensure that your installation is compatible with your local
+accelerators such as a GPU, we recommend to first follow the corresponding
+instructions to install [TensorFlow](https://github.com/tensorflow/tensorflow#install)
+and [JAX](https://github.com/google/jax#installation).
+
 ### Option 1: Static Installation
 
-The code can be installed by running the following command-line:
+This option is preferred for the purpose of re-using functionalities of our
+codebase without modifying them.
+It does not include the `experiments` directory, please use
+[option 2](#install-option2) if you wish to reproduce our results.
+The package can be installed by running the following command-line:
 
 ```
 pip install git+https://github.com/deepmind/jax_privacy
 ```
 
-### Option 2: Downloading and Modifying the Code
+### Option 2: Local Installation (Allowing Edits) <a id="install-option2"></a>
 
-If you wish to modify the code after the package is installed, you can clone
-the code:
+This option is preferred to either build on top of our codebase or to reproduce
+our results.
+
+* The first step is to clone the repository:
 
 ```
 git clone https://github.com/deepmind/jax_privacy
 ```
 
-Then the code can be installed so that local modifications to the code are
+* Then the code can be installed so that local modifications to the code are
 reflected in imports of the package:
 
 ```
 cd jax_privacy
-python setup.py develop
+pip install -e .
 ```
 
 ## Reproducing Results<a id="reproducing-results"></a>
 
-The instructions are detailed in [experiments/image_classification](experiments/image_classification).
+### Unlocking High-Accuracy Differentially Private Image Classification through Scale
 
-## How to Cite<a id="citing"></a>
+Instructions detailed in [experiments/image_classification](experiments/image_classification).
 
-### This Repository
+This work is available on arXiv at [this link](https://arxiv.org/abs/2204.13650).
+If you use it, please cite the following [bibtex reference](https://github.com/deepmind/jax_privacy/blob/main/bibtex/de2022unlocking.bib).
+
+## How to Cite This Repository <a id="citing"></a>
+If you use code from this repository, please cite the following reference:
 
 ```
 @software{jax-privacy2022github,
@@ -51,18 +66,6 @@ The instructions are detailed in [experiments/image_classification](experiments/
   url = {http://github.com/deepmind/jax_privacy},
   version = {0.1.0},
   year = {2022},
-}
-```
-
-
-### Our Research
-
-```
-@article{de2022differentially,
-  title={{Unlocking High-Accuracy Differentially Private Image Classification through Scale}},
-  author={De, Soham and Berrada, Leonard and Hayes, Jamie and Smith, Samuel L and Balle, Borja},
-  journal={arXiv},
-  year={2022}
 }
 ```
 

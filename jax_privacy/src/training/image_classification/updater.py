@@ -28,7 +28,7 @@ Typical usage:
   ...
 
   # Initialize model and optimizer (pmapped).
-  params, network_state, opt_state = updater.init(images, rng_key)
+  params, network_state, opt_state = updater.init(inputs, rng_key)
 
   # Apply update (pmapped).
   params, network_state, opt_state, stats = updater.update(
@@ -36,8 +36,7 @@ Typical usage:
       network_state=network_state,
       opt_state=opt_state,
       global_step=global_step,
-      images=images,
-      labels=labels,
+      inputs=inputs,
       rng=rng,
   )
 """
@@ -184,20 +183,20 @@ class Updater:
   def init(
       self,
       *,
-      images: chex.Array,
+      inputs: chex.ArrayTree,
       rng_key: chex.PRNGKey,
   ) -> Tuple[chex.ArrayTree, chex.ArrayTree, chex.ArrayTree]:
     """Initialization function."""
-    return self._pmapped_init(images, rng_key)
+    return self._pmapped_init(inputs, rng_key)
 
   @functools.partial(jax.pmap, static_broadcasted_argnums=0, axis_name='i')
   def _pmapped_init(
       self,
-      images: chex.Array,
+      inputs: chex.ArrayTree,
       rng_key: chex.PRNGKey,
   ) -> Tuple[chex.ArrayTree, chex.ArrayTree, chex.ArrayTree]:
     """Initialization function (to be pmapped)."""
-    params, network_state = self._train_init(rng_key, images)
+    params, network_state = self._train_init(rng_key, inputs)
 
     trainable_params, unused_frozen_params = hk.data_structures.partition(
         self._is_trainable, params)
@@ -218,8 +217,7 @@ class Updater:
       network_state: chex.ArrayTree,
       opt_state: chex.ArrayTree,
       global_step: chex.Array,
-      images: chex.Array,
-      labels: chex.Array,
+      inputs: chex.ArrayTree,
       rng: chex.PRNGKey,
   ) -> Tuple[chex.ArrayTree, chex.ArrayTree, chex.ArrayTree, Any]:
     """Perform the pmapped update."""
@@ -231,8 +229,7 @@ class Updater:
         network_state,
         opt_state,
         global_step,
-        images,
-        labels,
+        inputs,
         rng,
         utils.host_id_devices_for_rng(),
     )
@@ -244,8 +241,7 @@ class Updater:
       network_state: chex.ArrayTree,
       opt_state: chex.ArrayTree,
       global_step: chex.Array,
-      images: chex.Array,
-      labels: chex.Array,
+      inputs: chex.ArrayTree,
       rng: chex.PRNGKey,
       host_id: Optional[chex.Array],
   ) -> Tuple[chex.ArrayTree, chex.ArrayTree, chex.ArrayTree, Any]:
@@ -260,8 +256,6 @@ class Updater:
 
     # Save the initial network state before it gets updated by a forward pass.
     initial_network_state = network_state
-
-    inputs = (images, labels)
 
     # The update step is logged in the optimizer state (by optax.MultiSteps)
     #  under the name of 'gradient_step'.

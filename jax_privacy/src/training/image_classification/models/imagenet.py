@@ -16,9 +16,10 @@
 """ImageNet Norm-Free Residual Networks as defined in (Brock et al., 2021).
 
 Reference:
-  A. Brock, S. De, S. L. Smith, and K. Simonyan.
-  High-performance large-scale image recognition without normalization.
-  International Conference on Machine Learning, 2021.
+  A. Brock, S. De, and S. L. Smith.
+  Characterizing signal propagation to close the performance gap
+  in unnormalized resnets.
+  International Conference on Learning Representations, 2021.
 """
 
 from typing import Any, Optional

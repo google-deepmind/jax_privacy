@@ -40,17 +40,19 @@ class MultiClassForwardFn:
   def train_init(
       self,
       rng_key: chex.PRNGKey,
-      images: chex.Array,
+      inputs: chex.ArrayTree,
   ) -> Tuple[chex.ArrayTree, chex.ArrayTree]:
     """Initializes the model.
 
     Args:
       rng_key: random number generation key used for the random initialization.
-      images: images to infer shapes of the model parameters. Expected to be of
-         shape [NKHWC] (K is augmult).
+      inputs: model inputs (of format `{'images': images, 'labels': labels}`),
+        to infer shapes of the model parameters. Images are expected to be of
+        shape [NKHWC] (K is augmult).
     Returns:
       Initialized model parameters and state.
     """
+    images = inputs['images']
     # Images has shape [NKHWC] (K is augmult).
     return self._net.init(rng_key, images[:, 0], is_training=True)
 
@@ -66,9 +68,9 @@ class MultiClassForwardFn:
 
     Args:
       params: model parameters that should get updated during training.
-      inputs: model inputs (pairs of training (images, labels)), where the
-        labels are one-hot encoded. `images` is expected to be of shape
-        [NKHWC] (K is augmult), and `labels` of shape [NKO].
+      inputs: model inputs (of format `{'images': images, 'labels': labels}`),
+        where the labels are one-hot encoded. `images` is expected to be of
+        shape [NKHWC] (K is augmult), and `labels` of shape [NKO].
       network_state: model state.
       rng: random number generation key.
       frozen_params: model parameters that should remain frozen. These will be
@@ -81,7 +83,7 @@ class MultiClassForwardFn:
       auxiliary information, including the new model state, metrics computed
         on the current mini-batch and the current loss value per-example.
     """
-    images, labels = inputs
+    images, labels = inputs['images'], inputs['labels']
 
     # `images` has shape [NKHWC] (K is augmult), while model accepts [NHWC], so
     # we use a single larger batch dimension.
@@ -117,21 +119,20 @@ class MultiClassForwardFn:
 
     Args:
       params: model parameters that should get updated during training.
-      inputs: model inputs (pairs of training (images, labels)), where the
-        labels are one-hot encoded. `images` is expected to be of shape
-        [NHWC], and `labels` of shape [NO].
+      inputs: model inputs (of format `{'images': images, 'labels': labels}`),
+        where the labels are one-hot encoded. `images` is expected to be of
+        shape [NHWC], and `labels` of shape [NO].
       network_state: model state.
       rng: random number generation key.
     Returns:
       logits: logits computed per-example on the mini-batch.
       metrics: metrics computed on the current mini-batch.
     """
-    images, labels = inputs
     logits, unused_network_state = self._net.apply(
-        params, network_state, rng, images)
-    loss = jnp.mean(self._loss(logits, labels))
+        params, network_state, rng, inputs['images'])
+    loss = jnp.mean(self._loss(logits, inputs['labels']))
 
-    metrics = {'loss': loss, **self._eval_metrics(logits, labels)}
+    metrics = {'loss': loss, **self._eval_metrics(logits, inputs['labels'])}
     return logits, metrics
 
   def _loss(self, logits: chex.Array, labels: chex.Array) -> chex.Array:

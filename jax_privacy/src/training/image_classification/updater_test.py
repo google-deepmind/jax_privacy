@@ -89,7 +89,7 @@ def _test_data(num_batches, local_batch_size, seed=9273):
         maxval=NUM_CLASSES,
     )
     labels = jax.nn.one_hot(labels, NUM_CLASSES)
-    batches.append((images, labels))
+    batches.append({'images': images, 'labels': labels})
   return batches
 
 
@@ -107,12 +107,11 @@ class UpdaterTest(parameterized.TestCase):
     self.forward_fn = forward.MultiClassForwardFn(self.net)
 
   def init_with_updater(self, updater):
-    dummy_images = jnp.ones(
-        [NUM_DEVICES, LOCAL_BATCH_SIZE, AUGMULT, INPUT_SIZE])
+    inputs = _test_data(num_batches=1, local_batch_size=LOCAL_BATCH_SIZE)[0]
     rng_init = utils.bcast_local_devices(self.rng_init)
 
     self.initial_params, self.initial_network_state, self.initial_opt_state = (
-        updater.init(images=dummy_images, rng_key=rng_init)
+        updater.init(inputs=inputs, rng_key=rng_init)
     )
 
   def run_updater(self, updater, data, rng):
@@ -122,15 +121,14 @@ class UpdaterTest(parameterized.TestCase):
     opt_state = self.initial_opt_state
     global_step = self.initial_global_step
 
-    for images, labels in data:
+    for inputs in data:
       rng_update, rng = jax.random.split(rng)
       params, network_state, opt_state, unused_scalars = updater.update(
           params=params,
           network_state=network_state,
           opt_state=opt_state,
           global_step=global_step,
-          images=images,
-          labels=labels,
+          inputs=inputs,
           rng=utils.bcast_local_devices(rng_update),
       )
       global_step += 1
@@ -308,17 +306,16 @@ class UpdaterTest(parameterized.TestCase):
     )
 
     def forward_per_sample(p):
-      images, labels = inputs_single_device
       logits, unused_network_state = self.net.apply(
           p,
           self.initial_network_state,
           self.rng,
-          images,
+          inputs_single_device['images'],
           is_training=True,
       )
 
       loss_per_sample_per_augmentation = optax.softmax_cross_entropy(
-          logits, labels)
+          logits, inputs_single_device['labels'])
 
       # Average over the augmult dimension.
       loss_per_sample = jnp.mean(loss_per_sample_per_augmentation, axis=1)

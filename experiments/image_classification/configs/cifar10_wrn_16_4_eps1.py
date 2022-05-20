@@ -27,7 +27,7 @@ def get_config(config):
   config.experiment_kwargs = configdict.ConfigDict(
       dict(
           config=dict(
-              num_updates=725,
+              num_updates=875,
               optimizer=dict(
                   name='sgd',
                   lr=dict(
@@ -57,7 +57,7 @@ def get_config(config):
                       path=None,
                       params_key=None,
                       network_state_key=None,
-                      reset_classifier=True,
+                      layer_to_reset=None,
                   ),
               ),
               training=dict(
@@ -106,7 +106,6 @@ def get_config(config):
                       train_split='train_valid',  # 'train' or 'train_valid'
                       eval_split='test',  # 'valid' or 'test'
                   ),
-                  resize=None,
                   random_flip=True,
                   random_crop=True,
                   augmult=16,  # implements arxiv.org/abs/2105.13343

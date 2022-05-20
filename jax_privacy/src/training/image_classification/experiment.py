@@ -16,7 +16,7 @@
 """Jaxline experiment to define training and eval loops."""
 
 import collections
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 from absl import flags
 from absl import logging
@@ -39,6 +39,16 @@ import numpy as np
 
 
 FLAGS = flags.FLAGS
+
+
+def _to_scalar(
+    x: Union[chex.Numeric, chex.Array, chex.ArrayNumpy],
+) -> chex.Scalar:
+  """Casts the single-item input to a scalar if it is an array."""
+  if isinstance(x, (chex.Array, chex.ArrayNumpy)):
+    return x.item()
+  else:
+    return x
 
 
 class Experiment(experiment.AbstractExperiment):
@@ -196,16 +206,13 @@ class Experiment(experiment.AbstractExperiment):
     if self._train_input is None:
       self._initialize_train()
 
-    images, labels = next(self._train_input)
-
     self._params, self._network_state, self._opt_state, scalars = (
         self.updater.update(
             params=self._params,
             network_state=self._network_state,
             opt_state=self._opt_state,
             global_step=global_step,
-            images=images,
-            labels=labels,
+            inputs=next(self._train_input),
             rng=rng,
         ))
 
@@ -220,12 +227,7 @@ class Experiment(experiment.AbstractExperiment):
       scalars.update(dp_epsilon=self._compute_epsilon(scalars['update_step']))
 
     # Convert arrays to scalars for logging and storing.
-    scalars = jax.tree_map(
-        lambda x: x.item() if isinstance(x, chex.Array) else x,
-        scalars,
-    )
-
-    return scalars
+    return jax.tree_map(_to_scalar, scalars)
 
   def _average_params(self):
     """Performs both EMA and Polyak parameter averaging."""
@@ -278,18 +280,17 @@ class Experiment(experiment.AbstractExperiment):
 
     # Check that params have not already been restored.
     if self._params is None:
-      images, _ = next(self._train_input)
       rng_key = utils.bcast_local_devices(self.init_rng)
 
       self._params, self._network_state, self._opt_state = self.updater.init(
-          images=images, rng_key=rng_key)
+          inputs=next(self._train_input), rng_key=rng_key)
 
       if self.config.model.restore.path:
         self._params, self._network_state = models.restore_from_path(
             restore_path=self.config.model.restore.path,
             params_key=self.config.model.restore.params_key,
             network_state_key=self.config.model.restore.network_state_key,
-            reset_classifier=self.config.model.restore.reset_classifier,
+            layer_to_reset=self.config.model.restore.layer_to_reset,
             params_init=self._params,
             network_state_init=self._network_state,
         )
@@ -304,9 +305,10 @@ class Experiment(experiment.AbstractExperiment):
   def _build_train_input(self):
     """Builds the training input pipeline."""
     bs_per_device_per_step = self.batching.batch_size_per_device_per_step
+    image_size_train = self.config.data.get('image_size.train')
     return data.build_train_input(
         dataset=self.config.data.dataset,
-        image_size_train=self.config.data.resize,
+        image_size_train=image_size_train,
         augmult=self.config.data.augmult,
         random_crop=self.config.data.random_crop,
         random_flip=self.config.data.random_flip,
@@ -338,14 +340,18 @@ class Experiment(experiment.AbstractExperiment):
         dp_epsilon=dp_epsilon,
     )
 
+    # Convert arrays to scalars for logging and storing.
+    metrics = jax.tree_map(_to_scalar, metrics)
+
     logging.info(metrics)
     return metrics
 
   def _build_eval_input(self):
     """Builds the evaluation input pipeline."""
+    image_size_eval = self.config.data.get('image_size.eval')
     return data.build_eval_input(
         dataset=self.config.data.dataset,
-        image_size_eval=self.config.data.resize,
+        image_size_eval=image_size_eval,
         batch_size_eval=self.config.evaluation.batch_size,
     )
 
@@ -365,18 +371,19 @@ class Experiment(experiment.AbstractExperiment):
     num_samples = 0
 
     # Iterate over the evaluation dataset and accumulate the metrics.
-    for images, labels in self._build_eval_input():
+    for inputs in self._build_eval_input():
       rng, _ = jax.random.split(rng)
-      num_samples += len(images)
+      batch_size = len(jax.tree_leaves(inputs)[0])
+      num_samples += batch_size
 
       # Evaluate batch for each set of parameters.
       for params_name, params in params_dict.items():
         unused_logits, batch_metrics = self._eval_forward(
-            params, (images, labels), state, rng)
+            params, inputs, state, rng)
 
         # Update accumulated average for each metric.
         for metric_name, val in batch_metrics.items():
-          avg_metrics[f'{metric_name}_{params_name}'].update(val, n=len(images))
+          avg_metrics[f'{metric_name}_{params_name}'].update(val, n=batch_size)
 
     metrics = {k: v.avg for k, v in avg_metrics.items()}
     metrics['num_samples'] = num_samples

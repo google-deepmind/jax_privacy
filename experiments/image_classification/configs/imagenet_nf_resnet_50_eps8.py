@@ -53,7 +53,7 @@ def get_config(config):
                       path=None,
                       params_key=None,
                       network_state_key=None,
-                      reset_classifier=True,
+                      layer_to_reset=None,
                   ),
               ),
               training=dict(
