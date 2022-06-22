@@ -1,7 +1,7 @@
 absl-py
 dill
 dm-haiku
-jax
+jax==0.3.5
 jaxline @ git+https://github.com/deepmind/jaxline.git
 ml_collections
 numpy
