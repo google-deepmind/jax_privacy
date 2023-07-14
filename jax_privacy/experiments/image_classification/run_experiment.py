@@ -13,7 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Algorithms for Privacy-Preserving Machine Learning in JAX."""
+"""Main script to run an experiment.
 
-from jax_privacy.src import accounting
-from jax_privacy.src import training
+Usage example (run from this directory):
+  python run_experiment.py --config=configs/cifar10_wrn.py
+"""
+
+import functools
+
+from absl import app
+from absl import flags
+from jax_privacy.experiments.image_classification import experiment
+from jaxline import platform
+
+
+if __name__ == '__main__':
+  flags.mark_flag_as_required('config')
+  app.run(functools.partial(platform.main, experiment.Experiment))

@@ -1,7 +1,8 @@
 absl-py
 dill
 dm-haiku
-jax
+jax==0.4.13
+jaxlib==0.4.13
 jaxline @ git+https://github.com/deepmind/jaxline.git
 ml_collections
 numpy
@@ -9,4 +10,4 @@ optax
 scipy
 tensorflow
 tensorflow_datasets
-dp_accounting @ git+https://github.com/google/differential-privacy/#egg=dp-accounting&subdirectory=python
+dp_accounting==0.4.2

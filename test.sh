@@ -19,7 +19,7 @@ set -xeuo pipefail
 # Install deps in a virtual env.
 readonly VENV_DIR=/tmp/jax-privacy-env
 rm -rf "${VENV_DIR}"
-python3 -m venv "${VENV_DIR}"
+python3.10 -m venv "${VENV_DIR}"
 source "${VENV_DIR}/bin/activate"
 python --version
 
@@ -38,11 +38,11 @@ pylint --rcfile=.pylintrc `find jax_privacy -name '*.py' | grep -v 'test.py' | x
 # Disable `protected-access` warnings for tests.
 pylint --rcfile=.pylintrc `find jax_privacy -name '*_test.py' | xargs` -d W0212 || pylint-exit $PYLINT_ARGS $?
 
-# Build the package.
-python setup.py install
-
 # Check types with pytype.
 pytype `find jax_privacy/src/ -name "*py" | xargs` -k
+
+# Build the package.
+python setup.py install
 
 # Run tests using pytest.
 # Change directory to avoid importing the package from repo root.
@@ -50,10 +50,10 @@ pip install -r requirements.txt
 mkdir _testing && cd _testing
 
 # Main tests.
-pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "not updater_test"
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "not dp_updater_test"
 
 # Isolate tests that use `chex.set_n_cpu_device()`.
-pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "updater_test"
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "dp_updater_test"
 cd ..
 
 set +u

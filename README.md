@@ -20,8 +20,6 @@ and [JAX](https://github.com/google/jax#installation).
 
 This option is preferred for the purpose of re-using functionalities of our
 codebase without modifying them.
-It does not include the `experiments` directory, please use
-[option 2](#install-option2) if you wish to reproduce our results.
 The package can be installed by running the following command-line:
 
 ```
@@ -64,7 +62,7 @@ If you use code from this repository, please cite the following reference:
   author = {Balle, Borja and Berrada, Leonard and De, Soham and Hayes, Jamie and Smith, Samuel L and Stanforth, Robert},
   title = {{JAX}-{P}rivacy: Algorithms for Privacy-Preserving Machine Learning in JAX},
   url = {http://github.com/deepmind/jax_privacy},
-  version = {0.1.0},
+  version = {0.2.0},
   year = {2022},
 }
 ```

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2022 DeepMind Technologies Limited.
+# Copyright 2023 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,15 +15,12 @@
 
 """Privacy accounting."""
 
-from jax_privacy.src.accounting import accountant
-from jax_privacy.src.accounting import calibrate
-from jax_privacy.src.accounting import std_utils
-
-
-Accountant = accountant.Accountant
-divide_std_over_avg = std_utils.divide_std_over_avg
-divide_std_over_sum = std_utils.divide_std_over_sum
-calibrate_steps = calibrate.calibrate_steps
-compute_epsilon = calibrate.compute_epsilon
-calibrate_batch_size = calibrate.calibrate_batch_size
-calibrate_noise_multiplier = calibrate.calibrate_noise_multiplier
+from jax_privacy.src.accounting.accountant import CachedExperimentAccountant
+from jax_privacy.src.accounting.accountant import ExperimentAccountant
+from jax_privacy.src.accounting.calibrate import calibrate_batch_size
+from jax_privacy.src.accounting.calibrate import calibrate_noise_multiplier
+from jax_privacy.src.accounting.calibrate import calibrate_steps
+from jax_privacy.src.accounting.dp_bounds import compute_epsilon
+from jax_privacy.src.accounting.dp_bounds import DpAccountantConfig
+from jax_privacy.src.accounting.dp_bounds import PldAccountantConfig
+from jax_privacy.src.accounting.dp_bounds import RdpAccountantConfig

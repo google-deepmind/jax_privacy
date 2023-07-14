@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2022 DeepMind Technologies Limited.
+# Copyright 2023 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,22 +14,25 @@
 # limitations under the License.
 
 """Auto-tune DP parameters of config so that they fit the privacy budget."""
-from typing import Tuple
+
+from absl import logging
 
 from jax_privacy.src import accounting as dp_accounting
+from jax_privacy.src.dp_sgd import typing
 import ml_collections
 
 
 def dp_auto_tune(
     *,
-    auto_tune: str,
+    auto_tune: typing.AutoTuneField,
     num_examples: int,
     dp_epsilon: float,
     dp_delta: float,
-    std_relative: float,
+    noise_multiplier: float,
     batch_sizes: int,
     num_updates: int,
-) -> Tuple[float, int, float, int]:
+    dp_accountant_config: dp_accounting.DpAccountantConfig,
+) -> tuple[float, int, float, int]:
   """Auto-tune DP parameters so that we can obtain the desired DP guarantees.
 
   Args:
@@ -37,54 +40,59 @@ def dp_auto_tune(
     num_examples: number of examples in the training set.
     dp_epsilon: epsilon-value of DP guarantee.
     dp_delta: delta-value of DP guarantee.
-    std_relative: standard deviation relative to the clipping-norm (aka noise
-      multiplier).
+    noise_multiplier: standard deviation of the noise (relative to the
+      clipping-norm).
     batch_sizes: batch-size used during training.
     num_updates: number of updates to be performed.
+    dp_accountant_config: Configuration for the DP accountant to use.
 
   Returns:
-    Potentially updated values for dp_epsilon, num_updates, std_relative, and
-    batch_sizes.
+    Potentially updated values for dp_epsilon, num_updates, noise_multiplier,
+    and batch_sizes.
   """
 
   if not auto_tune:
     pass
   elif auto_tune == 'stop_training_at_epsilon':
     dp_epsilon: float = dp_accounting.compute_epsilon(
-        noise_multipliers=std_relative,
+        noise_multipliers=noise_multiplier,
         batch_sizes=batch_sizes,
         num_steps=num_updates,
         num_examples=num_examples,
         target_delta=dp_delta,
+        dp_accountant_config=dp_accountant_config,
     )
   elif auto_tune == 'num_updates':
     num_updates: int = dp_accounting.calibrate_steps(
         target_epsilon=dp_epsilon,
-        noise_multipliers=std_relative,
+        noise_multipliers=noise_multiplier,
         batch_sizes=batch_sizes,
         num_examples=num_examples,
         target_delta=dp_delta,
+        dp_accountant_config=dp_accountant_config,
     )
-  elif auto_tune == 'std_relative':
-    std_relative: float = dp_accounting.calibrate_noise_multiplier(
+  elif auto_tune == 'noise_multiplier':
+    noise_multiplier: float = dp_accounting.calibrate_noise_multiplier(
         target_epsilon=dp_epsilon,
         num_steps=num_updates,
         batch_sizes=batch_sizes,
         num_examples=num_examples,
         target_delta=dp_delta,
+        dp_accountant_config=dp_accountant_config,
     )
   elif auto_tune == 'batch_size':
     batch_sizes: int = dp_accounting.calibrate_batch_size(
         target_epsilon=dp_epsilon,
-        noise_multipliers=std_relative,
+        noise_multipliers=noise_multiplier,
         num_steps=num_updates,
         num_examples=num_examples,
         target_delta=dp_delta,
+        dp_accountant_config=dp_accountant_config,
     )
   else:
     raise ValueError(f'Unsupported auto-tuning option: {auto_tune}.')
 
-  return dp_epsilon, num_updates, std_relative, batch_sizes
+  return dp_epsilon, num_updates, noise_multiplier, batch_sizes
 
 
 def dp_auto_tune_config(
@@ -94,19 +102,25 @@ def dp_auto_tune_config(
   config_xp = config.experiment_kwargs.config
   if config_xp.training.batch_size.scale_schedule is not None:
     raise ValueError('Batch-size schedules are not supported.')
+  dp_accountant_config = config_xp.training.dp.accountant
+  if isinstance(dp_accountant_config, dp_accounting.PldAccountantConfig):
+    logging.warning(
+        'Auto tuning with PLD accountant can be slow. Be patient...'
+    )
 
-  epsilon, num_updates, std_relative, batch_size = dp_auto_tune(
-      batch_sizes=config_xp.training.batch_size.init_value,
-      std_relative=config_xp.training.dp.noise.std_relative,
+  epsilon, num_updates, noise_multiplier, batch_size = dp_auto_tune(
+      batch_sizes=config_xp.training.batch_size.total,
+      noise_multiplier=config_xp.training.dp.noise_multiplier,
       dp_epsilon=config_xp.training.dp.stop_training_at_epsilon,
       num_updates=config_xp.num_updates,
       auto_tune=config_xp.training.dp.auto_tune,
-      num_examples=config_xp.data.dataset.train.num_samples,
-      dp_delta=config_xp.training.dp.target_delta,
+      num_examples=config_xp.data_train.config.num_samples,
+      dp_delta=config_xp.training.dp.delta,
+      dp_accountant_config=dp_accountant_config,
   )
 
   config_xp.num_updates = num_updates
   config_xp.training.dp.stop_training_at_epsilon = epsilon
-  config_xp.training.dp.noise.std_relative = std_relative
-  config_xp.training.batch_size.init_value = batch_size
+  config_xp.training.dp.noise_multiplier = noise_multiplier
+  config_xp.training.batch_size.total = batch_size
   return config

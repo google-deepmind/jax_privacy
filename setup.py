@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2022 DeepMind Technologies Limited.
+# Copyright 2023 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,15 +33,15 @@ def test_suite():
 
 setup(
     name='jax_privacy',
-    version='0.1.0',
+    version='0.2.0',
     description='Algorithms for Privacy-Preserving Machine Learning in JAX.',
     url='https://github.com/deepmind/jax_privacy',
     author='DeepMind',
-    author_email='jax-privacy-dev@deepmind.com',
+    author_email='jax-privacy-dev@google.com',
     # Contained modules and scripts.
-    packages=find_namespace_packages(exclude=['*_test.py', 'experiments.*']),
+    packages=find_namespace_packages(exclude=['*_test.py']),
     install_requires=_parse_requirements('requirements.txt'),
-    requires_python='>=3.7',
+    requires_python='>=3.10',
     platforms=['any'],
     license='Apache 2.0',
     test_suite='setup.test_suite',
