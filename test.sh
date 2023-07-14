@@ -19,7 +19,7 @@ set -xeuo pipefail
 # Install deps in a virtual env.
 readonly VENV_DIR=/tmp/jax-privacy-env
 rm -rf "${VENV_DIR}"
-python3.10 -m virtualenv "${VENV_DIR}"
+python3.10 -m venv "${VENV_DIR}"
 source "${VENV_DIR}/bin/activate"
 python --version
 
