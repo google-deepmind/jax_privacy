@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2022 DeepMind Technologies Limited.
+# Copyright 2023 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,10 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for calibration of DP hyper-parameters using the RDP accountant."""
+"""Tests for calibration of DP hyper-parameters using privacy accountant."""
 
 from absl.testing import absltest
 from jax_privacy.src.accounting import calibrate
+from jax_privacy.src.accounting import dp_bounds
 import numpy as np
 
 
@@ -28,18 +29,7 @@ _DELTA = 1e-5
 _NUM_STEPS = 10_000
 
 
-class AutoTuneTest(absltest.TestCase):
-
-  def test_compute_epsilon(self):
-    epsilon = calibrate.compute_epsilon(
-        noise_multipliers=_NOISE_MULTIPLIER,
-        batch_sizes=_BATCH_SIZE,
-        num_steps=_NUM_STEPS,
-        num_examples=_NUM_EXAMPLES,
-        target_delta=_DELTA,
-    )
-
-    np.testing.assert_allclose(epsilon, _EPSILON, rtol=1e-5)
+class CalibrateTest(absltest.TestCase):
 
   def test_calibrate_noise(self):
     noise_multiplier = calibrate.calibrate_noise_multiplier(
@@ -48,17 +38,19 @@ class AutoTuneTest(absltest.TestCase):
         num_steps=_NUM_STEPS,
         num_examples=_NUM_EXAMPLES,
         target_delta=_DELTA,
+        dp_accountant_config=dp_bounds.RdpAccountantConfig(),
         tol=1e-4,
     )
 
     np.testing.assert_allclose(noise_multiplier, _NOISE_MULTIPLIER, rtol=1e-4)
 
-    epsilon = calibrate.compute_epsilon(
+    epsilon = dp_bounds.compute_epsilon(
         noise_multipliers=noise_multiplier,
         batch_sizes=_BATCH_SIZE,
         num_steps=_NUM_STEPS,
         num_examples=_NUM_EXAMPLES,
         target_delta=_DELTA,
+        dp_accountant_config=dp_bounds.RdpAccountantConfig(),
     )
 
     np.testing.assert_allclose(epsilon, _EPSILON, rtol=1e-4)
@@ -70,16 +62,18 @@ class AutoTuneTest(absltest.TestCase):
         num_steps=_NUM_STEPS,
         num_examples=_NUM_EXAMPLES,
         target_delta=_DELTA,
+        dp_accountant_config=dp_bounds.RdpAccountantConfig(),
     )
 
     self.assertLessEqual(np.abs(batch_size - _BATCH_SIZE), 1)
 
-    epsilon = calibrate.compute_epsilon(
+    epsilon = dp_bounds.compute_epsilon(
         noise_multipliers=_NOISE_MULTIPLIER,
         batch_sizes=batch_size,
         num_steps=_NUM_STEPS,
         num_examples=_NUM_EXAMPLES,
         target_delta=_DELTA,
+        dp_accountant_config=dp_bounds.RdpAccountantConfig(),
     )
 
     np.testing.assert_allclose(epsilon, _EPSILON, rtol=1e-2)
@@ -91,16 +85,18 @@ class AutoTuneTest(absltest.TestCase):
         batch_sizes=_BATCH_SIZE,
         num_examples=_NUM_EXAMPLES,
         target_delta=_DELTA,
+        dp_accountant_config=dp_bounds.RdpAccountantConfig(),
     )
 
     self.assertLessEqual(np.abs(num_steps - _NUM_STEPS), 1)
 
-    epsilon = calibrate.compute_epsilon(
+    epsilon = dp_bounds.compute_epsilon(
         noise_multipliers=_NOISE_MULTIPLIER,
         batch_sizes=_BATCH_SIZE,
         num_steps=num_steps,
         num_examples=_NUM_EXAMPLES,
         target_delta=_DELTA,
+        dp_accountant_config=dp_bounds.RdpAccountantConfig(),
     )
 
     np.testing.assert_allclose(epsilon, _EPSILON, rtol=1e-4)

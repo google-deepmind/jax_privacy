@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2022 DeepMind Technologies Limited.
+# Copyright 2023 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 from typing import Sequence
 
 import chex
+import jax
 import jax.numpy as jnp
 
 
@@ -68,7 +69,7 @@ def topk_accuracy(
     logits: chex.Array,
     labels_one_hot: chex.Array,
     topk: Sequence[int] = (1, 5),
-) -> Sequence[chex.Array]:
+) -> Sequence[jax.Array]:
   """Calculate (fast!) top-k error for multiple k values.
 
   Args:
