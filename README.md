@@ -49,7 +49,7 @@ pip install -e .
 
 ### Unlocking High-Accuracy Differentially Private Image Classification through Scale
 
-Instructions detailed in [experiments/image_classification](experiments/image_classification).
+Instructions detailed in [experiments/image_classification](jax_privacy/experiments/image_classification).
 
 This work is available on arXiv at [this link](https://arxiv.org/abs/2204.13650).
 If you use it, please cite the following [bibtex reference](https://github.com/deepmind/jax_privacy/blob/main/bibtex/de2022unlocking.bib).
