@@ -133,12 +133,18 @@ class Experiment(experiment.AbstractExperiment):
               self._params_ema,
               strict=True)
       }
-    else:
+    elif self._params_ema is not None:
       ema_params = {'ema': self._params_ema}
+    else:
+      ema_params = {}
+    if self._params_polyak is not None:
+      polyak_params = {'polyak': self._params_polyak}
+    else:
+      polyak_params = {}
     params_dict = {
         'last': self._params,
         **ema_params,
-        'polyak': self._params_polyak,
+        **polyak_params,
     }
 
     state = self._network_state
