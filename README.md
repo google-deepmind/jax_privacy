@@ -23,7 +23,7 @@ codebase without modifying them.
 The package can be installed by running the following command-line:
 
 ```
-pip install git+https://github.com/deepmind/jax_privacy
+pip install git+https://github.com/google-deepmind/jax_privacy
 ```
 
 ### Option 2: Local Installation (Allowing Edits) <a id="install-option2"></a>
@@ -34,7 +34,7 @@ our results.
 * The first step is to clone the repository:
 
 ```
-git clone https://github.com/deepmind/jax_privacy
+git clone https://github.com/google-deepmind/jax_privacy
 ```
 
 * Then the code can be installed so that local modifications to the code are
@@ -51,13 +51,13 @@ pip install -e .
 
 * Instructions: [experiments/image_classification](jax_privacy/experiments/image_classification).
 * arXiv link: https://arxiv.org/abs/2204.13650.
-* Bibtex reference: [link](https://github.com/deepmind/jax_privacy/blob/main/bibtex/de2022unlocking.bib).
+* Bibtex reference: [link](https://github.com/google-deepmind/jax_privacy/blob/main/bibtex/de2022unlocking.bib).
 
 ### Unlocking Accuracy and Fairness in Differentially Private Image Classification
 
 * Instructions: [experiments/image_classification](jax_privacy/experiments/image_classification).
 * arXiv link: https://arxiv.org/abs/2308.10888.
-* Bibtex reference: [link](https://github.com/deepmind/jax_privacy/blob/main/bibtex/berrada2023unlocking.bib).
+* Bibtex reference: [link](https://github.com/google-deepmind/jax_privacy/blob/main/bibtex/berrada2023unlocking.bib).
 
 ## How to Cite This Repository <a id="citing"></a>
 If you use code from this repository, please cite the following reference:
@@ -66,7 +66,7 @@ If you use code from this repository, please cite the following reference:
 @software{jax-privacy2022github,
   author = {Balle, Borja and Berrada, Leonard and De, Soham and Ghalebikesabi, Sahra and Hayes, Jamie and Pappu, Aneesh and Smith, Samuel L and Stanforth, Robert},
   title = {{JAX}-{P}rivacy: Algorithms for Privacy-Preserving Machine Learning in JAX},
-  url = {http://github.com/deepmind/jax_privacy},
+  url = {http://github.com/google-deepmind/jax_privacy},
   version = {0.3.0},
   year = {2022},
 }

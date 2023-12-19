@@ -3,10 +3,10 @@
 Reproducing experiments of the paper "Unlocking High-Accuracy Differentially Private Image Classification through Scale"
 
 This work is available on arXiv at [this link](https://arxiv.org/abs/2204.13650).
-If you use it, please cite the following [bibtex reference](https://github.com/deepmind/jax_privacy/blob/main/bibtex/de2022unlocking.bib).
+If you use it, please cite the following [bibtex reference](https://github.com/google-deepmind/jax_privacy/blob/main/bibtex/de2022unlocking.bib).
 
 The following instructions assume that our package has been installed through
-[option 2](https://github.com/deepmind/jax_privacy#install-option2).
+[option 2](https://github.com/google-deepmind/jax_privacy#install-option2).
 
 ## Intro
 

@@ -35,8 +35,8 @@ setup(
     name='jax_privacy',
     version='0.3.0',
     description='Algorithms for Privacy-Preserving Machine Learning in JAX.',
-    url='https://github.com/deepmind/jax_privacy',
-    author='DeepMind',
+    url='https://github.com/google-deepmind/jax_privacy',
+    author='Google DeepMind',
     author_email='jax-privacy-dev@google.com',
     # Contained modules and scripts.
     packages=find_namespace_packages(exclude=['*_test.py']),
