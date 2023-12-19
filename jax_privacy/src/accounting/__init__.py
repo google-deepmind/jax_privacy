@@ -15,6 +15,7 @@
 
 """Privacy accounting."""
 
+from jax_privacy.src.accounting.accountant import BatchingScaleSchedule
 from jax_privacy.src.accounting.accountant import CachedExperimentAccountant
 from jax_privacy.src.accounting.accountant import ExperimentAccountant
 from jax_privacy.src.accounting.calibrate import calibrate_batch_size

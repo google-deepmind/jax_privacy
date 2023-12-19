@@ -17,6 +17,8 @@
 
 from jax_privacy.experiments import image_data
 from jax_privacy.experiments.image_classification import config_base
+from jax_privacy.experiments.image_classification.models import models
+from jax_privacy.src.training import averaging
 from jax_privacy.src.training import experiment_config
 from jax_privacy.src.training import optimizer_config
 import ml_collections
@@ -26,24 +28,21 @@ def get_config() -> ml_collections.ConfigDict:
   """Experiment config."""
 
   config = config_base.ExperimentConfig(
-      num_updates=250,
       optimizer=optimizer_config.sgd_config(
           lr=optimizer_config.constant_lr_config(1.0),
       ),
-      model=config_base.ModelConfig(
-          name='wideresnet',
-          kwargs={
-              'depth': 28,
-              'width': 10,
-          },
-          restore=config_base.ModelRestoreConfig(
-              path=config_base.MODEL_CKPT.WRN_28_10_IMAGENET32,
-              params_key='params',
-              network_state_key='network_state',
-              layer_to_reset='wide_res_net/Softmax',
+      model=models.WithRestoreModelConfig(
+          path=models.Registry.WRN_28_10_IMAGENET32.path,
+          params_key='params',
+          network_state_key='network_state',
+          layer_to_ignore='wide_res_net/Softmax',
+          model=models.WideResNetConfig(
+              depth=28,
+              width=10,
           ),
       ),
       training=experiment_config.TrainingConfig(
+          num_updates=250,
           batch_size=experiment_config.BatchSizeTrainConfig(
               total=16384,
               per_device_per_step=16,
@@ -53,19 +52,18 @@ def get_config() -> ml_collections.ConfigDict:
           dp=experiment_config.DPConfig(
               delta=1e-5,
               clipping_norm=1.0,
-              stop_training_at_epsilon=1.0,
+              auto_tune_target_epsilon=1.0,
               rescale_to_unit_norm=True,
               noise_multiplier=21.1,
-              auto_tune=None,  # 'num_updates',
+              auto_tune_field=None,  # 'num_updates',
           ),
           logging=experiment_config.LoggingConfig(
               grad_clipping=True,
-              grad_alignment=False,
               snr_global=True,  # signal-to-noise ratio across layers
               snr_per_layer=False,  # signal-to-noise ratio per layer
           ),
       ),
-      averaging=experiment_config.AveragingConfig(ema_coefficient=0.9,),
+      averaging={'ema': averaging.ExponentialMovingAveragingConfig(decay=0.9)},
       data_train=image_data.Cifar100Loader(
           config=image_data.Cifar100TrainValidConfig(
               preprocess_name='standardise',

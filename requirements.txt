@@ -1,12 +1,15 @@
 absl-py
-dill
-dm-haiku
-jax==0.4.13
-jaxlib==0.4.13
+dm-haiku==0.0.11
+einshape @ git+https://github.com/google-deepmind/einshape
+jax==0.4.20
+jaxlib==0.4.20
 jaxline @ git+https://github.com/deepmind/jaxline.git
 ml_collections
+more_itertools==10.1.0
 numpy
 optax
+orbax
+scikit-learn==1.3.2
 scipy
 tensorflow
 tensorflow_datasets

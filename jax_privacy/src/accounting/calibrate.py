@@ -127,8 +127,8 @@ def calibrate_noise_multiplier(
     min_noise, max_noise = max_noise, 2*max_noise
 
   error_epsilon = lambda s: np.abs(get_epsilon(s) - target_epsilon)
-  noise_multiplier = _solve_calibration(error_epsilon, min_noise, max_noise,
-                                        tol)
+  noise_multiplier = float(
+      _solve_calibration(error_epsilon, min_noise, max_noise, tol))
 
   return noise_multiplier
 

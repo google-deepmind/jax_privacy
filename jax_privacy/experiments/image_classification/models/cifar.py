@@ -14,13 +14,49 @@
 # limitations under the License.
 
 """Definition of the CIFAR Wide Residual Network."""
+
+import dataclasses
 import functools
 import logging
 
 import haiku as hk
 import haiku.initializers as hk_init
+import jax
 import jax.numpy as jnp
+from jax_privacy.experiments.image_classification.models import base
 from jax_privacy.experiments.image_classification.models import common
+
+
+@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
+class WideResNetConfig(base.ModelConfig):
+  """Configuration for a WideeResNet."""
+
+  depth: int = 16
+  width: int = 4
+  dropout_rate: float = 0.0
+  use_skip_init: bool = False
+  use_skip_paths: bool = True
+  which_conv: str = 'WSConv2D'  # Conv2D or WSConv2D.
+  which_norm: str = 'GroupNorm'  # LayerNorm / GroupNorm / BatchNorm.
+  activation: common.Activation = common.Activation.RELU
+  groups: int = 16  # Only used for GroupNorm.
+  is_dp: bool = True
+
+  def make(self, num_classes: int) -> base.Model:
+    return base.Model.from_hk_module(
+        WideResNet,
+        num_classes=num_classes,
+        depth=self.depth,
+        width=self.width,
+        dropout_rate=self.dropout_rate,
+        use_skip_init=self.use_skip_init,
+        use_skip_paths=self.use_skip_paths,
+        which_conv=self.which_conv,
+        which_norm=self.which_norm,
+        activation=self.activation,
+        groups=self.groups,
+        is_dp=self.is_dp,
+    )
 
 
 class WideResNet(hk.Module):
@@ -41,7 +77,7 @@ class WideResNet(hk.Module):
       use_skip_paths: bool = True,
       which_conv: str = 'WSConv2D',  # Conv2D or WSConv2D.
       which_norm: str = 'GroupNorm',  # LayerNorm / GroupNorm / BatchNorm.
-      activation: str = 'relu',
+      activation: common.Activation = common.Activation.RELU,
       groups: int = 16,  # Only used for GroupNorm.
       is_dp: bool = True,
   ):
@@ -73,7 +109,7 @@ class WideResNet(hk.Module):
     self.use_skip_paths = use_skip_paths
     self.dropout_rate = dropout_rate
     self.resnet_blocks = (depth - 4) // 6
-    self.activation = common.activations_dict[activation]
+    self.activation = activation
 
   @hk.transparent
   def apply_skip_init(self, net, name):
@@ -91,7 +127,7 @@ class WideResNet(hk.Module):
         # This is the 'skip' branch.
         skip = net
         if i == 0:
-          skip = self.activation(skip)
+          skip = self.activation.fn(skip)
           skip = self.norm_fn(name=name + '_skip_norm')(skip, **norm_kwargs)
           skip = self.conv_fn(
               width,
@@ -103,7 +139,7 @@ class WideResNet(hk.Module):
       for j in range(2):
         name_suffix = str(i) + '_' + str(j)
         strides = strides if name_suffix == '0_0' else (1, 1)
-        net = self.activation(net)
+        net = self.activation.fn(net)
         net = self.norm_fn(name=name + '_norm_' + name_suffix)(
             net, **norm_kwargs)
         net = self.conv_fn(
@@ -119,7 +155,7 @@ class WideResNet(hk.Module):
         net += skip
     return net
 
-  def __call__(self, inputs, is_training):
+  def __call__(self, inputs: jax.Array, is_training: bool) -> jax.Array:
     norm_kwargs = {}
     if self.which_norm == 'BatchNorm':
       norm_kwargs['is_training'] = is_training
@@ -133,7 +169,7 @@ class WideResNet(hk.Module):
     net = self.residual_block(
         net, width=64 * self.width, strides=(2, 2), name='Block_3',
         is_training=is_training)
-    net = self.activation(net)
+    net = self.activation.fn(net)
 
     net = self.norm_fn(name='Final_norm')(net, **norm_kwargs)
 

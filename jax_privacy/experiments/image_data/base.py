@@ -38,7 +38,8 @@ class DataInputs:
 
   image: tf.Tensor | chex.Array
   label: tf.Tensor | chex.Array
-  metadata: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+  metadata: Mapping[str, Any] = dataclasses.field(  # pylint: disable=invalid-field-call
+      default_factory=dict)
 
   @classmethod
   def from_dict(

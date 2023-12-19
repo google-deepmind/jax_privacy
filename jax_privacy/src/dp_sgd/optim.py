@@ -15,13 +15,10 @@
 
 """Optim utils."""
 
-from typing import Optional
-
 import chex
 import jax
 import jax.numpy as jnp
 from jax_privacy.src.dp_sgd import typing
-import optax
 
 
 def apply_weight_decay(
@@ -36,13 +33,13 @@ def apply_weight_decay(
 
 def add_noise_to_grads(
     *,
-    clipping_norm: Optional[chex.Numeric],
+    clipping_norm: chex.Numeric | None,
     rescale_to_unit_norm: bool,
-    noise_multiplier: Optional[chex.Numeric],
-    total_batch_size: int,
+    noise_multiplier: chex.Numeric | None,
+    total_batch_size: chex.Numeric,
     grads: typing.ParamsT,
     rng_per_batch: chex.PRNGKey,
-) -> tuple[typing.ParamsT, chex.Numeric]:
+) -> tuple[typing.ParamsT, jax.Array]:
   """Add noise to gradients.
 
   Args:
@@ -68,14 +65,15 @@ def add_noise_to_grads(
     scale = None
   elif rescale_to_unit_norm:
     clipping_norm_is_finite = True
-    scale = 1.0 / total_batch_size
+    scale = 1.0 / jnp.asarray(total_batch_size, dtype=jnp.float32)
   else:
     clipping_norm_is_finite = True
-    scale = clipping_norm / total_batch_size
+    scale = clipping_norm / jnp.asarray(total_batch_size, dtype=jnp.float32)
 
   if not noise_multiplier:
     # No noise to add (whether the clipping-norm is finite or not).
-    std = 0.0
+    std = jnp.array(0.0)
+    return grads, std
   elif not clipping_norm_is_finite:
     # Cannot add noise proportional to infinity.
     raise ValueError(
@@ -84,28 +82,14 @@ def add_noise_to_grads(
     # The total amount of noise to add is the product of the scale and
     # noise_multiplier.
     assert noise_multiplier >= 0
-    std = scale * noise_multiplier
-
-  # NB: no need to accumulate noise over devices because the noise is applied
-  # identically on all devices
-  noisy_grads = tree_map_add_normal_noise(grads, std, rng_per_batch)
-  return noisy_grads, std
-
-
-def cosine_distance(
-    tree_1: chex.ArrayTree,
-    tree_2: chex.ArrayTree,
-) -> chex.Array:
-  """Compute cosine distance between two trees of arrays."""
-  dot_product = sum(jax.tree_util.tree_leaves(jax.tree_util.tree_map(
-      lambda g1, g2: jnp.sum(g1 * g2), tree_1, tree_2)))
-
-  return dot_product / (optax.global_norm(tree_1) * optax.global_norm(tree_2))
+    std = jnp.asarray(scale * noise_multiplier)
+    noisy_grads = tree_map_add_normal_noise(grads, std, rng_per_batch)
+    return noisy_grads, std
 
 
 def tree_map_add_normal_noise(
     tree: typing.ParamsT,
-    noise_std: float,
+    noise_std: chex.Numeric,
     rng_key: chex.PRNGKey,
 ) -> typing.ParamsT:
   """Add iid gaussian noise with std 'noise_std' to all leaves of 'tree'."""
@@ -114,5 +98,6 @@ def tree_map_add_normal_noise(
       jax.tree_util.tree_structure(tree), rng_keys)
 
   def with_noise(rng: chex.Array, x: chex.Array) -> chex.Array:
-    return x + noise_std * jax.random.normal(rng, shape=x.shape, dtype=x.dtype)
+    scale = jnp.asarray(noise_std, dtype=x.dtype)
+    return x + scale * jax.random.normal(rng, shape=x.shape, dtype=x.dtype)
   return jax.tree_util.tree_map(with_noise, rng_tree, tree)

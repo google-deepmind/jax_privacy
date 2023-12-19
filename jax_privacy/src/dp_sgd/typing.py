@@ -18,6 +18,8 @@
 Sub-directories may tighten the typing by using more restrictive types than the
 general Inputs, ModelState and Params defined here.
 """
+# pylint: disable=invalid-field-call  # fails for chex.dataclass
+
 
 import dataclasses
 
@@ -30,16 +32,18 @@ import jax
 GradNorm = jax.Array
 GradNormPerExample = jax.Array
 Loss = jax.Array
+NumpyMetrics = dict[str, chex.ArrayNumpy]  # matches JAXline expectation
 
 InputsT = TypeVar('InputsT', bound=chex.ArrayTree)
 ModelStateT = TypeVar('ModelStateT', bound=chex.ArrayTree)
 ParamsT = TypeVar('ParamsT', bound=chex.ArrayTree)
+NoiseStateT = TypeVar('NoiseStateT', bound=chex.ArrayTree)
 
 AutoTuneField = Literal[
     'batch_size',
     'noise_multiplier',
     'num_updates',
-    'stop_training_at_epsilon',
+    'epsilon',
     None,
 ]
 
@@ -51,12 +55,14 @@ class Metrics:
       default_factory=dict)
   scalars_sum: Mapping[str, chex.Numeric] = dataclasses.field(
       default_factory=dict)
-  per_example: Mapping[str, jax.Array] = dataclasses.field(
+  scalars_last: Mapping[str, chex.Numeric] = dataclasses.field(
+      default_factory=dict)
+  per_example: Mapping[str, chex.Numeric] = dataclasses.field(
       default_factory=dict)
 
   @property
   def scalars(self) -> Mapping[str, chex.Numeric]:
-    return {**self.scalars_avg, **self.scalars_sum}
+    return {**self.scalars_avg, **self.scalars_sum, **self.scalars_last}
 
 
 NormFn = Callable[[ParamsT], jax.Array]

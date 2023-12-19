@@ -13,10 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Training an NF-ResNet-50 on ImageNet with (8.0, 8e-7)-DP."""
+"""Training a WRN-2-1 on CIFAR-10 for debugging."""
 
-import haiku.initializers as hk_init
-import jax.numpy as jnp
 from jax_privacy.experiments import image_data
 from jax_privacy.experiments.image_classification import config_base
 from jax_privacy.experiments.image_classification.models import models
@@ -28,30 +26,30 @@ import ml_collections
 
 def get_config() -> ml_collections.ConfigDict:
   """Experiment config."""
+
   config = config_base.ExperimentConfig(
       optimizer=optimizer_config.sgd_config(
-          lr=optimizer_config.constant_lr_config(4.0),
+          lr=optimizer_config.constant_lr_config(2.0),
       ),
-      model=models.NFResNetConfig(
-          variant='ResNet50',
-          drop_rate=None,  # dropout-rate
-          fc_init=hk_init.RandomNormal(0.01, 0),
-          skipinit_gain=jnp.ones,
+      model=models.WideResNetConfig(
+          depth=2,
+          width=1,
       ),
       training=experiment_config.TrainingConfig(
-          num_updates=71589,
+          num_updates=2,
           batch_size=experiment_config.BatchSizeTrainConfig(
-              total=16384,
-              per_device_per_step=32,
+              total=128,
+              per_device_per_step=64,
           ),
           weight_decay=0.0,  # L-2 regularization,
-          train_only_layer=None,  # None
+          train_only_layer=None,
           dp=experiment_config.DPConfig(
-              delta=8e-7,
+              delta=1e-5,
               clipping_norm=1.0,
-              auto_tune_target_epsilon=8.0,
+              auto_tune_target_epsilon=1.0,
               rescale_to_unit_norm=True,
-              noise_multiplier=2.5,
+              noise_multiplier=10.0,
+              auto_tune_field=None,
           ),
           logging=experiment_config.LoggingConfig(
               grad_clipping=True,
@@ -60,24 +58,22 @@ def get_config() -> ml_collections.ConfigDict:
           ),
       ),
       averaging={
-          'ema': averaging.ExponentialMovingAveragingConfig(decay=0.99999),
+          'ema': averaging.ExponentialMovingAveragingConfig(decay=0.999),
       },
-      data_train=image_data.ImageNetLoader(
-          config=image_data.ImagenetTrainConfig(
+      data_train=image_data.Cifar10Loader(
+          config=image_data.Cifar10TrainValidConfig(
               preprocess_name='standardise',
-              image_size=(224, 224),
           ),
           augmult_config=image_data.AugmultConfig(
-              augmult=4,
+              augmult=2,
               random_flip=True,
               random_crop=True,
               random_color=False,
           ),
       ),
-      data_eval=image_data.ImageNetLoader(
-          config=image_data.ImagenetValidConfig(
+      data_eval=image_data.Cifar10Loader(
+          config=image_data.Cifar10ValidConfig(
               preprocess_name='standardise',
-              image_size=(224, 224),
           ),
       ),
       evaluation=experiment_config.EvaluationConfig(

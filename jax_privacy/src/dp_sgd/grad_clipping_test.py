@@ -18,11 +18,13 @@
 import functools
 
 from absl.testing import absltest
+from absl.testing import parameterized
 import chex
 import haiku as hk
 import jax
 import jax.numpy as jnp
 from jax_privacy.src.dp_sgd import grad_clipping
+from jax_privacy.src.dp_sgd import grad_clipping_utils
 from jax_privacy.src.dp_sgd import typing
 import optax
 
@@ -142,11 +144,13 @@ class TestClippedGradients(chex.TestCase):
     grad_fn_1 = grad_clipping.value_and_clipped_grad_vectorized(
         value_and_grad_fn,
         clipping_fn,
+        state_acc_strategies=grad_clipping_utils.Reject(),
     )
 
     grad_fn_2 = grad_clipping.value_and_clipped_grad_loop(
         value_and_grad_fn,
         clipping_fn,
+        state_acc_strategies=grad_clipping_utils.Reject(),
     )
 
     grad_fn_3 = grad_clipped_per_sample_naive(
@@ -172,11 +176,13 @@ class TestClippedGradients(chex.TestCase):
     grad_fn_1 = grad_clipping.value_and_clipped_grad_vectorized(
         value_and_grad_fn,
         clipping_fn=clipping_fn,
+        state_acc_strategies=grad_clipping_utils.Reject(),
     )
 
     grad_fn_2 = grad_clipping.value_and_clipped_grad_loop(
         value_and_grad_fn,
         clipping_fn=clipping_fn,
+        state_acc_strategies=grad_clipping_utils.Reject(),
     )
 
     grad_fn_3 = grad_clipped_per_sample_naive(
@@ -201,11 +207,13 @@ class TestClippedGradients(chex.TestCase):
     grad_fn_1 = grad_clipping.value_and_clipped_grad_vectorized(
         jax.value_and_grad(self.forward_per_sample, has_aux=True),
         clipping_fn=clipping_fn,
+        state_acc_strategies=grad_clipping_utils.Reject(),
     )
 
     grad_fn_2 = grad_clipping.value_and_clipped_grad_loop(
         jax.value_and_grad(self.forward_per_sample, has_aux=True),
         clipping_fn=clipping_fn,
+        state_acc_strategies=grad_clipping_utils.Reject(),
     )
 
     grad_fn_args = (
@@ -255,7 +263,10 @@ class TestClippedGradientsPerBatchPerSampleRNG(chex.TestCase):
 
     with self.subTest('vectorized'):
       grad_fn = grad_clipping.value_and_clipped_grad_vectorized(
-          value_and_grad_fn, clipping_fn=self.no_clip)
+          value_and_grad_fn,
+          clipping_fn=self.no_clip,
+          state_acc_strategies=grad_clipping_utils.Reject(),
+      )
       (_, (_, metrics)), _ = self.variant(grad_fn)(*self.grad_fn_args)
 
       # Noise should be different across all samples.
@@ -266,7 +277,10 @@ class TestClippedGradientsPerBatchPerSampleRNG(chex.TestCase):
 
     with self.subTest('loop'):
       grad_fn = grad_clipping.value_and_clipped_grad_loop(
-          value_and_grad_fn, clipping_fn=self.no_clip)
+          value_and_grad_fn,
+          clipping_fn=self.no_clip,
+          state_acc_strategies=grad_clipping_utils.Reject(),
+      )
       (_, (_, metrics)), _ = self.variant(grad_fn)(*self.grad_fn_args)
 
       # Noise should be different across all samples.
@@ -274,6 +288,186 @@ class TestClippedGradientsPerBatchPerSampleRNG(chex.TestCase):
         self.assertTrue(
             jnp.any(metrics.per_example['noise'][0]
                     != metrics.per_example['noise'][i]))
+
+
+@parameterized.named_parameters(('loop', False), ('vect', True))
+class TestNetworkStateAccumulation(chex.TestCase):
+  """Tests the various strategies for accumulating network state."""
+
+  def setUp(self):
+    super().setUp()
+    self.rng = jax.random.PRNGKey(0)
+    self.no_clip = lambda grads: (grads, optax.global_norm(grads))
+
+  def _value_and_grad_fn(
+      self,
+      net: hk.TransformedWithState,
+      *,
+      vectorised: bool,
+      state_acc_strategies: grad_clipping_utils.StateAccumulationStrategyTree,
+  ) -> typing.ValueAndGradFn:
+    """Returns a value_and_grad_fn given a state accumulation strategy."""
+
+    @functools.partial(jax.value_and_grad, has_aux=True)
+    def value_and_grad_fn(params, state, rng_per_example, inputs):
+      loss, state = net.apply(params, state, rng_per_example, inputs)
+      return loss, (state, typing.Metrics())
+
+    if vectorised:
+      clipped_grad_fn = grad_clipping.value_and_clipped_grad_vectorized
+    else:
+      clipped_grad_fn = grad_clipping.value_and_clipped_grad_loop
+    return clipped_grad_fn(
+        value_and_grad_fn,
+        clipping_fn=self.no_clip,
+        state_acc_strategies=state_acc_strategies,
+    )
+
+  def test_no_state_passes(self, vectorised: bool):
+    @hk.transform_with_state
+    def net(x):
+      return jnp.sum(x)
+
+    value_and_grad_fn = self._value_and_grad_fn(
+        net,
+        vectorised=vectorised,
+        state_acc_strategies=grad_clipping_utils.Reject(),
+    )
+    params, state = net.init(self.rng, jnp.zeros(shape=(7,)))
+    (unused_loss, (state, unused_metrics)), params = value_and_grad_fn(
+        params, state, self.rng, jnp.zeros(shape=(7,)))
+    del params
+
+    chex.assert_trees_all_close({}, state)
+
+  def test_state_triggers_error(self, vectorised: bool):
+    @hk.transform_with_state
+    def net(x):
+      hk.set_state('s', jnp.array([3.]))
+      return jnp.sum(x)
+
+    with self.assertRaises(ValueError) as context:
+      value_and_grad_fn = self._value_and_grad_fn(
+          net,
+          vectorised=vectorised,
+          state_acc_strategies=grad_clipping_utils.Reject(),
+      )
+      params, state = net.init(self.rng, jnp.zeros(shape=(7,)))
+      value_and_grad_fn(params, state, self.rng, jnp.zeros(shape=(7,)))
+    self.assertContainsSubset('Unhandled network state', str(context.exception))
+
+  def test_state_with_average(self, vectorised: bool):
+
+    @hk.transform_with_state
+    def net(x):
+      # For testing purposes, the state just echoes the inputs.
+      with hk.experimental.name_scope('a'):
+        hk.set_state('c', jnp.sum(x, axis=0))
+      return jnp.sum(x)
+
+    value_and_grad_fn = self._value_and_grad_fn(
+        net,
+        vectorised=vectorised,
+        state_acc_strategies=grad_clipping_utils.Average(),
+    )
+    params, state = net.init(self.rng, jnp.zeros(shape=(7,)))
+    (unused_loss, (state, unused_metrics)), params = value_and_grad_fn(
+        params, state, self.rng, jnp.arange(7, dtype=jnp.float32))
+    del params
+
+    # Vectorised state was [0, 1, ..., 6].
+    # Expect this to be averaged.
+    chex.assert_trees_all_close({'a': {'c': 3.}}, state)
+
+  def test_state_with_sum(self, vectorised: bool):
+
+    @hk.transform_with_state
+    def net(x):
+      # For testing purposes, the state is a running sum of the inputs.
+      with hk.experimental.name_scope('a'):
+        c = hk.get_state(
+            'c', shape=x.shape[1:], dtype=jnp.float32, init=jnp.zeros)
+        hk.set_state('c', c + jnp.sum(x, axis=0))
+      return jnp.sum(x)
+
+    value_and_grad_fn = self._value_and_grad_fn(
+        net,
+        vectorised=vectorised,
+        state_acc_strategies=grad_clipping_utils.Sum(),
+    )
+    params, state = net.init(self.rng, jnp.zeros(shape=(5,)))
+    (unused_loss, (state, unused_metrics)), params = value_and_grad_fn(
+        params, state, self.rng, jnp.arange(5, dtype=jnp.float32))
+
+    # Vectorised state was [0, 1, 2, 3, 4].
+    # Expect this to be summed.
+    chex.assert_trees_all_close({'a': {'c': 10.}}, state)
+
+    (unused_loss, (state, unused_metrics)), params = value_and_grad_fn(
+        params, state, self.rng, 2. * jnp.arange(5, dtype=jnp.float32))
+    del params
+
+    # Vectorised state was now [10, 12, 14, 16, 18].
+    # Expect this to be summed relative to the previous value 10.
+    chex.assert_trees_all_close({'a': {'c': 30.}}, state)
+
+  def test_incomplete_strategy_triggers_error(self, vectorised: bool):
+    @hk.transform_with_state
+    def net(x):
+      with hk.experimental.name_scope('a'):
+        hk.set_state('s', jnp.array([3.]))
+        hk.set_state('t', jnp.array([4.]))
+      return jnp.sum(x)
+
+    with self.assertRaises(ValueError) as context:
+      value_and_grad_fn = self._value_and_grad_fn(
+          net,
+          vectorised=vectorised,
+          state_acc_strategies={
+              'a': {
+                  's': grad_clipping_utils.Average(),
+                  't': grad_clipping_utils.Reject(),
+              },
+          },
+      )
+      params, state = net.init(self.rng, jnp.zeros(shape=(7,)))
+      value_and_grad_fn(params, state, self.rng, jnp.zeros(shape=(7,)))
+    self.assertContainsSubset('Unhandled network state', str(context.exception))
+
+  def test_mixed_strategies(self, vectorised: bool):
+    @hk.transform_with_state
+    def net(x):
+      m = jnp.sum(x)  # 0 in init; 1 in apply.
+      with hk.experimental.name_scope('a'):
+        hk.set_state('s', m*jnp.array([3.]))
+        hk.set_state('t', m*jnp.array([4.]))
+      with hk.experimental.name_scope('b'):
+        hk.set_state('u', m*jnp.array([6.]))
+        hk.set_state('v', m*jnp.array([7.]))
+      return jnp.sum(x)
+
+    value_and_grad_fn = self._value_and_grad_fn(
+        net,
+        vectorised=vectorised,
+        state_acc_strategies={
+            'a': {
+                's': grad_clipping_utils.Average(),
+                't': grad_clipping_utils.Sum(),
+            },
+            'b': grad_clipping_utils.Average(),
+        },
+    )
+    params, state = net.init(self.rng, jnp.zeros(shape=(11,)))
+    print(state)
+    (unused_loss, (state, unused_metrics)), params = value_and_grad_fn(
+        params, state, self.rng, jnp.ones(shape=(11,)))
+    del params
+
+    # Expect "a.t" to have been summed, and the rest to have been averaged.
+    chex.assert_trees_all_close({
+        'a': {'s': 3., 't': 44.},
+        'b': {'u': 6., 'v': 7.},
+    }, state)
 
 
 if __name__ == '__main__':

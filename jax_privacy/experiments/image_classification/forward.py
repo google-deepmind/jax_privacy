@@ -15,39 +15,32 @@
 
 """Defines train and evaluation functions that compute losses and metrics."""
 
-from typing import Mapping
+import abc
+from typing import Mapping, Sequence
 
 import chex
 import haiku as hk
 import jax.numpy as jnp
-from jax_privacy.experiments import image_data as data
+from jax_privacy.experiments import image_data
+from jax_privacy.experiments.image_classification import metrics as metrics_module
+from jax_privacy.experiments.image_classification.models import base
 from jax_privacy.src.dp_sgd import typing
 from jax_privacy.src.training import forward
-from jax_privacy.src.training import metrics as metrics_module
 import optax
-
-# TODO: investigate the pytype bug below.
 
 
 class MultiClassForwardFn(
-    # pytype: disable=not-indexable
-    forward.ForwardFn[data.DataInputs, hk.Params, hk.State],
-    # pytype: enable=not-indexable
+    forward.ForwardFn[image_data.DataInputs, hk.Params, hk.State],
 ):
-  """Defines forward passes for multi-class classification."""
+  """Defines forward passes for learning tasks."""
 
-  def __init__(self, net: hk.TransformedWithState):
-    """Initialization function.
-
-    Args:
-      net: haiku model to use for the forward pass.
-    """
+  def __init__(self, net: base.Model):
     self._net = net
 
   def train_init(
       self,
       rng_key: chex.PRNGKey,
-      inputs: data.DataInputs,
+      inputs: image_data.DataInputs,
   ) -> tuple[hk.Params, hk.State]:
     """Initializes the model.
 
@@ -66,7 +59,7 @@ class MultiClassForwardFn(
       params: hk.Params,
       network_state: hk.State,
       rng_per_example: chex.PRNGKey,
-      inputs: data.DataInputs,
+      inputs: image_data.DataInputs,
   ) -> tuple[typing.Loss, tuple[hk.State, typing.Metrics]]:
     """Forward pass per example (training time).
 
@@ -82,7 +75,7 @@ class MultiClassForwardFn(
     Returns:
       loss: loss function computed per-example on the mini-batch (averaged over
         the K augmentations).
-      network_state: new model state
+      network_state: new model state.
       metrics: metrics computed on the current mini-batch, including the loss
         value per-example.
     """
@@ -113,12 +106,40 @@ class MultiClassForwardFn(
     )
     return jnp.mean(loss), (network_state, metrics)
 
+  @abc.abstractmethod
+  def _loss(self, logits: chex.Array, labels: chex.Array) -> chex.Array:
+    raise NotImplementedError()
+
+  @abc.abstractmethod
+  def _train_metrics(
+      self,
+      logits: chex.Array,
+      labels: chex.Array,
+  ) -> Mapping[str, chex.Numeric]:
+    raise NotImplementedError()
+
+  @abc.abstractmethod
+  def _eval_metrics(
+      self,
+      logits: chex.Array,
+      labels: chex.Array,
+  ) -> Mapping[str, chex.Numeric]:
+    raise NotImplementedError()
+
+
+class MultiClassSingleLabelForwardFn(MultiClassForwardFn):
+  """Defines forward passes for learning tasks with one label."""
+
+  def __init__(self, net: base.Model, label_smoothing: float):
+    super().__init__(net)
+    self._label_smoothing = label_smoothing
+
   def eval_forward(
       self,
       params: hk.Params,
       network_state: hk.State,
       rng: chex.PRNGKey,
-      inputs: data.DataInputs,
+      inputs: image_data.DataInputs,
   ) -> typing.Metrics:
     """Forward pass per example (evaluation time).
 
@@ -130,11 +151,11 @@ class MultiClassForwardFn(
         where the labels are one-hot encoded. `images` is expected to be of
         shape [NHWC], and `labels` of shape [NO].
     Returns:
-      per_example: metrics computed per-example on the mini-batch (logits only).
-      aggregated: metrics computed and aggregated on the current mini-batch.
+      Metrics computed on the current mini-batch, including the logits computed
+        per-example on the mini-batch.
     """
     logits, unused_network_state = self._net.apply(
-        params, network_state, rng, inputs.image)
+        params, network_state, rng, inputs.image, is_training=False)
     loss = jnp.mean(self._loss(logits, inputs.label))
 
     return typing.Metrics(
@@ -151,6 +172,9 @@ class MultiClassForwardFn(
     Returns:
       Cross-entropy loss computed per-example on leading dimensions.
     """
+    # NB: labels are one-hot encoded.
+    if self._label_smoothing:
+      labels = optax.smooth_labels(labels, alpha=self._label_smoothing)
     return optax.softmax_cross_entropy(logits, labels)
 
   def _train_metrics(
@@ -177,3 +201,98 @@ class MultiClassForwardFn(
     acc1, acc5 = metrics_module.topk_accuracy(logits, labels, topk=(1, 5))
     metrics = {'acc1': 100 * acc1, 'acc5': 100 * acc5}
     return metrics
+
+
+class MultiClassMultiLabelForwardFn(MultiClassForwardFn):
+  """Defines forward passes for learning tasks with multiple labels."""
+
+  def __init__(
+      self,
+      net: base.Model,
+      *,
+      all_label_names: Sequence[str],
+      class_indices_for_eval: Sequence[int],
+  ):
+    super().__init__(net)
+    self._all_label_names = all_label_names
+    self._class_indices_for_eval = class_indices_for_eval
+
+  def eval_forward(
+      self,
+      params: hk.Params,
+      network_state: hk.State,
+      rng: chex.PRNGKey,
+      inputs: image_data.DataInputs,
+  ) -> typing.Metrics:
+    """Forward pass per example (evaluation time).
+
+    Args:
+      params: model parameters that should get updated during training.
+      network_state: model state.
+      rng: random number generation key.
+      inputs: model inputs, where the labels are one-hot encoded. Images are
+        expected to be of shape [NHWC], and `labels` of shape [NO].
+    Returns:
+      Metrics computed on the current mini-batch, including the logits computed
+        per-example on the mini-batch.
+    """
+    logits, unused_network_state = self._net.apply(
+        params, network_state, rng, inputs.image, is_training=False)
+    logits = logits[..., jnp.asarray(self._class_indices_for_eval)]
+    loss = jnp.mean(self._loss(logits, inputs.label))
+
+    return typing.Metrics(
+        per_example={'logits': logits},
+        scalars_avg={'loss': loss, **self._eval_metrics(logits, inputs.label)},
+    )
+
+  def _loss(self, logits: chex.Array, labels: chex.Array) -> chex.Array:
+    # NB: labels are multilabel binary classification problem.
+    # For each example, average loss of all labels.
+    return optax.sigmoid_binary_cross_entropy(logits, labels).mean(-1)
+
+  def _train_metrics(
+      self,
+      logits: chex.Array,
+      labels: chex.Array,
+  ) -> Mapping[str, chex.Numeric]:
+    return self._avg_and_per_class_accuracy_metrics(logits, labels)
+
+  def _eval_metrics(
+      self,
+      logits: chex.Array,
+      labels: chex.Array,
+  ) -> Mapping[str, chex.Numeric]:
+    return self._avg_and_per_class_accuracy_metrics(
+        logits, labels, class_subset=self._class_indices_for_eval)
+
+  def _avg_and_per_class_accuracy_metrics(
+      self,
+      logits: chex.Array,
+      labels: chex.Array,
+      *,
+      class_subset: Sequence[int] | None = None,
+  ) -> Mapping[str, chex.Numeric]:
+    """Returns the accuracy for non-mutually exclusive labels (not one-hot).
+
+    Args:
+      logits: [batch size, number of classes in subset].
+      labels: [batch size, number of classes in subset].
+      class_subset: Indices of classes in subset.
+
+    Returns:
+      Average accuracy over all classes and per-class.
+    """
+    acc_over_classes = metrics_module.per_class_acc(logits, labels)
+    if class_subset is not None:
+      label_names = [self._all_label_names[i] for i in class_subset]
+    else:
+      label_names = self._all_label_names
+    acc_by_label_name = {
+        'acc_' + name: 100.0 * acc
+        for name, acc in zip(acc_over_classes, label_names, strict=True)
+    }
+    return {
+        'avg_acc': 100.0 * jnp.mean(acc_over_classes),
+        **acc_by_label_name,
+    }

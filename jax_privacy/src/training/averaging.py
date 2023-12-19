@@ -15,6 +15,11 @@
 
 """Parameter averaging functions."""
 
+import abc
+import dataclasses
+import functools
+from typing import Protocol
+
 import chex
 import jax
 import jax.numpy as jnp
@@ -22,13 +27,64 @@ import jax.numpy as jnp
 from jax_privacy.src.dp_sgd import typing
 
 
+class AveragingFn(Protocol):
+
+  def __call__(
+      self,
+      tree_old: typing.ParamsT,
+      tree_new: typing.ParamsT,
+      t: chex.Numeric,
+  ) -> typing.ParamsT:
+    """Averaging function."""
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class AveragingConfig(abc.ABC):
+  """Configuration for parameter averaging."""
+
+  @abc.abstractmethod
+  def make(self) -> AveragingFn:
+    """Makes averaging function."""
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class PolyakAveragingConfig(AveragingConfig):
+  """Configuration for Polyak parameter averaging."""
+
+  start_step: int = 0
+
+  def make(self) -> AveragingFn:
+    """Makes averaging function."""
+    return functools.partial(polyak, start_step=self.start_step)
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class ExponentialMovingAveragingConfig(AveragingConfig):
+  """Configuration for parameter EMA."""
+
+  decay: float
+  use_warmup: bool = True
+  start_step: int = 0
+
+  def make(self) -> AveragingFn:
+    """Makes averaging function."""
+    return functools.partial(
+        ema,
+        mu=self.decay,
+        use_warmup=self.use_warmup,
+        start_step=self.start_step,
+    )
+
+
 def polyak(
     tree_old: typing.ParamsT,
     tree_new: typing.ParamsT,
     t: chex.Numeric,
+    *,
+    start_step: int = 0,
 ) -> typing.ParamsT:
   """Polyak averaging if t >= 0, return tree_new otherwise."""
-  t = jnp.maximum(t, 0)
+  t = jnp.maximum(t - start_step, 0)
   return jax.tree_util.tree_map(
       lambda old, new: (t * old + new) / (t + 1),
       tree_old,
@@ -39,12 +95,15 @@ def polyak(
 def ema(
     tree_old: typing.ParamsT,
     tree_new: typing.ParamsT,
-    mu: chex.Numeric,
     t: chex.Numeric,
+    *,
+    mu: chex.Numeric,
     use_warmup: bool = True,
+    start_step: int = 0,
 ) -> typing.ParamsT:
   """Exponential Moving Averaging if t >= 0, return tree_new otherwise."""
   # Do not average until t >= 0.
+  t = jnp.maximum(t - start_step, 0)
   mu *= (t >= 0)
   if use_warmup:
     mu = jnp.minimum(mu, (1.0 + t) / (10.0 + t))

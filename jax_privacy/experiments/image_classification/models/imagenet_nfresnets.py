@@ -22,13 +22,48 @@ Reference:
   International Conference on Learning Representations, 2021.
 """
 
+import dataclasses
 from typing import Any, Optional
 
-import chex
 import haiku as hk
 import jax
 import jax.numpy as jnp
+from jax_privacy.experiments.image_classification.models import base
 from jax_privacy.experiments.image_classification.models import common
+
+
+@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
+class NFResNetConfig(base.ModelConfig):
+  """Norm-Free preactivation ResNet config."""
+
+  variant: str = 'ResNet50'
+  width: int = 4
+  alpha: float = 0.2
+  stochdepth_rate: float = 0.1
+  drop_rate: Optional[float] = None
+  activation: common.Activation = common.Activation.SCALED_RELU
+  fc_init: Any = None
+  skipinit_gain: hk.initializers.Initializer = jnp.zeros
+  use_se: bool = False
+  se_ratio: float = 0.25
+  name: str = 'NF_ResNet'
+
+  def make(self, num_classes: int) -> base.Model:
+    return base.Model.from_hk_module(
+        NFResNet,
+        num_classes=num_classes,
+        variant=self.variant,
+        width=self.width,
+        alpha=self.alpha,
+        stochdepth_rate=self.stochdepth_rate,
+        drop_rate=self.drop_rate,
+        activation=self.activation,
+        fc_init=self.fc_init,
+        skipinit_gain=self.skipinit_gain,
+        use_se=self.use_se,
+        se_ratio=self.se_ratio,
+        name=self.name,
+    )
 
 
 class NFResNet(hk.Module):
@@ -64,7 +99,7 @@ class NFResNet(hk.Module):
       alpha: float = 0.2,
       stochdepth_rate: float = 0.1,
       drop_rate: Optional[float] = None,
-      activation: str = 'scaled_relu',
+      activation: common.Activation = common.Activation.SCALED_RELU,
       fc_init: Any = None,
       skipinit_gain: hk.initializers.Initializer = jnp.zeros,
       use_se: bool = False,
@@ -78,7 +113,7 @@ class NFResNet(hk.Module):
     block_params = self.variant_dict[self.variant]
     self.width_pattern = [item * self.width for item in [64, 128, 256, 512]]
     self.depth_pattern = block_params['depth']
-    self.activation = common.activations_dict[activation]
+    self.activation = activation
     if drop_rate is None:
       self.drop_rate = block_params.get('drop_rate', 0.0)
     else:
@@ -131,7 +166,7 @@ class NFResNet(hk.Module):
       fc_init = hk.initializers.RandomNormal(0.01, 0)
     self.fc = hk.Linear(self.num_classes, w_init=fc_init, with_bias=True)
 
-  def __call__(self, x: chex.Array, is_training: bool = True) -> chex.Array:
+  def __call__(self, x: jax.Array, is_training: bool) -> jax.Array:
     """Return the output of the final layer without any [log-]softmax."""
     # Forward through the stem.
     out = self.initial_conv(x)
@@ -141,7 +176,7 @@ class NFResNet(hk.Module):
     for block in self.blocks:
       out, unused_res_avg_var = block(out, is_training=is_training)
     # Final-conv->activation, pool, dropout, classify
-    pool = jnp.mean(self.activation(out), [1, 2])
+    pool = jnp.mean(self.activation.fn(out), [1, 2])
     # Optionally apply dropout.
     if self.drop_rate > 0.0 and is_training:
       pool = hk.dropout(hk.next_rng_key(), self.drop_rate, pool)
@@ -162,7 +197,7 @@ class NFResBlock(hk.Module):
       stride: int = 1,
       beta: float = 1.0,
       alpha: float = 0.2,
-      activation: common.Activation = jax.nn.relu,
+      activation: common.Activation = common.Activation.RELU,
       skipinit_gain: hk.initializers.Initializer = jnp.zeros,
       stochdepth_rate: Optional[float] = None,
       use_se: bool = False,
@@ -213,17 +248,17 @@ class NFResBlock(hk.Module):
 
   def __call__(
       self,
-      x: chex.Array,
+      x: jax.Array,
       is_training: bool,
-  ) -> tuple[chex.Array, chex.Array]:
+  ) -> tuple[jax.Array, jax.Array]:
     """Applies the forward pass."""
-    out = self.activation(x) * self.beta
+    out = self.activation.fn(x) * self.beta
     shortcut = x
     if self.use_projection:  # Downsample with conv1x1.
       shortcut = self.conv_shortcut(out)
     out = self.conv0(out)
-    out = self.conv1(self.activation(out))
-    out = self.conv2(self.activation(out))
+    out = self.conv1(self.activation.fn(out))
+    out = self.conv2(self.activation.fn(out))
     if self.use_se:
       out = 2 * self.se(out) * out
     # Get average residual standard deviation for reporting metrics.

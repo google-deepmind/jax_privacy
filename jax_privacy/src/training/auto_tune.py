@@ -15,11 +15,12 @@
 
 """Auto-tune DP parameters of config so that they fit the privacy budget."""
 
-from absl import logging
+import dataclasses
 
+from absl import logging
 from jax_privacy.src import accounting as dp_accounting
 from jax_privacy.src.dp_sgd import typing
-import ml_collections
+from jax_privacy.src.training import experiment_config
 
 
 def dp_auto_tune(
@@ -53,7 +54,7 @@ def dp_auto_tune(
 
   if not auto_tune:
     pass
-  elif auto_tune == 'stop_training_at_epsilon':
+  elif auto_tune == 'epsilon':
     dp_epsilon: float = dp_accounting.compute_epsilon(
         noise_multipliers=noise_multiplier,
         batch_sizes=batch_sizes,
@@ -96,31 +97,41 @@ def dp_auto_tune(
 
 
 def dp_auto_tune_config(
-    config: ml_collections.ConfigDict,
-) -> ml_collections.ConfigDict:
+    training_config: experiment_config.TrainingConfig,
+    num_samples: int,
+) -> experiment_config.TrainingConfig:
   """Apply DP auto-tuning to the config (modified in-place)."""
-  config_xp = config.experiment_kwargs.config
-  if config_xp.training.batch_size.scale_schedule is not None:
+  if training_config.batch_size.scale_schedule is not None:
     raise ValueError('Batch-size schedules are not supported.')
-  dp_accountant_config = config_xp.training.dp.accountant
+  dp_accountant_config = training_config.dp.accountant
   if isinstance(dp_accountant_config, dp_accounting.PldAccountantConfig):
     logging.warning(
         'Auto tuning with PLD accountant can be slow. Be patient...'
     )
 
   epsilon, num_updates, noise_multiplier, batch_size = dp_auto_tune(
-      batch_sizes=config_xp.training.batch_size.total,
-      noise_multiplier=config_xp.training.dp.noise_multiplier,
-      dp_epsilon=config_xp.training.dp.stop_training_at_epsilon,
-      num_updates=config_xp.num_updates,
-      auto_tune=config_xp.training.dp.auto_tune,
-      num_examples=config_xp.data_train.config.num_samples,
-      dp_delta=config_xp.training.dp.delta,
+      batch_sizes=training_config.batch_size.total,
+      noise_multiplier=training_config.dp.noise_multiplier,
+      dp_epsilon=training_config.dp.auto_tune_target_epsilon,
+      num_updates=training_config.num_updates,
+      auto_tune=training_config.dp.auto_tune_field,
+      num_examples=num_samples,
+      dp_delta=training_config.dp.delta,
       dp_accountant_config=dp_accountant_config,
   )
 
-  config_xp.num_updates = num_updates
-  config_xp.training.dp.stop_training_at_epsilon = epsilon
-  config_xp.training.dp.noise_multiplier = noise_multiplier
-  config_xp.training.batch_size.total = batch_size
-  return config
+  training_config = dataclasses.replace(
+      training_config,
+      num_updates=num_updates,
+      batch_size=dataclasses.replace(
+          training_config.batch_size,
+          total=batch_size,
+      ),
+      dp=dataclasses.replace(
+          training_config.dp,
+          auto_tune_target_epsilon=epsilon,
+          noise_multiplier=noise_multiplier,
+      )
+  )
+
+  return training_config

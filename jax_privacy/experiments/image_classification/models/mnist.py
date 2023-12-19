@@ -14,12 +14,28 @@
 # limitations under the License.
 
 """Two-layer CNN for MNIST (mainly for membership inference attacks)."""
+
+import dataclasses
 import functools
 
-import chex
 import haiku as hk
 import jax
+from jax_privacy.experiments.image_classification.models import base
 from jax_privacy.experiments.image_classification.models import common
+
+
+@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
+class MnistCnnConfig(base.ModelConfig):
+  """Config for Mnist CNN."""
+
+  activation: common.Activation = common.Activation.RELU
+
+  def make(self, num_classes: int) -> base.Model:
+    return base.Model.from_hk_module(
+        MnistCNN,
+        num_classes=num_classes,
+        activation=self.activation,
+    )
 
 
 class MnistCNN(hk.Module):
@@ -28,7 +44,7 @@ class MnistCNN(hk.Module):
   def __init__(
       self,
       num_classes: int = 10,
-      activation: common.Activation = jax.nn.relu
+      activation: common.Activation = common.Activation.RELU,
   ):
     super().__init__()
 
@@ -62,16 +78,16 @@ class MnistCNN(hk.Module):
 
     self._activation = activation
 
-  def __call__(self, inputs: chex.Array, is_training: bool) -> chex.Array:
+  def __call__(self, inputs: jax.Array, is_training: bool) -> jax.Array:
     return hk.Sequential([
         self._conv_1,
-        self._activation,
+        self._activation.fn,
         self._pool,
         self._conv_2,
-        self._activation,
+        self._activation.fn,
         self._pool,
         hk.Flatten(),
         self._linear,
-        self._activation,
+        self._activation.fn,
         self._logits_module,
     ])(inputs)

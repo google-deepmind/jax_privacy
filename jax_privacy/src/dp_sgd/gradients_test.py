@@ -22,8 +22,8 @@ from absl.testing import parameterized
 import chex
 import jax
 import jax.numpy as jnp
+from jax_privacy.src.dp_sgd import grad_clipping_utils
 from jax_privacy.src.dp_sgd import gradients
-from jax_privacy.src.dp_sgd import pmap_testing
 from jax_privacy.src.dp_sgd import typing
 import numpy as np
 import optax
@@ -36,56 +36,50 @@ def _tree_dot(w: chex.ArrayTree, x: chex.ArrayTree) -> chex.Array:
   return sum(flat_products)
 
 
-_RNG_SCALE = 1.e7
+_RNG_SCALE = 1.0e7
+_LOSS_WEIGHT = 0.7
 
 
-class GradientsTest(pmap_testing.PmapTestCase):
+class GradientsTest(chex.TestCase):
+
+  def _make_gradient_computer(
+      self,
+      clipping_norm: float | None,
+      rescale_to_unit_norm: bool,
+      vectorize_grad_clipping: bool,
+      noise_multiplier: float | None = None,
+  ) -> gradients.GradientComputer:
+    return gradients.DpsgdGradientComputer(
+        clipping_norm=clipping_norm,
+        noise_multiplier=noise_multiplier,
+        rescale_to_unit_norm=rescale_to_unit_norm,
+        vectorize_grad_clipping=vectorize_grad_clipping,
+    )
 
   def test_clean_gradients(self):
-    gradient_computer = gradients.GradientComputer(
+    gradient_computer = self._make_gradient_computer(
         clipping_norm=None,
-        noise_multiplier=None,
         rescale_to_unit_norm=False,
         vectorize_grad_clipping=False,
-        device_layout=self._device_layout,
     )
 
     inputs = jnp.array([3., 4.])
     network_state = {'k': jnp.array(5.)}
     params = self._params_for_testing_loss(inputs, network_state)
     rng_per_batch = jax.random.PRNGKey(54)
-    step = jnp.array(6)
 
     testing_loss = functools.partial(self._testing_loss, include_rngs=True)
-    with self.patch_collectives(axis_index=3):
-      avg_grads = gradient_computer.clean_gradients(
-          testing_loss, params, network_state, rng_per_batch, step, inputs)
-      # Gradients from next accumulation step.
-      avg_grads_next = gradient_computer.clean_gradients(
-          testing_loss, params, network_state, rng_per_batch, step+1, inputs)
-    with self.patch_collectives(axis_index=2):
-      # Gradients from different device.
-      avg_grads_remote = gradient_computer.clean_gradients(
-          testing_loss, params, network_state, rng_per_batch, step, inputs)
+    avg_grads = gradient_computer.clean_gradients(
+        testing_loss, params, network_state, rng_per_batch, inputs)
 
-    # Gradients are expected to be 0.5 * inputs, as arranged by
-    # `self._testing_loss`. The factor of 0.5 arises from taking `pmean`.
+    # Gradients are expected to be _LOSS_WEIGHT * inputs, as arranged by
+    # `self._testing_loss`.
     chex.assert_trees_all_close(
-        jax.tree_map(lambda t: jnp.mean(t, axis=0) / 2., inputs),
+        jax.tree_map(lambda t: jnp.mean(t, axis=0) * _LOSS_WEIGHT, inputs),
         avg_grads['w_inputs'])
     chex.assert_trees_all_close(
-        jax.tree_map(lambda t: t / 2., network_state),
+        jax.tree_map(lambda t: t * _LOSS_WEIGHT, network_state),
         avg_grads['w_network_state'])
-
-    # rng_per_example should vary across devices and accumulation steps.
-    self.assertNotEqual(
-        jnp.sum(avg_grads['w_rng_per_example']),
-        jnp.sum(avg_grads_next['w_rng_per_example']),
-    )
-    self.assertNotEqual(
-        jnp.sum(avg_grads['w_rng_per_example']),
-        jnp.sum(avg_grads_remote['w_rng_per_example']),
-    )
 
   @parameterized.named_parameters(
       ('no_clipping', None, False),
@@ -93,50 +87,30 @@ class GradientsTest(pmap_testing.PmapTestCase):
       ('vacuous_clipping_vectorised', 1.e+10, True),
   )
   def test_non_clipped_gradients(self, clipping_norm, vectorize):
-    gradient_computer = gradients.GradientComputer(
+    gradient_computer = self._make_gradient_computer(
         clipping_norm=clipping_norm,
-        noise_multiplier=None,
         rescale_to_unit_norm=False,
         vectorize_grad_clipping=vectorize,
-        device_layout=self._device_layout,
     )
 
     inputs = jnp.array([[3., 4.], [5., 7.]])
     network_state = {'k': jnp.array(5.)}
     params = self._params_for_testing_loss(inputs, network_state)
     rng_per_batch = jax.random.PRNGKey(54)
-    step = jnp.array(6)
 
     testing_loss = functools.partial(self._testing_loss, include_rngs=True)
-    with self.patch_collectives(axis_index=3):
-      _, avg_grads = gradient_computer.loss_and_clipped_gradients(
-          testing_loss, params, network_state, rng_per_batch, step, inputs)
-      # Gradients from next accumulation step.
-      _, avg_grads_next = gradient_computer.loss_and_clipped_gradients(
-          testing_loss, params, network_state, rng_per_batch, step+1, inputs)
-    with self.patch_collectives(axis_index=2):
-      # Gradients from different device.
-      _, avg_grads_remote = gradient_computer.loss_and_clipped_gradients(
-          testing_loss, params, network_state, rng_per_batch, step, inputs)
+    _, avg_grads = gradient_computer.loss_and_clipped_gradients(
+        testing_loss, params, network_state, rng_per_batch, inputs,
+        state_acc_strategies=grad_clipping_utils.Average())
 
-    # Gradients are expected to be 0.5 * inputs, as arranged by
-    # `self._testing_loss`. The factor of 0.5 arises from taking `pmean`.
+    # Gradients are expected to be _LOSS_WEIGHT * inputs, as arranged by
+    # `self._testing_loss`.
     chex.assert_trees_all_close(
-        jax.tree_map(lambda t: jnp.mean(t, axis=0) / 2., inputs),
+        jax.tree_map(lambda t: jnp.mean(t, axis=0) * _LOSS_WEIGHT, inputs),
         avg_grads['w_inputs'])
     chex.assert_trees_all_close(
-        jax.tree_map(lambda t: t / 2., network_state),
+        jax.tree_map(lambda t: t * _LOSS_WEIGHT, network_state),
         avg_grads['w_network_state'])
-
-    # rng_per_example should vary across devices and accumulation steps.
-    self.assertNotEqual(
-        jnp.sum(avg_grads['w_rng_per_example']),
-        jnp.sum(avg_grads_next['w_rng_per_example']),
-    )
-    self.assertNotEqual(
-        jnp.sum(avg_grads['w_rng_per_example']),
-        jnp.sum(avg_grads_remote['w_rng_per_example']),
-    )
 
   @parameterized.parameters(
       (1.e-5, True),
@@ -146,33 +120,30 @@ class GradientsTest(pmap_testing.PmapTestCase):
   )
   def test_clipped_gradients_looped_equal_vectorised(
       self, clipping_norm, rescale_to_unit_norm):
-    gradient_computer = gradients.GradientComputer(
+    gradient_computer = self._make_gradient_computer(
         clipping_norm=clipping_norm,
-        noise_multiplier=None,
         rescale_to_unit_norm=rescale_to_unit_norm,
         vectorize_grad_clipping=False,
-        device_layout=self._device_layout,
     )
-    gradient_computer_v = gradients.GradientComputer(
+
+    gradient_computer_v = self._make_gradient_computer(
         clipping_norm=clipping_norm,
-        noise_multiplier=None,
         rescale_to_unit_norm=rescale_to_unit_norm,
         vectorize_grad_clipping=True,
-        device_layout=self._device_layout,
     )
 
     inputs = jnp.array([[3., 4.], [5., 7.]])
     network_state = {'k': jnp.array(5.)}
     params = self._params_for_testing_loss(inputs, network_state)
     rng_per_batch = jax.random.PRNGKey(54)
-    step = jnp.array(6)
 
     testing_loss = functools.partial(self._testing_loss, include_rngs=True)
-    with self.patch_collectives(axis_index=3):
-      _, avg_grads = gradient_computer.loss_and_clipped_gradients(
-          testing_loss, params, network_state, rng_per_batch, step, inputs)
-      _, avg_grads_v = gradient_computer_v.loss_and_clipped_gradients(
-          testing_loss, params, network_state, rng_per_batch, step, inputs)
+    _, avg_grads = gradient_computer.loss_and_clipped_gradients(
+        testing_loss, params, network_state, rng_per_batch, inputs,
+        state_acc_strategies=grad_clipping_utils.Average())
+    _, avg_grads_v = gradient_computer_v.loss_and_clipped_gradients(
+        testing_loss, params, network_state, rng_per_batch, inputs,
+        state_acc_strategies=grad_clipping_utils.Average())
 
     chex.assert_trees_all_close(avg_grads, avg_grads_v)
 
@@ -185,30 +156,26 @@ class GradientsTest(pmap_testing.PmapTestCase):
   def test_tightly_clipped_correctly_normalised(
       self, rescale_to_unit_norm, vectorize):
     clipping_norm = 1.e-2
-    gradient_computer = gradients.GradientComputer(
+    gradient_computer = self._make_gradient_computer(
         clipping_norm=clipping_norm,
-        noise_multiplier=None,
         rescale_to_unit_norm=rescale_to_unit_norm,
         vectorize_grad_clipping=vectorize,
-        device_layout=self._device_layout,
     )
 
     inputs = jnp.array([[3., 4., 1.], [5., 7., 2.]])
     network_state = {'k': jnp.array(5.)}
     params = self._params_for_testing_loss(inputs, network_state)
     rng_per_batch = jax.random.PRNGKey(54)
-    step = jnp.array(6)
 
     batch_size = inputs.shape[0]
 
-    with self.patch_collectives(axis_index=3):
-      clean_grads_per_example = [
-          gradient_computer.clean_gradients(
-              self._testing_loss, params, network_state, rng_per_batch, step,
-              inputs[i:i+1]) for i in range(batch_size)]
-      _, avg_grads = gradient_computer.loss_and_clipped_gradients(
-          self._testing_loss, params, network_state, rng_per_batch, step,
-          inputs)
+    clean_grads_per_example = [
+        gradient_computer.clean_gradients(
+            self._testing_loss, params, network_state, rng_per_batch,
+            inputs[i:i+1]) for i in range(batch_size)]
+    _, avg_grads = gradient_computer.loss_and_clipped_gradients(
+        self._testing_loss, params, network_state, rng_per_batch,
+        inputs, state_acc_strategies=grad_clipping_utils.Average())
 
     # Assuming that the clipping will be effective for each example,
     # we expect each example's tree of gradients to be normalised to
@@ -221,9 +188,8 @@ class GradientsTest(pmap_testing.PmapTestCase):
             lambda x, i=i: x / clean_grad_norms[i],
             clean_grads_per_example[i]
         ) for i in range(batch_size)]
-    # The factor of 0.5 arises from taking `pmean`.
     expected_avg_grads = jax.tree_map(
-        lambda *x: sum(x) / batch_size / 2, *normalised_grads)
+        lambda *x: sum(x) / batch_size, *normalised_grads)
     if not rescale_to_unit_norm:
       expected_avg_grads = jax.tree_map(
           lambda x: x * clipping_norm, expected_avg_grads)
@@ -235,12 +201,10 @@ class GradientsTest(pmap_testing.PmapTestCase):
       ('clipping_vectorised', 3., True),
   )
   def test_batch_size_1(self, clipping_norm, vectorize):
-    gradient_computer = gradients.GradientComputer(
+    gradient_computer = self._make_gradient_computer(
         clipping_norm=clipping_norm,
-        noise_multiplier=None,
         rescale_to_unit_norm=False,
         vectorize_grad_clipping=vectorize,
-        device_layout=self._device_layout,
     )
 
     # Test that a single example gives the same (averaged) gradients as
@@ -250,48 +214,45 @@ class GradientsTest(pmap_testing.PmapTestCase):
     network_state = {'k': jnp.array(5.)}
     params = self._params_for_testing_loss(inputs, network_state)
     rng_per_batch = jax.random.PRNGKey(54)
-    step = jnp.array(6)
 
-    with self.patch_collectives(axis_index=3):
-      _, avg_grads = gradient_computer.loss_and_clipped_gradients(
-          self._testing_loss, params, network_state, rng_per_batch, step,
-          inputs)
-      _, avg_grads_dup = gradient_computer.loss_and_clipped_gradients(
-          self._testing_loss,
-          params, network_state, rng_per_batch, step, inputs_dup)
+    _, avg_grads = gradient_computer.loss_and_clipped_gradients(
+        self._testing_loss, params, network_state, rng_per_batch,
+        inputs, state_acc_strategies=grad_clipping_utils.Average())
+    _, avg_grads_dup = gradient_computer.loss_and_clipped_gradients(
+        self._testing_loss,
+        params, network_state, rng_per_batch, inputs_dup,
+        state_acc_strategies=grad_clipping_utils.Average())
 
     for key in ('w_inputs', 'w_network_state'):
       chex.assert_trees_all_close(
           avg_grads[key], avg_grads_dup[key], atol=1.e-6)
 
   @parameterized.named_parameters(
-      ('no_clipping', None, False),
-      ('vacuous_clipping_looped', 1., False),
-      ('vacuous_clipping_vectorised', 1., True),
+      ('no_clipping', None, False, 5),
+      ('no_clipping_batch_size_1', None, False, 1),
+      ('vacuous_clipping_looped', 1., False, 5),
+      ('vacuous_clipping_looped_batch_size_1', 1., False, 1),
+      ('vacuous_clipping_vectorised', 1., True, 5),
+      ('vacuous_clipping_vectorised_batch_size_1', 1., True, 1),
   )
-  def test_aux_aggregation(self, clipping_norm, vectorize):
-    gradient_computer = gradients.GradientComputer(
+  def test_aux_aggregation(self, clipping_norm, vectorize, batch_size):
+    gradient_computer = self._make_gradient_computer(
         clipping_norm=clipping_norm,
-        noise_multiplier=None,
         rescale_to_unit_norm=False,
         vectorize_grad_clipping=vectorize,
-        device_layout=self._device_layout,
     )
 
     inputs = jnp.array([[3., 4.], [5., 7.], [2., -1.], [1., 0.], [3., 1.]])
+    inputs = inputs[:batch_size]
     network_state = {'k': jnp.array(5.)}
     params = self._params_for_testing_loss(inputs, network_state)
     rng_per_batch = jax.random.PRNGKey(54)
-    step = jnp.array(6)
 
-    batch_size = inputs.shape[0]
-
-    with self.patch_collectives(axis_index=3):
-      (
-          (loss, (new_network_state, metrics)), unused_grads
-      ) = gradient_computer.loss_and_clipped_gradients(
-          self._testing_loss, params, network_state, rng_per_batch, step,
-          inputs)
+    (
+        (loss, (new_network_state, metrics)), unused_grads
+    ) = gradient_computer.loss_and_clipped_gradients(
+        self._testing_loss, params, network_state, rng_per_batch,
+        inputs, state_acc_strategies=grad_clipping_utils.Average())
 
     chex.assert_trees_all_close(network_state, new_network_state)
     # Averaged.
@@ -299,73 +260,92 @@ class GradientsTest(pmap_testing.PmapTestCase):
     chex.assert_shape(metrics.scalars_avg.get('aggregate'), (3,))
     # Stacked, over all devices.
     if clipping_norm:
-      chex.assert_shape(metrics.per_example.get('grad_norm'), (4 * batch_size,))
-    chex.assert_shape(metrics.per_example.get('loss'), (4 * batch_size,))
-    chex.assert_shape(metrics.per_example.get('other'), (4 * batch_size, 3, 2))
+      chex.assert_shape(metrics.per_example.get('grad_norm'), (batch_size,))
+    chex.assert_shape(metrics.per_example.get('loss'), (batch_size,))
+    chex.assert_shape(metrics.per_example.get('other'), (batch_size, 3, 2))
 
   @parameterized.parameters((None,), (3.,))
   def test_adding_zero_noise(self, clipping_norm):
-    gradient_computer = gradients.GradientComputer(
+    gradient_computer = self._make_gradient_computer(
         clipping_norm=clipping_norm,
-        noise_multiplier=0.,
         rescale_to_unit_norm=False,
         vectorize_grad_clipping=False,
+        noise_multiplier=0.0,
     )
-
     grads = {'a': jnp.array(3.), 'b': [jnp.array([4., 5.]), jnp.array([6.])]}
     rng_per_batch = jax.random.PRNGKey(54)
-    noisy_grads, std = gradient_computer.add_noise_to_grads(
-        grads, rng_per_batch, total_batch_size=8)
+    noisy_grads, std, unused_noise_state = gradient_computer.add_noise_to_grads(
+        grads=grads,
+        rng_per_batch=rng_per_batch,
+        total_batch_size=jnp.array(8),
+        noise_state=gradient_computer.init_noise(),
+    )
 
     chex.assert_trees_all_close(grads, noisy_grads)
-    self.assertEqual(std, 0.)
+    self.assertEqual(std, 0.0)
 
   @parameterized.parameters((False,), (True,))
   def test_cannot_add_noise_without_clipping(self, rescale_to_unit_norm):
-    gradient_computer = gradients.GradientComputer(
+    gradient_computer = self._make_gradient_computer(
         clipping_norm=None,
-        noise_multiplier=.2,
         rescale_to_unit_norm=rescale_to_unit_norm,
         vectorize_grad_clipping=False,
+        noise_multiplier=0.2,
     )
 
-    grads = {'a': jnp.array(3.), 'b': [jnp.array([4., 5.]), jnp.array([6.])]}
+    grads = {
+        'a': jnp.array(3.0),
+        'b': [jnp.array([4.0, 5.0]), jnp.array([6.0])],
+    }
     rng_per_batch = jax.random.PRNGKey(54)
     with self.assertRaises(ValueError):
       gradient_computer.add_noise_to_grads(
-          grads, rng_per_batch, total_batch_size=8)
+          grads,
+          rng_per_batch,
+          total_batch_size=jnp.array(8),
+          noise_state=gradient_computer.init_noise(),
+      )
 
   @parameterized.parameters(
-      (0., False, 0., 4, 0.),
-      (.1, False, 0., 4, 0.),
-      (.1, False, 3., 4, .075),
-      (.1, True, 3., 4, .75),
-      (10., False, 5., 4, 12.5),
-      (10., True, 5., 4, 1.25),
+      (0.0, False, 0.0, 4, 0.0),
+      (0.1, False, 0.0, 4, 0.0),
+      (0.1, False, 3.0, 4, 0.075),
+      (0.1, True, 3.0, 4, 0.75),
+      (10.0, False, 5.0, 4, 12.5),
+      (10.0, True, 5.0, 4, 1.25),
   )
   def test_adding_noise(
       self,
-      clipping_norm, rescale_to_unit_norm, noise_multiplier, total_batch_size,
-      expected_std):
-
-    gradient_computer = gradients.GradientComputer(
+      clipping_norm,
+      rescale_to_unit_norm,
+      noise_multiplier,
+      total_batch_size,
+      expected_std,
+  ):
+    gradient_computer = self._make_gradient_computer(
         clipping_norm=clipping_norm,
-        noise_multiplier=noise_multiplier,
         rescale_to_unit_norm=rescale_to_unit_norm,
         vectorize_grad_clipping=False,
+        noise_multiplier=noise_multiplier,
     )
 
     grads = jnp.zeros((1_000_000,))
     rng_per_batch = jax.random.PRNGKey(54)
-    noisy_grads, std = gradient_computer.add_noise_to_grads(
-        grads, rng_per_batch, total_batch_size=total_batch_size)
+    noisy_grads, std, unused_noise_state = gradient_computer.add_noise_to_grads(
+        grads,
+        rng_per_batch,
+        total_batch_size=jnp.array(total_batch_size),
+        noise_state=gradient_computer.init_noise(),
+    )
 
     np.testing.assert_approx_equal(expected_std, std)
-    np.testing.assert_approx_equal(np.mean(noisy_grads**2), std**2,
-                                   significant=2)
+    np.testing.assert_approx_equal(
+        np.mean(noisy_grads**2), std**2, significant=2
+    )
 
   def _testing_loss(
-      self, params, network_state, rng_per_example, inputs, include_rngs=False):
+      self, params, network_state, rng_per_example, inputs, include_rngs=False
+  ):
     """Simulates the loss function."""
     # Ensure that random keys have been passed in correctly.
     self.assertEqual((2,), rng_per_example.shape)
@@ -382,7 +362,7 @@ class GradientsTest(pmap_testing.PmapTestCase):
         _tree_dot(params['w_network_state'], network_state),
         include_rngs * _tree_dot(
             params['w_rng_per_example'], rng_per_example / _RNG_SCALE),
-    ])
+    ]) * _LOSS_WEIGHT
     metrics = typing.Metrics(
         scalars_avg={'aggregate': jnp.array([1., 2., 3.])},
         per_example={

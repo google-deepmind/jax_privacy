@@ -49,20 +49,25 @@ pip install -e .
 
 ### Unlocking High-Accuracy Differentially Private Image Classification through Scale
 
-Instructions detailed in [experiments/image_classification](jax_privacy/experiments/image_classification).
+* Instructions: [experiments/image_classification](jax_privacy/experiments/image_classification).
+* arXiv link: https://arxiv.org/abs/2204.13650.
+* Bibtex reference: [link](https://github.com/deepmind/jax_privacy/blob/main/bibtex/de2022unlocking.bib).
 
-This work is available on arXiv at [this link](https://arxiv.org/abs/2204.13650).
-If you use it, please cite the following [bibtex reference](https://github.com/deepmind/jax_privacy/blob/main/bibtex/de2022unlocking.bib).
+### Unlocking Accuracy and Fairness in Differentially Private Image Classification
+
+* Instructions: [experiments/image_classification](jax_privacy/experiments/image_classification).
+* arXiv link: https://arxiv.org/abs/2308.10888.
+* Bibtex reference: [link](https://github.com/deepmind/jax_privacy/blob/main/bibtex/berrada2023unlocking.bib).
 
 ## How to Cite This Repository <a id="citing"></a>
 If you use code from this repository, please cite the following reference:
 
 ```
 @software{jax-privacy2022github,
-  author = {Balle, Borja and Berrada, Leonard and De, Soham and Hayes, Jamie and Smith, Samuel L and Stanforth, Robert},
+  author = {Balle, Borja and Berrada, Leonard and De, Soham and Ghalebikesabi, Sahra and Hayes, Jamie and Pappu, Aneesh and Smith, Samuel L and Stanforth, Robert},
   title = {{JAX}-{P}rivacy: Algorithms for Privacy-Preserving Machine Learning in JAX},
   url = {http://github.com/deepmind/jax_privacy},
-  version = {0.2.0},
+  version = {0.3.0},
   year = {2022},
 }
 ```

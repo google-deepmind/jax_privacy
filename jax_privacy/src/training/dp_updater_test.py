@@ -15,20 +15,26 @@
 
 """Tests the updater."""
 
+import functools
+from typing import Iterable, Mapping
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import chex
 import haiku as hk
 import jax
 import jax.numpy as jnp
-from jax_privacy.experiments import image_data
-from jax_privacy.experiments.image_classification import forward
-from jax_privacy.src.dp_sgd import batching as batching_module
 from jax_privacy.src.dp_sgd import gradients
+from jax_privacy.src.dp_sgd import typing
+from jax_privacy.src.training import averaging
+from jax_privacy.src.training import devices
 from jax_privacy.src.training import dp_updater
 from jax_privacy.src.training import experiment_config
+from jax_privacy.src.training import forward
+from jax_privacy.src.training import metrics as metrics_module
 from jax_privacy.src.training import optimizer_config
 from jaxline import utils
+import more_itertools as itertools
 import numpy as np
 import optax
 import scipy.stats as spst
@@ -38,8 +44,8 @@ INPUT_SIZE = 3
 LOCAL_BATCH_SIZE = 2
 NUM_CLASSES = 7
 NUM_DEVICES = 4
-AUGMULT = 5
-NUM_TEST_SAMPLES = 18
+NUM_TEST_SAMPLES = 50
+RUN_STATISTICAL_TESTS = False
 
 
 def _standard_updater_kwargs(
@@ -54,6 +60,7 @@ def _standard_updater_kwargs(
       ),
       'logging_config': experiment_config.LoggingConfig(),
       'max_num_updates': 10,
+      'num_training_samples': 128,
   }
 
 
@@ -64,16 +71,83 @@ def _flatten_tree(tree):
 
 def model_fn(inputs, is_training=False):
   del is_training  # unused
-  return hk.nets.MLP(output_sizes=[INPUT_SIZE, 10, NUM_CLASSES])(inputs)
+  return hk.nets.MLP(output_sizes=[INPUT_SIZE, 2, NUM_CLASSES])(inputs)
 
 
-# Adapt the forward function to echo the per-example random key.
-class _ForwardFnWithRng(forward.MultiClassForwardFn):
+@chex.dataclass(frozen=True)
+class _TestData:
+  """Artificial supervised learning data batch for testing.
 
-  def eval_forward(self, params, network_state, rng, inputs):
-    metrics = super().eval_forward(params, network_state, rng, inputs)
-    metrics.scalars_avg = {'rng': rng, **metrics.scalars_avg}
-    return metrics
+  Attributes:
+    features: Batch of network inputs.
+    label: Batch of labels associated with the inputs.
+  """
+
+  features: chex.Array
+  label: chex.Array
+
+
+class _ForwardFnWithRng(forward.ForwardFn):
+  """Simple forward function for testing."""
+
+  def __init__(self, net: hk.TransformedWithState):
+    self._net = net
+
+  def train_init(
+      self,
+      rng_key: chex.PRNGKey,
+      inputs: _TestData,
+  ) -> tuple[hk.Params, hk.State]:
+    return self._net.init(rng_key, inputs.features, is_training=True)
+
+  def train_forward(
+      self,
+      params: hk.Params,
+      network_state: hk.State,
+      rng_per_example: chex.PRNGKey,
+      inputs: _TestData,
+  ) -> tuple[typing.Loss, tuple[hk.State, typing.Metrics]]:
+    logits, network_state = self._net.apply(
+        params, network_state, rng_per_example, inputs.features,
+        is_training=True)
+    loss = optax.softmax_cross_entropy(logits, inputs.label)
+
+    metrics = typing.Metrics(
+        scalars_avg=self._metrics(logits, inputs.label),
+        per_example={'loss': loss},
+    )
+    return jnp.mean(loss), (network_state, metrics)
+
+  def eval_forward(
+      self,
+      params: hk.Params,
+      network_state: hk.State,
+      rng: chex.PRNGKey,
+      inputs: _TestData,
+  ) -> typing.Metrics:
+    # Adapt the forward function to echo the per-example random key.
+    logits, unused_network_state = self._net.apply(
+        params, network_state, rng, inputs.features)
+    loss = jnp.mean(optax.softmax_cross_entropy(logits, inputs.label))
+
+    return typing.Metrics(
+        per_example={'logits': logits},
+        scalars_avg={
+            'loss': loss,
+            'rng': rng,  # Echo per-example random key, for testing.
+            **self._metrics(logits, inputs.label),
+        },
+    )
+
+  def _metrics(
+      self,
+      logits: chex.Array,
+      labels: chex.Array,
+  ) -> Mapping[str, chex.Numeric]:
+    """Evaluates topk accuracy."""
+    # NB: labels are one-hot encoded.
+    acc1, acc5 = metrics_module.topk_accuracy(logits, labels, topk=(1, 5))
+    return {'acc1': acc1, 'acc5': acc5}
 
 
 def assert_close_calibrated(value, ref, expected, rtol=2, atol=1e-5):
@@ -95,20 +169,34 @@ def _test_data(num_batches, local_batch_size, seed=9273):
   batches = []
   for _ in range(num_batches):
     rng = next(prng_seq)
-    images = jax.random.normal(
+    features = jax.random.normal(
         rng,
-        [NUM_DEVICES, local_batch_size, AUGMULT, INPUT_SIZE],
+        [NUM_DEVICES, local_batch_size, INPUT_SIZE],
     )
     rng = next(prng_seq)
-    labels = jax.random.randint(
+    label = jax.random.randint(
         rng,
-        [NUM_DEVICES, local_batch_size, AUGMULT],
+        [NUM_DEVICES, local_batch_size],
         minval=0,
         maxval=NUM_CLASSES,
     )
-    labels = jax.nn.one_hot(labels, NUM_CLASSES)
-    batches.append(image_data.DataInputs(image=images, label=labels))
+    label = jax.nn.one_hot(label, NUM_CLASSES)
+    batches.append(_TestData(features=features, label=label))
   return batches
+
+
+def _make_gradient_computer(
+    *,
+    noise_multiplier: float | None,
+    clipping_norm: float | None = 0.1,
+    rescale_to_unit_norm: bool = False,
+) -> gradients.GradientComputer:
+  return gradients.DpsgdGradientComputer(
+      clipping_norm=clipping_norm,
+      noise_multiplier=noise_multiplier,
+      rescale_to_unit_norm=rescale_to_unit_norm,
+      vectorize_grad_clipping=True,
+  )
 
 
 class UpdaterTest(parameterized.TestCase):
@@ -120,41 +208,34 @@ class UpdaterTest(parameterized.TestCase):
     self.rng, self.rng_init = jax.random.split(rng, 2)
 
     self.net = hk.transform_with_state(model_fn)
-    self.forward_fn = forward.MultiClassForwardFn(self.net)
+    self.forward_fn = _ForwardFnWithRng(self.net)
 
-  def init_with_updater(self, updater):
+  def init_with_updater(self, updater: dp_updater.Updater):
     inputs = _test_data(num_batches=1, local_batch_size=LOCAL_BATCH_SIZE)[0]
-    (
-        self.initial_params,
-        self.initial_network_state,
-        self.initial_opt_state,
-        self.initial_step_count,
-    ) = updater.init(rng=self.rng_init, inputs=inputs)
+    self._updater_state, self._step_on_host = updater.init(
+        rng=self.rng_init, inputs=inputs)
 
-  def run_updater(self, updater, data, return_all_params=False):
+  def run_updater(
+      self,
+      updater: dp_updater.Updater,
+      data: Iterable[_TestData],
+      num_steps: int = 1,
+      return_all_params: bool = False,
+  ):
     """Runs the updater on the data given in argument."""
-    params = self.initial_params
-    network_state = self.initial_network_state
-    opt_state = self.initial_opt_state
-    step_count = self.initial_step_count
 
-    all_params = [utils.get_first(params)]
-    for inputs in data:
+    state = self._updater_state
+    step_on_host = self._step_on_host
+    all_params = [utils.get_first(state.params)]
+    data_iterator = iter(data)
+    for _ in range(num_steps):
       # Args are donated. Take copies so that we can reuse them.
-      (
-          params,
-          network_state,
-          opt_state,
-          step_count,
-          unused_scalars,
-      ) = updater.update(
-          params=jax.tree_map(jnp.copy, params),
-          network_state=jax.tree_map(jnp.copy, network_state),
-          opt_state=jax.tree_map(jnp.copy, opt_state),
-          step_count=step_count,
-          inputs=inputs,
+      state, unused_scalars, step_on_host = updater.update(
+          state=jax.tree_map(jnp.copy, state),
+          inputs_producer=functools.partial(next, data_iterator),
+          step_on_host=step_on_host,
       )
-      all_params.append(utils.get_first(params))
+      all_params.append(utils.get_first(state.params))
 
     return all_params if return_all_params else all_params[-1]
 
@@ -167,26 +248,24 @@ class UpdaterTest(parameterized.TestCase):
   def test_accumulation(self, num_accumulations, weight_decay):
     batch_size = LOCAL_BATCH_SIZE * NUM_DEVICES * num_accumulations
 
-    batching = batching_module.VirtualBatching(
-        batch_size_init=batch_size,
-        batch_size_per_device_per_step=LOCAL_BATCH_SIZE,
-        scale_schedule=None,
-    )
-
     # When using weight-decay, ensure that it is the dominant term in the update
     # by using a small learning-rate (downweighs the importance of gradients),
     # so that we can detect it.
     learning_rate = 0.1 if not weight_decay else 0.1 / weight_decay
-
+    device_layout = devices.DeviceLayout()
     updater_no_noise = dp_updater.Updater(
         forward_fn=self.forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
-            clipping_norm=1.0,
-            rescale_to_unit_norm=False,
-            noise_multiplier=0.0,
-            vectorize_grad_clipping=True,
+        batch_size_config=experiment_config.BatchSizeTrainConfig(
+            total=batch_size,
+            per_device_per_step=LOCAL_BATCH_SIZE,
+            scale_schedule=None,
         ),
+        grad_computer=_make_gradient_computer(
+            clipping_norm=1.0,
+            noise_multiplier=0.0,
+        ),
+        rng=jax.random.PRNGKey(42),
+        device_layout=device_layout,
         **_standard_updater_kwargs(
             learning_rate=learning_rate,
             weight_decay=weight_decay,
@@ -220,25 +299,26 @@ class UpdaterTest(parameterized.TestCase):
       ('with_accumulation', 5),
   )
   def test_noise(self, num_accumulations):
+    if not RUN_STATISTICAL_TESTS:
+      self.skipTest('Skipping the slow statistical tests.')
     std = 0.3
     clipping_norm = 0.1
     batch_size = LOCAL_BATCH_SIZE * NUM_DEVICES * num_accumulations
 
-    batching = batching_module.VirtualBatching(
-        batch_size_init=batch_size,
-        batch_size_per_device_per_step=LOCAL_BATCH_SIZE,
-        scale_schedule=None,
-    )
-
+    device_layout = devices.DeviceLayout()
     updater_no_noise = dp_updater.Updater(
         forward_fn=self.forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
-            clipping_norm=clipping_norm,
-            rescale_to_unit_norm=False,
-            noise_multiplier=0.0,
-            vectorize_grad_clipping=True,
+        batch_size_config=experiment_config.BatchSizeTrainConfig(
+            total=batch_size,
+            per_device_per_step=LOCAL_BATCH_SIZE,
+            scale_schedule=None,
         ),
+        grad_computer=_make_gradient_computer(
+            clipping_norm=clipping_norm,
+            noise_multiplier=0.0,
+        ),
+        rng=jax.random.PRNGKey(42),
+        device_layout=device_layout,
         **_standard_updater_kwargs(),
     )
 
@@ -254,17 +334,21 @@ class UpdaterTest(parameterized.TestCase):
 
     # Multiple realizations for different rngs.
     noise_samples = []
+    device_layout = devices.DeviceLayout()
     for i in range(NUM_TEST_SAMPLES):
       updater_noise = dp_updater.Updater(
           forward_fn=self.forward_fn,
-          batching=batching,
-          grad_computer=gradients.GradientComputer(
-              clipping_norm=clipping_norm,
-              rescale_to_unit_norm=False,
-              noise_multiplier=std,
-              vectorize_grad_clipping=True,
+          batch_size_config=experiment_config.BatchSizeTrainConfig(
+              total=batch_size,
+              per_device_per_step=LOCAL_BATCH_SIZE,
+              scale_schedule=None,
           ),
-          rng_seed=i,
+          grad_computer=_make_gradient_computer(
+              clipping_norm=clipping_norm,
+              noise_multiplier=std,
+          ),
+          rng=jax.random.split(jax.random.PRNGKey(i))[0],
+          device_layout=device_layout,
           **_standard_updater_kwargs(),
       )
       # Run one pass of the updater over data with noise using rng_iteration.
@@ -351,21 +435,20 @@ class UpdaterTest(parameterized.TestCase):
 
   @parameterized.parameters(0.01, 0.1, 1.0, 10.0)
   def test_clipping(self, clipping_norm):
-    batching = batching_module.VirtualBatching(
-        batch_size_init=LOCAL_BATCH_SIZE * NUM_DEVICES,
-        batch_size_per_device_per_step=LOCAL_BATCH_SIZE,
-        scale_schedule=None,
-    )
-
+    device_layout = devices.DeviceLayout()
     updater = dp_updater.Updater(
         forward_fn=self.forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
-            clipping_norm=clipping_norm,
-            rescale_to_unit_norm=False,
-            noise_multiplier=0.0,
-            vectorize_grad_clipping=True,
+        batch_size_config=experiment_config.BatchSizeTrainConfig(
+            total=LOCAL_BATCH_SIZE * NUM_DEVICES,
+            per_device_per_step=LOCAL_BATCH_SIZE,
+            scale_schedule=None,
         ),
+        grad_computer=_make_gradient_computer(
+            clipping_norm=clipping_norm,
+            noise_multiplier=0.0,
+        ),
+        rng=jax.random.PRNGKey(42),
+        device_layout=device_layout,
         **_standard_updater_kwargs(),
     )
 
@@ -374,7 +457,7 @@ class UpdaterTest(parameterized.TestCase):
     data = _test_data(num_batches=1, local_batch_size=LOCAL_BATCH_SIZE)
 
     params = self.run_updater(updater, data)
-    initial_params = utils.get_first(self.initial_params)
+    initial_params = utils.get_first(self._updater_state.params)
     # Invert SGD equation (with lr=1) to find gradients.
     grads_updater = _flatten_tree(initial_params) - _flatten_tree(params)
 
@@ -389,17 +472,14 @@ class UpdaterTest(parameterized.TestCase):
     def forward_per_sample(p):
       logits, unused_network_state = self.net.apply(
           p,
-          self.initial_network_state,
+          self._updater_state.network_state,
           self.rng,
-          inputs_single_device.image,
+          inputs_single_device.features,
           is_training=True,
       )
 
-      loss_per_sample_per_augmentation = optax.softmax_cross_entropy(
+      loss_per_sample = optax.softmax_cross_entropy(
           logits, inputs_single_device.label)
-
-      # Average over the augmult dimension.
-      loss_per_sample = jnp.mean(loss_per_sample_per_augmentation, axis=1)
 
       # Check that the batch dimension is correct.
       chex.assert_shape(loss_per_sample, [LOCAL_BATCH_SIZE * NUM_DEVICES])
@@ -426,24 +506,23 @@ class UpdaterTest(parameterized.TestCase):
     assert_trees_all_close(grads_updater, grads_manual)
 
   def test_frozen_params(self):
-    batching = batching_module.VirtualBatching(
-        batch_size_init=LOCAL_BATCH_SIZE * NUM_DEVICES,
-        batch_size_per_device_per_step=LOCAL_BATCH_SIZE,
-        scale_schedule=None,
-    )
-
     train_only_layer = 'mlp/~/linear_1'
+    device_layout = devices.DeviceLayout()
     updater = dp_updater.Updater(
         forward_fn=self.forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
-            clipping_norm=0.1,
-            rescale_to_unit_norm=False,
-            noise_multiplier=0.1,
-            vectorize_grad_clipping=True,
+        batch_size_config=experiment_config.BatchSizeTrainConfig(
+            total=LOCAL_BATCH_SIZE * NUM_DEVICES,
+            per_device_per_step=LOCAL_BATCH_SIZE,
+            scale_schedule=None,
         ),
+        grad_computer=_make_gradient_computer(
+            noise_multiplier=0.1,
+        ),
+        rng=jax.random.PRNGKey(42),
         is_trainable=(
-            lambda module_name, *args: module_name == train_only_layer),
+            lambda module_name, *args: module_name == train_only_layer
+        ),
+        device_layout=device_layout,
         **_standard_updater_kwargs(),
     )
 
@@ -452,7 +531,7 @@ class UpdaterTest(parameterized.TestCase):
     data = _test_data(num_batches=1, local_batch_size=LOCAL_BATCH_SIZE)
     params = self.run_updater(updater, data)
 
-    initial_params = utils.get_first(self.initial_params)
+    initial_params = utils.get_first(self._updater_state.params)
 
     count_trainable, count_frozen = 0, 0
     for layer_name in params:
@@ -478,35 +557,27 @@ class UpdaterTest(parameterized.TestCase):
   # TODO: explore why 0.01 and 0.1 clipping norms require higher rtol
   def test_rescaling(self, clipping_norm):
     noise_std = 0.1
-    batching = batching_module.VirtualBatching(
-        batch_size_init=LOCAL_BATCH_SIZE * NUM_DEVICES,
-        batch_size_per_device_per_step=LOCAL_BATCH_SIZE,
-        scale_schedule=None,
-    )
+    def make_updater(*, rescale_to_unit_norm: bool):
+      device_layout = devices.DeviceLayout()
+      return dp_updater.Updater(
+          forward_fn=self.forward_fn,
+          batch_size_config=experiment_config.BatchSizeTrainConfig(
+              total=LOCAL_BATCH_SIZE * NUM_DEVICES,
+              per_device_per_step=LOCAL_BATCH_SIZE,
+              scale_schedule=None,
+          ),
+          grad_computer=_make_gradient_computer(
+              clipping_norm=clipping_norm,
+              noise_multiplier=noise_std,
+              rescale_to_unit_norm=rescale_to_unit_norm,
+          ),
+          rng=jax.random.PRNGKey(42),
+          device_layout=device_layout,
+          **_standard_updater_kwargs(),
+      )
 
-    updater_no_rescaling = dp_updater.Updater(
-        forward_fn=self.forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
-            clipping_norm=clipping_norm,
-            noise_multiplier=noise_std,
-            rescale_to_unit_norm=False,
-            vectorize_grad_clipping=True,
-        ),
-        **_standard_updater_kwargs(),
-    )
-
-    updater_with_rescaling = dp_updater.Updater(
-        forward_fn=self.forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
-            clipping_norm=clipping_norm,
-            noise_multiplier=noise_std,
-            rescale_to_unit_norm=True,
-            vectorize_grad_clipping=True,
-        ),
-        **_standard_updater_kwargs(),
-    )
+    updater_no_rescaling = make_updater(rescale_to_unit_norm=False)
+    updater_with_rescaling = make_updater(rescale_to_unit_norm=True)
 
     self.init_with_updater(updater_no_rescaling)
 
@@ -514,7 +585,7 @@ class UpdaterTest(parameterized.TestCase):
 
     params_with_rescaling = self.run_updater(updater_with_rescaling, data)
     params_no_rescaling = self.run_updater(updater_no_rescaling, data)
-    initial_params = utils.get_first(self.initial_params)
+    initial_params = utils.get_first(self._updater_state.params)
 
     # Invert SGD equation (with lr=1) to find gradients.
     grads_with_rescaling = (
@@ -527,144 +598,122 @@ class UpdaterTest(parameterized.TestCase):
 
   def test_evaluation(self):
     forward_fn = _ForwardFnWithRng(self.net)
-
-    batching = batching_module.VirtualBatching(
-        batch_size_init=LOCAL_BATCH_SIZE * NUM_DEVICES,
-        batch_size_per_device_per_step=LOCAL_BATCH_SIZE,
-        scale_schedule=None,
-    )
+    device_layout = devices.DeviceLayout()
     updater = dp_updater.Updater(
         forward_fn=forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
+        batch_size_config=experiment_config.BatchSizeTrainConfig(
+            total=LOCAL_BATCH_SIZE * NUM_DEVICES,
+            per_device_per_step=LOCAL_BATCH_SIZE,
+            scale_schedule=None,
+        ),
+        grad_computer=_make_gradient_computer(
             clipping_norm=None,
             noise_multiplier=None,
-            rescale_to_unit_norm=False,
-            vectorize_grad_clipping=True,
         ),
+        rng=jax.random.PRNGKey(42),
+        device_layout=device_layout,
         **_standard_updater_kwargs(),
     )
     self.init_with_updater(updater)
 
-    inputs = _test_data(num_batches=1, local_batch_size=LOCAL_BATCH_SIZE)
-    metrics = updater.evaluate(
-        self.initial_params,
-        self.initial_network_state,
-        self.rng,
-        inputs[0])
-
-    # The different devices' outputs should arise from different random keys.
-    for j in range(1, NUM_DEVICES):
-      self.assertNotAlmostEqual(
-          metrics.scalars_avg['rng'][0],
-          metrics.scalars_avg['rng'][j])
-
   def test_average_init_takes_copy(self):
-    batching = batching_module.VirtualBatching(
-        batch_size_init=LOCAL_BATCH_SIZE * NUM_DEVICES,
-        batch_size_per_device_per_step=LOCAL_BATCH_SIZE,
-        scale_schedule=None,
-    )
+    device_layout = devices.DeviceLayout()
     updater = dp_updater.Updater(
         forward_fn=self.forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
+        batch_size_config=experiment_config.BatchSizeTrainConfig(
+            total=LOCAL_BATCH_SIZE * NUM_DEVICES,
+            per_device_per_step=LOCAL_BATCH_SIZE,
+            scale_schedule=None,
+        ),
+        grad_computer=_make_gradient_computer(
             clipping_norm=None,
             noise_multiplier=None,
-            rescale_to_unit_norm=False,
-            vectorize_grad_clipping=True,
         ),
+        rng=jax.random.PRNGKey(42),
+        device_layout=device_layout,
         **_standard_updater_kwargs(),
+        averaging_configs={
+            'polyak': averaging.PolyakAveragingConfig(),
+        },
     )
-    params = jnp.array([[3., 4., 5.]] * NUM_DEVICES)
-    avg_init = updater.init_average(params)
-    chex.assert_trees_all_close(params, avg_init)
+    inputs = _test_data(num_batches=1, local_batch_size=LOCAL_BATCH_SIZE)
+    state, unused_step_on_host = updater.init(self.rng_init, inputs[0])
+    params = state.params
+    chex.assert_trees_all_close(params, state.params_avg['polyak'])
 
     # Assert that the average survives even when the original is donated.
-    params.delete()
-    jax.device_get(avg_init)
+    jax.tree_map(lambda x: x.delete(), params)
+    jax.device_get(state.params_avg['polyak'])
 
-  def test_no_averaging_on_accumulation_steps(self):
-    # 3 accumulation steps per full batch.
-    batch_size = 3 * LOCAL_BATCH_SIZE * NUM_DEVICES
+  def test_state_with_accumulation(self):
+    update_every = 3
+    batch_size = update_every * LOCAL_BATCH_SIZE * NUM_DEVICES
 
-    batching = batching_module.VirtualBatching(
-        batch_size_init=batch_size,
-        batch_size_per_device_per_step=LOCAL_BATCH_SIZE,
-        scale_schedule=None,
-    )
-    updater = dp_updater.Updater(
-        forward_fn=self.forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
-            clipping_norm=None,
-            noise_multiplier=None,
-            rescale_to_unit_norm=False,
-            vectorize_grad_clipping=True,
-        ),
-        **_standard_updater_kwargs(),
-    )
+    def make_updater(local_batch_size: int) -> dp_updater.Updater:
+      device_layout = devices.DeviceLayout()
+      return dp_updater.Updater(
+          forward_fn=self.forward_fn,
+          batch_size_config=experiment_config.BatchSizeTrainConfig(
+              total=batch_size,
+              per_device_per_step=local_batch_size,
+              scale_schedule=None,
+          ),
+          grad_computer=_make_gradient_computer(
+              clipping_norm=None,
+              noise_multiplier=None,
+          ),
+          rng=jax.random.PRNGKey(42),
+          device_layout=device_layout,
+          **_standard_updater_kwargs(),
+          averaging_configs={
+              'polyak': averaging.PolyakAveragingConfig(start_step=2),
+              'ema': averaging.ExponentialMovingAveragingConfig(
+                  decay=0.9,
+                  start_step=2,
+              ),
+          },
+      )
+    updater_with_accumulation = make_updater(LOCAL_BATCH_SIZE)
+    updater_without_accumulation = make_updater(batch_size // NUM_DEVICES)
 
-    inputs = _test_data(num_batches=6, local_batch_size=LOCAL_BATCH_SIZE)
-
-    params, network_state, opt_state, step_count = updater.init(
+    inputs = _test_data(num_batches=7, local_batch_size=LOCAL_BATCH_SIZE)
+    state, step_on_host = updater_with_accumulation.init(
         rng=self.rng_init, inputs=inputs[0])
-    for step in range(5):
-      if step in (1, 2, 4):
-        # This is an accumulation-only step.
-        # Average update should be a no-op.
-        avg_params = jnp.array([[6., 7., 8.]] * NUM_DEVICES)
-        new_params = jnp.array([[3., 4., 5.]] * NUM_DEVICES)
-        new_avg_params = updater.update_polyak(
-            avg_params, new_params, opt_state, start_step=2)
-        chex.assert_trees_all_close(avg_params, new_avg_params)
 
-      # Run an update step to ensure that the multi-step optimiser's
-      # accumulation step count is updated. This is how the average updater
-      # determines whether this is an update step or an accumulation-only step.
-      params, network_state, opt_state, step_count, _ = updater.update(
-          params, network_state, opt_state, step_count, inputs[1+step])
-
-  def test_ema_on_update_steps(self):
-    # 3 accumulation steps per full batch.
-    batch_size = 3 * LOCAL_BATCH_SIZE * NUM_DEVICES
-
-    batching = batching_module.VirtualBatching(
-        batch_size_init=batch_size,
-        batch_size_per_device_per_step=LOCAL_BATCH_SIZE,
-        scale_schedule=None,
-    )
-    updater = dp_updater.Updater(
-        forward_fn=self.forward_fn,
-        batching=batching,
-        grad_computer=gradients.GradientComputer(
-            clipping_norm=None,
-            noise_multiplier=None,
-            rescale_to_unit_norm=False,
-            vectorize_grad_clipping=True,
-        ),
-        **_standard_updater_kwargs(),
+    inputs_iterator = iter(inputs[1:])
+    state_1, metrics_1, step_on_host_1 = updater_with_accumulation.update(
+        state=state,
+        inputs_producer=functools.partial(next, inputs_iterator),
+        step_on_host=step_on_host,
     )
 
-    inputs = _test_data(num_batches=8, local_batch_size=LOCAL_BATCH_SIZE)
-
-    params, network_state, opt_state, step_count = updater.init(
+    state, step_on_host = updater_without_accumulation.init(
         rng=self.rng_init, inputs=inputs[0])
-    for step in range(7):
-      if step in (3, 6):
-        # This is an update step.
-        avg_params = jnp.array([[6., 9., 4.]] * NUM_DEVICES)
-        new_params = jnp.array([[3., 4., 5.]] * NUM_DEVICES)
-        expected_new_avg_params = jnp.array([[3.03, 4.05, 4.99]] * NUM_DEVICES)
-        new_avg_params = updater.update_ema(
-            avg_params, new_params, opt_state, mu=.01, start_step=-50)
-        chex.assert_trees_all_close(expected_new_avg_params, new_avg_params)
+    inputs_reshaped = []
+    for list_of_batches in itertools.batched(inputs[1:], update_every):
+      inputs_reshaped.append(
+          jax.tree_map(
+              lambda *x: jnp.concatenate(x, axis=1), *list_of_batches))
+    inputs_iterator = iter(inputs_reshaped)
+    state_2, metrics_2, step_on_host_2 = updater_without_accumulation.update(
+        state=state,
+        inputs_producer=functools.partial(next, inputs_iterator),
+        step_on_host=step_on_host,
+    )
 
-      # Run an update step to ensure that the multi-step optimiser's
-      # accumulation step count is updated. This is how the average updater
-      # determines whether this is an update step or an accumulation-only step.
-      params, network_state, opt_state, step_count, _ = updater.update(
-          params, network_state, opt_state, step_count, inputs[1+step])
+    exclude_scalars = (
+        'update_every',  # not equal
+    )
+    scalars_1 = {
+        k: v for k, v in metrics_1.scalars.items() if k not in exclude_scalars}
+    scalars_2 = {
+        k: v for k, v in metrics_2.scalars.items() if k not in exclude_scalars}
+    chex.assert_trees_all_close_ulp(state_1, state_2, maxulp=32)
+    chex.assert_trees_all_close_ulp(scalars_1, scalars_2, maxulp=32)
+    chex.assert_trees_all_equal(step_on_host_1, step_on_host_2)
+    np.testing.assert_array_equal(
+        metrics_1.scalars_last['update_every'], update_every)
+    np.testing.assert_array_equal(metrics_2.scalars_last['update_every'], 1)
 
 
 if __name__ == '__main__':

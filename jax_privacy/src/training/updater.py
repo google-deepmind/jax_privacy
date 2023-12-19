@@ -17,42 +17,47 @@
 
 Typical usage:
   # Initialize model and optimizer (pmapped).
-  params, network_state, opt_state, step_count = updater.init(
+  params, network_state, opt_state, step_on_host = updater.init(
       rng=rng,
       inputs=inputs,
   )
 
   # Apply update (pmapped).
-  params, network_state, opt_state, step_count, stats = updater.update(
+  params, network_state, opt_state, step_on_host, stats = updater.update(
       params=params,
       network_state=network_state,
       opt_state=opt_state,
-      step_count=step_count,
+      step_on_host=step_on_host,
       inputs=inputs,
   )
 """
 
 import abc
-from typing import Generic, NamedTuple
+import dataclasses
+from typing import Callable, Generic, Mapping
 
 import chex
+import jax
 from jax_privacy.src.dp_sgd import typing
 import optax
 
+StepOnHost = int
+StepOnDevice = jax.Array
 
-class StepCount(NamedTuple):
-  """Hierarchical step - a full batch count plus inner accumulation step."""
 
-  update_step: int
-  accumulation_step: int
+@chex.dataclass(frozen=True, kw_only=True)
+class UpdaterState(
+    Generic[typing.ParamsT, typing.ModelStateT, typing.NoiseStateT]
+):
+  """Container for the updater state."""
 
-  def next(self, every_k: int) -> 'StepCount':
-    """Returns updated with by accumulation step, rolling over every k."""
-    new_accumulation_step = self.accumulation_step + 1
-    return StepCount(
-        update_step=(self.update_step + new_accumulation_step // every_k),
-        accumulation_step=(new_accumulation_step % every_k),
-    )
+  params: typing.ParamsT
+  network_state: typing.ModelStateT
+  update_step: StepOnDevice
+  opt_state: optax.OptState
+  noise_state: typing.NoiseStateT = dataclasses.field(default_factory=dict)  # pylint: disable=invalid-field-call
+  params_avg: Mapping[str, typing.ParamsT] = dataclasses.field(  # pylint: disable=invalid-field-call
+      default_factory=dict)
 
 
 class AbstractUpdater(
@@ -70,8 +75,7 @@ class AbstractUpdater(
       self,
       rng: chex.PRNGKey,
       inputs: typing.InputsT,
-  ) -> tuple[
-      typing.ParamsT, typing.ModelStateT, optax.MultiStepsState, StepCount]:
+  ) -> tuple[UpdaterState, StepOnHost]:
     """Provides initial training state.
 
     Args:
@@ -79,136 +83,28 @@ class AbstractUpdater(
       inputs: Training inputs.
 
     Returns:
-      params: Initial model parameters (both trainable and frozen).
-      network_state: Initial network state.
-      opt_state: Initial optimiser state.
-      step_count: Initial number of full steps and inner accumulation steps.
+      Initial updater state.
+      Step maintained on the host to avoid device transfers.
     """
     raise NotImplementedError('init method is not implemented')
 
   @abc.abstractmethod
   def update(
       self,
-      params: typing.ParamsT,
-      network_state: typing.ModelStateT,
-      opt_state: optax.MultiStepsState,
-      step_count: StepCount,
-      inputs: typing.InputsT,
-  ) -> tuple[typing.ParamsT, typing.ModelStateT, optax.MultiStepsState,
-             StepCount, typing.Metrics]:
+      state: UpdaterState,
+      inputs_producer: Callable[[], typing.InputsT],
+      step_on_host: StepOnHost,
+  ) -> tuple[UpdaterState, typing.Metrics, StepOnHost]:
     """Computes updated training state (to be pmapped).
 
     Args:
-      params: Model parameters (both trainable and frozen).
-      network_state: Network state.
-      opt_state: Optimiser state.
-      step_count: Number of full steps and inner accumulation steps.
-      inputs: Training inputs.
+      state: Current updater state.
+      inputs_producer: Producer of the training inputs.
+      step_on_host: Step maintained on the host to avoid device transfers.
 
     Returns:
-      params: Updated model parameters (both trainable and frozen).
-      network_state: Updated network state.
-      opt_state: Updated optimiser state.
-      step_count: Updated number of full steps and inner accumulation steps.
-      scalars: Scalar outputs to log.
+      state: New updater state.
+      metrics: Metrics to log.
+      step_on_host: Step incremented on host.
     """
     raise NotImplementedError('update method is not implemented')
-
-  @abc.abstractmethod
-  def step_count_from_opt_state(
-      self,
-      opt_state: optax.MultiStepsState,
-  ) -> StepCount:
-    """Returns the hierarchical step number."""
-
-  @abc.abstractmethod
-  def evaluate(
-      self,
-      params: typing.ParamsT,
-      network_state: typing.ModelStateT,
-      rng: chex.PRNGKey,
-      inputs: typing.InputsT,
-  ) -> typing.Metrics:
-    """Evaluates the model with the current state.
-
-    Args:
-      params: Model parameters (both trainable and frozen).
-      network_state: Network state.
-      rng: Random key.
-      inputs: Evaluation inputs, consisting of tensors of shape
-        (num_local_replicas, batch_size, ...).
-
-    Returns:
-      Evaluation results for the mini-batch, as a pair of the form
-      (per-example outputs over all hosts, aggregated metrics).
-      The per-example outputs have shape (num_replicas, batch_size, ...).
-    """
-
-  @abc.abstractmethod
-  def optimizer(self) -> optax.GradientTransformation:
-    """Returns optimiser giving rise to `opt_state`."""
-
-  @abc.abstractmethod
-  def init_average(
-      self,
-      params: typing.ParamsT,
-  ) -> typing.ParamsT:
-    """Initialises a copy of the params for moving averages.
-
-    Taking a copy is important because `params` may subsequently be donated.
-
-    Args:
-      params: Model parameters (both trainable and frozen).
-
-    Returns:
-      Initial averages of model parameters (both trainable and frozen).
-    """
-
-  @abc.abstractmethod
-  def update_ema(
-      self,
-      ema_params: typing.ParamsT,
-      params: typing.ParamsT,
-      opt_state: optax.MultiStepsState,
-      *,
-      mu: chex.Numeric,
-      start_step: chex.Numeric,
-  ) -> typing.ParamsT:
-    """Initialises a copy of the params for exponential moving averages.
-
-    Taking a copy is important because `params` may subsequently be donated.
-
-    Args:
-      ema_params: Existing averages of parameters (both trainable and frozen).
-      params: Model parameters (both trainable and frozen).
-      opt_state: Optimiser state.
-      mu: Decay factor.
-      start_step: Update step number at which to start applying averaging.
-
-    Returns:
-      Updated averages of model parameters (both trainable and frozen).
-    """
-
-  @abc.abstractmethod
-  def update_polyak(
-      self,
-      polyak_params: typing.ParamsT,
-      params: typing.ParamsT,
-      opt_state: optax.MultiStepsState,
-      *,
-      start_step: chex.Numeric,
-  ) -> typing.ParamsT:
-    """Initialises a copy of the params for Polyak moving averages.
-
-    Taking a copy is important because `params` may subsequently be donated.
-
-    Args:
-      polyak_params: Existing averages of parameters (both trainable and
-        frozen).
-      params: Model parameters (both trainable and frozen).
-      opt_state: Optimiser state.
-      start_step: Update step number at which to start applying averaging.
-
-    Returns:
-      Updated averages of model parameters (both trainable and frozen).
-    """
