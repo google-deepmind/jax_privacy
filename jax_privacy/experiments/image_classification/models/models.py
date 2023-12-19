@@ -25,7 +25,7 @@ from jax_privacy.experiments.image_classification.models import imagenet_nfresne
 from jax_privacy.experiments.image_classification.models import mnist
 
 
-class Registry(enum.StrEnum):
+class Registry(enum.Enum):
   """Model registry."""
 
   # CIFAR models.
