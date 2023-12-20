@@ -23,10 +23,26 @@ import functools
 
 from absl import app
 from absl import flags
-from jax_privacy.experiments.image_classification import experiment
+from jax_privacy.experiments.image_classification import experiment as experiment_py
+from jax_privacy.src.training import jaxline
 from jaxline import platform
+
+FLAGS = flags.FLAGS
+
+
+def main(argv):
+  if len(argv) > 1:
+    raise app.UsageError('Too many command-line arguments.')
+
+  config = FLAGS.config.experiment_kwargs.config
+  experiment = experiment_py.ImageClassificationExperiment(config=config)
+  experiment_cls = functools.partial(
+      jaxline.JaxlineWrapper,
+      experiment=experiment,
+  )
+  platform.main(experiment_cls, argv)
 
 
 if __name__ == '__main__':
   flags.mark_flag_as_required('config')
-  app.run(functools.partial(platform.main, experiment.Experiment))
+  app.run(main)

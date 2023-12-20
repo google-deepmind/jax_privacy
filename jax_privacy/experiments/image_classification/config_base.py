@@ -15,59 +15,18 @@
 
 """Base configuration."""
 
+from collections.abc import Mapping
 import dataclasses
 import random
-from typing import Any, Mapping
 
 from jax_privacy.experiments import image_data as data
+from jax_privacy.experiments.image_classification.models import base
 from jax_privacy.src.training import auto_tune
+from jax_privacy.src.training import averaging as averaging_py
 from jax_privacy.src.training import experiment_config as experiment_config_py
 from jax_privacy.src.training import optimizer_config
 from jaxline import base_config as jaxline_base_config
 import ml_collections
-
-
-MODEL_CKPT = ml_collections.FrozenConfigDict({
-    'WRN_40_4_CIFAR100': 'WRN_40_4_CIFAR100.dill',
-    'WRN_40_4_IMAGENET32': 'WRN_40_4_IMAGENET32.dill',
-    'WRN_28_10_IMAGENET32': 'WRN_28_10_IMAGENET32.dill',
-})
-
-
-@dataclasses.dataclass(kw_only=True, slots=True)
-class ModelRestoreConfig:
-  """Configuration for restoring the model.
-
-  Attributes:
-    path: Path to the model to restore.
-    params_key: (dictionary) Key identifying the parameters in the checkpoint to
-      restore.
-    network_state_key: (dictionary) Key identifying the model state in the
-      checkpoint to restore.
-    layer_to_reset: Optional identifying name of the layer to reset when loading
-      the checkpoint (useful for resetting the classification layer to use a
-      different number of classes for example).
-  """
-
-  path: str | None = None
-  params_key: str | None = None
-  network_state_key: str | None = None
-  layer_to_reset: str | None = None
-
-
-@dataclasses.dataclass(kw_only=True, slots=True)
-class ModelConfig:
-  """Config for the model.
-
-  Attributes:
-    name: Identifying name of the model.
-    kwargs: Keyword arguments to construct the model.
-    restore: Configuration for restoring the model.
-  """
-  name: str
-  kwargs: Mapping[str, Any] = dataclasses.field(default_factory=dict)
-  restore: ModelRestoreConfig = dataclasses.field(
-      default_factory=ModelRestoreConfig)
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -75,25 +34,32 @@ class ExperimentConfig:
   """Configuration for the experiment.
 
   Attributes:
-    num_updates: Number of updates for the experiment.
     optimizer: Optimizer configuration.
     model: Model configuration.
     training: Training configuration.
+    label_smoothing: parameter within [0, 1] to smooth the labels. The default
+      value of 0 corresponds to no smoothing.
     averaging: Averaging configuration.
     evaluation: Evaluation configuration.
+    eval_disparity: Whether to compute disparity at evaluation time.
     data_train: Training data configuration.
     data_eval: Eval data configuration.
+    data_eval_additional: Configuration for an (optional) additional evaluation
+      dataset.
     random_seed: Random seed (automatically changed from the default value).
   """
 
-  num_updates: int
   optimizer: optimizer_config.OptimizerConfig
-  model: ModelConfig
+  model: base.ModelConfig
   training: experiment_config_py.TrainingConfig
-  averaging: experiment_config_py.AveragingConfig
+  label_smoothing: float = 0.0
+  averaging: Mapping[str, averaging_py.AveragingConfig] = dataclasses.field(
+      default_factory=dict)
   evaluation: experiment_config_py.EvaluationConfig
+  eval_disparity: bool = False
   data_train: data.DataLoader
   data_eval: data.DataLoader
+  data_eval_additional: data.DataLoader | None = None
   random_seed: int = 0
 
 
@@ -114,9 +80,9 @@ def build_jaxline_config(
 
   # Intervals can be measured in 'steps' or 'secs'.
   config.interval_type = 'steps'
-  config.log_train_data_interval = 100
-  config.log_tensors_interval = 100
-  config.save_checkpoint_interval = 250
+  config.log_train_data_interval = 10
+  config.log_tensors_interval = 10
+  config.save_checkpoint_interval = 50
   config.eval_specific_checkpoint_dir = ''
 
   config.experiment_kwargs = ml_collections.ConfigDict()
@@ -130,7 +96,10 @@ def build_jaxline_config(
   # noise injected in DP-SGD will be invalid otherwise.
   assert config.random_mode_train == 'same_host_same_device'
 
-  if config.experiment_kwargs.config.training.dp.auto_tune:
-    config = auto_tune.dp_auto_tune_config(config)
+  if config.experiment_kwargs.config.training.dp.auto_tune_field:
+    config.experiment_kwargs.config.training = auto_tune.dp_auto_tune_config(
+        config.experiment_kwargs.config.training,
+        config.experiment_kwargs.config.data_train.config.num_samples,
+    )
 
   return config

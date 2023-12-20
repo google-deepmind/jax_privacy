@@ -32,10 +32,9 @@ Typical usage:
   >>> 2
 """
 
-from typing import Optional
-
 import chex
 import jax
+from jax_privacy.src.accounting import accountant
 import optax
 
 
@@ -46,8 +45,8 @@ class VirtualBatching:
       self,
       batch_size_init: int,
       batch_size_per_device_per_step: int,
-      scale_schedule: Optional[dict[int, int]] = None,
-      num_replicas: Optional[int] = None,
+      scale_schedule: accountant.BatchingScaleSchedule = None,
+      num_replicas: int | None = None,
   ):
     """Init function.
 

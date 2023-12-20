@@ -13,10 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Training an NF-ResNet-50 on ImageNet with (8.0, 8e-7)-DP."""
+"""Simple example on MNIST."""
 
-import haiku.initializers as hk_init
-import jax.numpy as jnp
+import dataclasses
+
+import haiku as hk
+import jax
 from jax_privacy.experiments import image_data
 from jax_privacy.experiments.image_classification import config_base
 from jax_privacy.experiments.image_classification.models import models
@@ -26,59 +28,51 @@ from jax_privacy.src.training import optimizer_config
 import ml_collections
 
 
+@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
+class MLPConfig(models.ModelConfig):
+  """Configuration for an MLP."""
+
+  def make(self, num_classes: int) -> models.Model:
+    def model_fn(images: jax.Array, is_training: bool) -> jax.Array:
+      del is_training
+      images = hk.Flatten()(images)
+      return hk.nets.MLP([16, num_classes])(images)
+    return models.Model.from_hk_module(lambda: model_fn)
+
+
 def get_config() -> ml_collections.ConfigDict:
   """Experiment config."""
+
   config = config_base.ExperimentConfig(
       optimizer=optimizer_config.sgd_config(
-          lr=optimizer_config.constant_lr_config(4.0),
+          lr=optimizer_config.constant_lr_config(2.0),
       ),
-      model=models.NFResNetConfig(
-          variant='ResNet50',
-          drop_rate=None,  # dropout-rate
-          fc_init=hk_init.RandomNormal(0.01, 0),
-          skipinit_gain=jnp.ones,
-      ),
+      model=MLPConfig(),
       training=experiment_config.TrainingConfig(
-          num_updates=71589,
+          num_updates=1_000,
           batch_size=experiment_config.BatchSizeTrainConfig(
-              total=16384,
-              per_device_per_step=32,
+              total=256,
+              per_device_per_step=64,
           ),
           weight_decay=0.0,  # L-2 regularization,
-          train_only_layer=None,  # None
           dp=experiment_config.DPConfig(
-              delta=8e-7,
-              clipping_norm=1.0,
-              auto_tune_target_epsilon=8.0,
+              delta=1e-5,
+              clipping_norm=1e-3,
+              auto_tune_target_epsilon=1.0,
               rescale_to_unit_norm=True,
-              noise_multiplier=2.5,
+              noise_multiplier=10.0,
+              auto_tune_field=None,
           ),
-          logging=experiment_config.LoggingConfig(
-              grad_clipping=True,
-              snr_global=True,  # signal-to-noise ratio across layers
-              snr_per_layer=False,  # signal-to-noise ratio per layer
-          ),
+          logging=experiment_config.LoggingConfig(),
       ),
       averaging={
-          'ema': averaging.ExponentialMovingAveragingConfig(decay=0.99999),
+          'ema': averaging.ExponentialMovingAveragingConfig(decay=0.999),
       },
-      data_train=image_data.ImageNetLoader(
-          config=image_data.ImagenetTrainConfig(
-              preprocess_name='standardise',
-              image_size=(224, 224),
-          ),
-          augmult_config=image_data.AugmultConfig(
-              augmult=4,
-              random_flip=True,
-              random_crop=True,
-              random_color=False,
-          ),
+      data_train=image_data.MnistLoader(
+          config=image_data.MnistTrainConfig(),
       ),
-      data_eval=image_data.ImageNetLoader(
-          config=image_data.ImagenetValidConfig(
-              preprocess_name='standardise',
-              image_size=(224, 224),
-          ),
+      data_eval=image_data.MnistLoader(
+          config=image_data.MnistValidConfig(),
       ),
       evaluation=experiment_config.EvaluationConfig(
           batch_size=100,

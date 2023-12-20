@@ -14,59 +14,139 @@
 # limitations under the License.
 
 """Common functions used to define model architectures."""
+
+import enum
 import os
-from typing import Callable, Optional, Tuple
+from typing import Callable
 import urllib.request
 
-import chex
-import dill
 import haiku as hk
 import jax
 import jax.numpy as jnp
 from jaxline import utils
 import numpy as np
+import orbax.checkpoint as orbax_checkpoint
 
-Activation = Callable[[chex.Array], chex.Array]
 
-# Activations with and without scaling.
-activations_dict = {
-    # Regular activations.
-    'identity': lambda x: x,
-    'celu': jax.nn.celu,
-    'elu': jax.nn.elu,
-    'gelu': jax.nn.gelu,
-    'glu': jax.nn.glu,
-    'leaky_relu': jax.nn.leaky_relu,
-    'log_sigmoid': jax.nn.log_sigmoid,
-    'log_softmax': jax.nn.log_softmax,
-    'relu': jax.nn.relu,
-    'relu6': jax.nn.relu6,
-    'selu': jax.nn.selu,
-    'sigmoid': jax.nn.sigmoid,
-    'silu': jax.nn.silu,
-    'swish': jax.nn.silu,
-    'soft_sign': jax.nn.soft_sign,
-    'softplus': jax.nn.softplus,
-    'tanh': jnp.tanh,
+def _scaled(
+    activation_fn: Callable[[jax.Array], jax.Array],
+    scale: float,
+) -> Callable[[jax.Array], jax.Array]:
+  """Returns a scaled version of the activation function."""
+  return lambda x: scale * activation_fn(x)
 
-    # Scaled activations.
-    'scaled_celu': lambda x: jax.nn.celu(x) * 1.270926833152771,
-    'scaled_elu': lambda x: jax.nn.elu(x) * 1.2716004848480225,
-    'scaled_gelu': lambda x: jax.nn.gelu(x) * 1.7015043497085571,
-    'scaled_glu': lambda x: jax.nn.glu(x) * 1.8484294414520264,
-    'scaled_leaky_relu': lambda x: jax.nn.leaky_relu(x) * 1.70590341091156,
-    'scaled_log_sigmoid': lambda x: jax.nn.log_sigmoid(x) * 1.9193484783172607,
-    'scaled_log_softmax': lambda x: jax.nn.log_softmax(x) * 1.0002083778381348,
-    'scaled_relu': lambda x: jax.nn.relu(x) * 1.7139588594436646,
-    'scaled_relu6': lambda x: jax.nn.relu6(x) * 1.7131484746932983,
-    'scaled_selu': lambda x: jax.nn.selu(x) * 1.0008515119552612,
-    'scaled_sigmoid': lambda x: jax.nn.sigmoid(x) * 4.803835391998291,
-    'scaled_silu': lambda x: jax.nn.silu(x) * 1.7881293296813965,
-    'scaled_swish': lambda x: jax.nn.silu(x) * 1.7881293296813965,
-    'scaled_soft_sign': lambda x: jax.nn.soft_sign(x) * 2.338853120803833,
-    'scaled_softplus': lambda x: jax.nn.softplus(x) * 1.9203323125839233,
-    'scaled_tanh': lambda x: jnp.tanh(x) * 1.5939117670059204,
-}
+
+class Activation(enum.Enum):
+  """Activations with and without scaling."""
+
+  # Non-scaled activations.
+  IDENTITY = enum.auto()
+  CELU = enum.auto()
+  ELU = enum.auto()
+  GELU = enum.auto()
+  GLU = enum.auto()
+  LEAKY_RELU = enum.auto()
+  LOG_SIGMOID = enum.auto()
+  LOG_SOFTMAX = enum.auto()
+  RELU = enum.auto()
+  RELU6 = enum.auto()
+  SELU = enum.auto()
+  SIGMOID = enum.auto()
+  SILU = enum.auto()
+  SWISH = enum.auto()
+  SOFT_SIGN = enum.auto()
+  SOFTPLUS = enum.auto()
+  TANH = enum.auto()
+
+  # Scaled activations.
+  SCALED_CELU = enum.auto()
+  SCALED_ELU = enum.auto()
+  SCALED_GELU = enum.auto()
+  SCALED_GLU = enum.auto()
+  SCALED_LEAKY_RELU = enum.auto()
+  SCALED_LOG_SIGMOID = enum.auto()
+  SCALED_LOG_SOFTMAX = enum.auto()
+  SCALED_RELU = enum.auto()
+  SCALED_RELU6 = enum.auto()
+  SCALED_SELU = enum.auto()
+  SCALED_SIGMOID = enum.auto()
+  SCALED_SILU = enum.auto()
+  SCALED_SWISH = enum.auto()
+  SCALED_SOFT_SIGN = enum.auto()
+  SCALED_SOFTPLUS = enum.auto()
+  SCALED_TANH = enum.auto()
+
+  @property
+  def fn(self) -> Callable[[jax.Array], jax.Array]:
+    match self:
+      # Non-scaled activations.
+      case Activation.IDENTITY:
+        return jnp.asarray
+      case Activation.CELU:
+        return jax.nn.celu
+      case Activation.ELU:
+        return jax.nn.elu
+      case Activation.GELU:
+        return jax.nn.gelu
+      case Activation.GLU:
+        return jax.nn.glu
+      case Activation.LEAKY_RELU:
+        return jax.nn.leaky_relu
+      case Activation.LOG_SIGMOID:
+        return jax.nn.log_sigmoid
+      case Activation.LOG_SOFTMAX:
+        return jax.nn.log_softmax
+      case Activation.RELU:
+        return jax.nn.relu
+      case Activation.RELU6:
+        return jax.nn.relu6
+      case Activation.SELU:
+        return jax.nn.selu
+      case Activation.SIGMOID:
+        return jax.nn.sigmoid
+      case Activation.SILU:
+        return jax.nn.silu
+      case Activation.SWISH:
+        return jax.nn.silu
+      case Activation.SOFT_SIGN:
+        return jax.nn.soft_sign
+      case Activation.SOFTPLUS:
+        return jax.nn.softplus
+      case Activation.TANH:
+        return jnp.tanh
+      # Scaled activations.
+      case Activation.SCALED_CELU:
+        return _scaled(Activation.CELU.fn, 1.270926833152771)
+      case Activation.SCALED_ELU:
+        return _scaled(Activation.ELU.fn, 1.2716004848480225)
+      case Activation.SCALED_GELU:
+        return _scaled(Activation.GELU.fn, 1.7015043497085571)
+      case Activation.SCALED_GLU:
+        return _scaled(Activation.GLU.fn, 1.8484294414520264)
+      case Activation.SCALED_LEAKY_RELU:
+        return _scaled(Activation.LEAKY_RELU.fn, 1.70590341091156)
+      case Activation.SCALED_LOG_SIGMOID:
+        return _scaled(Activation.LOG_SIGMOID.fn, 1.9193484783172607)
+      case Activation.SCALED_LOG_SOFTMAX:
+        return _scaled(Activation.LOG_SOFTMAX.fn, 1.0002083778381348)
+      case Activation.SCALED_RELU:
+        return _scaled(Activation.RELU.fn, 1.7139588594436646)
+      case Activation.SCALED_RELU6:
+        return _scaled(Activation.RELU6.fn, 1.7131484746932983)
+      case Activation.SCALED_SELU:
+        return _scaled(Activation.SELU.fn, 1.0008515119552612)
+      case Activation.SCALED_SIGMOID:
+        return _scaled(Activation.SIGMOID.fn, 4.803835391998291)
+      case Activation.SCALED_SILU:
+        return _scaled(Activation.SILU.fn, 1.7881293296813965)
+      case Activation.SCALED_SWISH:
+        return _scaled(Activation.SWISH.fn, 1.7881293296813965)
+      case Activation.SCALED_SOFT_SIGN:
+        return _scaled(Activation.SOFT_SIGN.fn, 2.338853120803833)
+      case Activation.SCALED_SOFTPLUS:
+        return _scaled(Activation.SOFTPLUS.fn, 1.9203323125839233)
+      case Activation.SCALED_TANH:
+        return _scaled(Activation.TANH.fn, 1.5939117670059204)
 
 
 class WSConv2D(hk.Conv2D):
@@ -85,7 +165,7 @@ class WSConv2D(hk.Conv2D):
     shift = mean * scale
     return weight * scale - shift
 
-  def __call__(self, inputs: chex.Array, eps: float = 1e-4) -> chex.Array:
+  def __call__(self, inputs: jax.Array, eps: float = 1e-4) -> jax.Array:
     w_shape = self.kernel_shape + (
         inputs.shape[self.channel_index] // self.feature_group_count,
         self.output_channels)
@@ -111,13 +191,13 @@ class StochDepth(hk.Module):
       self,
       drop_rate: float,
       scale_by_keep: bool = False,
-      name: Optional[str] = None,
+      name: str | None = None,
   ):
     super().__init__(name=name)
     self.drop_rate = drop_rate
     self.scale_by_keep = scale_by_keep
 
-  def __call__(self, x: chex.Array, is_training: bool) -> chex.Array:
+  def __call__(self, x: jax.Array, is_training: bool) -> jax.Array:
     if not is_training:
       return x
     batch_size = x.shape[0]
@@ -138,9 +218,9 @@ class SqueezeExcite(hk.Module):
       in_ch: int,
       out_ch: int,
       se_ratio: float = 0.5,
-      hidden_ch: Optional[int] = None,
-      activation: Activation = jax.nn.relu,
-      name: Optional[str] = None,
+      hidden_ch: int | None = None,
+      activation: Activation = Activation.RELU,
+      name: str | None = None,
   ):
     super().__init__(name=name)
     self.in_ch, self.out_ch = in_ch, out_ch
@@ -157,22 +237,25 @@ class SqueezeExcite(hk.Module):
   def __call__(self, x):
     # Average over HW dimensions.
     h = jnp.mean(x, axis=[1, 2])
-    h = self.fc1(self.activation(self.fc0(h)))
+    h = self.fc1(self.activation.fn(self.fc0(h)))
     # Broadcast along H, W dimensions.
     h = jax.nn.sigmoid(h)[:, None, None]
     return h
 
 
-def download_and_read_file(name: str, root_dir: str = '/tmp/jax_privacy'):
+def download_and_get_filename(
+    name: str,
+    root_dir: str = '/tmp/jax_privacy',
+) -> str:
   """Load file, downloading to /tmp/jax_privacy first if necessary."""
   local_path = os.path.join(root_dir, name)
   if not os.path.exists(os.path.dirname(local_path)):
     os.makedirs(os.path.dirname(local_path))
   if not os.path.exists(local_path):
-    gcp_bucket_url = 'https://storage.googleapis.com/dm_jax_privacy/models/'
+    gcp_bucket_url = 'gs://dm_jax_privacy/models/'
     download_url = gcp_bucket_url + name
     urllib.request.urlretrieve(download_url, local_path)
-  return open(local_path, mode='rb')
+  return local_path
 
 
 def restore_from_path(
@@ -180,15 +263,15 @@ def restore_from_path(
     restore_path: str,
     params_key: str,
     network_state_key: str,
-    layer_to_reset: Optional[str],
-    params_init: chex.ArrayTree,
-    network_state_init: chex.ArrayTree,
-) -> Tuple[chex.ArrayTree, chex.ArrayTree]:
+    layer_to_reset: str | None,
+    params_init: hk.Params,
+    network_state_init: hk.State,
+) -> tuple[hk.Params, hk.State]:
   """Restore parameters and model state from an existing checkpoint.
 
   Args:
     restore_path: path to model to restore. This should point to a dict that can
-      be loaded through dill.
+      be loaded through orbax.
     params_key: key of the dict corresponding to the model parameters.
     network_state_key: key of the dict corresponding to the model state.
     layer_to_reset: name of the layer to reset (exact match required).
@@ -203,9 +286,9 @@ def restore_from_path(
       to the classifier potentially reset).
   """
   # Load pretrained experiment state.
-  with download_and_read_file(restore_path) as f:
-    ckpt_state = dill.load(f)
+  full_path = download_and_get_filename(restore_path)
 
+  ckpt_state = orbax_checkpoint.PyTreeCheckpointer().restore(full_path)
   params_loaded = utils.bcast_local_devices(ckpt_state[params_key])
   network_state_loaded = utils.bcast_local_devices(
       ckpt_state[network_state_key])

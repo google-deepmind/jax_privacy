@@ -7,8 +7,12 @@ authors:
   given-names: "Leonard"
 - family-names: "De"
   given-names: "Soham"
+- family-names: "Ghalebikesabi"
+  given-names: "Sahra"
 - family-names: "Hayes"
   given-names: "Jamie"
+- family-names: "Pappu"
+  given-names: "Aneesh"
 - family-names: "Smith"
   given-names: "Samuel L"
 - family-names: "Stanforth"
@@ -16,4 +20,4 @@ authors:
 title: "JAX-Privacy"
 version: 0.1.0
 date-released: 2022-04-28
-url: "https://github.com/deepmind/jax_privacy"
+url: "https://github.com/google-deepmind/jax_privacy"

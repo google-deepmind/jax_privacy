@@ -17,6 +17,8 @@
 
 from jax_privacy.experiments import image_data
 from jax_privacy.experiments.image_classification import config_base
+from jax_privacy.experiments.image_classification.models import models
+from jax_privacy.src.training import averaging
 from jax_privacy.src.training import experiment_config
 from jax_privacy.src.training import optimizer_config
 import ml_collections
@@ -26,18 +28,15 @@ def get_config() -> ml_collections.ConfigDict:
   """Experiment config."""
 
   config = config_base.ExperimentConfig(
-      num_updates=875,
       optimizer=optimizer_config.sgd_config(
           lr=optimizer_config.constant_lr_config(2.0),
       ),
-      model=config_base.ModelConfig(
-          name='wideresnet',
-          kwargs={
-              'depth': 16,
-              'width': 4,
-          },
+      model=models.WideResNetConfig(
+          depth=16,
+          width=4,
       ),
       training=experiment_config.TrainingConfig(
+          num_updates=875,
           batch_size=experiment_config.BatchSizeTrainConfig(
               total=4096,
               per_device_per_step=64,
@@ -47,19 +46,20 @@ def get_config() -> ml_collections.ConfigDict:
           dp=experiment_config.DPConfig(
               delta=1e-5,
               clipping_norm=1.0,
-              stop_training_at_epsilon=1.0,
+              auto_tune_target_epsilon=1.0,
               rescale_to_unit_norm=True,
               noise_multiplier=10.0,
-              auto_tune=None,
+              auto_tune_field=None,
           ),
           logging=experiment_config.LoggingConfig(
               grad_clipping=True,
-              grad_alignment=False,
               snr_global=True,  # signal-to-noise ratio across layers
               snr_per_layer=False,  # signal-to-noise ratio per layer
           ),
       ),
-      averaging=experiment_config.AveragingConfig(ema_coefficient=0.999,),
+      averaging={
+          'ema': averaging.ExponentialMovingAveragingConfig(decay=0.999),
+      },
       data_train=image_data.Cifar10Loader(
           config=image_data.Cifar10TrainValidConfig(
               preprocess_name='standardise',

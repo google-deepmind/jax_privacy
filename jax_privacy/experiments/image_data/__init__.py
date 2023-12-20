@@ -15,12 +15,25 @@
 
 """Data loading."""
 # pylint:disable=g-multiple-import
+# pylint:disable=g-importing-member
+
+from jax_privacy.experiments.image_data import chexpert
+from jax_privacy.experiments.image_data import mimic_cxr
 
 from jax_privacy.experiments.image_data.augmult import AugmultConfig
 from jax_privacy.experiments.image_data.base import (
     DataInputs,
     DatasetConfig,
     ImageDatasetConfig,
+)
+from jax_privacy.experiments.image_data.chexpert import (
+    AbstractChexpertLoader,
+    ChexpertTestInternalConfig,
+    ChexpertTestOfficialConfig,
+    ChexpertTrainInternalConfig,
+    ChexpertTrainOfficialConfig,
+    ChexpertValidInternalConfig,
+    ChexpertValidOfficialConfig,
 )
 from jax_privacy.experiments.image_data.imagenet import (
     ImageNetLoader,
@@ -32,6 +45,15 @@ from jax_privacy.experiments.image_data.imagenet import (
     ImageNetNumSamples,
 )
 from jax_privacy.experiments.image_data.loader import DataLoader
+from jax_privacy.experiments.image_data.mimic_cxr import (
+    AbstractMimicCxrLoader,
+    MimicCxrTestInternalConfig,
+    MimicCxrTestOfficialConfig,
+    MimicCxrTrainInternalConfig,
+    MimicCxrTrainOfficialConfig,
+    MimicCxrValidInternalConfig,
+    MimicCxrValidOfficialConfig,
+)
 from jax_privacy.experiments.image_data.mnist_cifar_svhn import (
     MnistLoader,
     Cifar10Loader,
@@ -61,4 +83,10 @@ from jax_privacy.experiments.image_data.places365 import (
     Places365TrainValidConfig,
     Places365Testconfig,
     Places365NumSamples,
+)
+
+
+MULTILABEL_DATASETS = (
+    chexpert.ChexpertConfig,
+    mimic_cxr.MimicCxrConfig,
 )

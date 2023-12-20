@@ -15,6 +15,9 @@
 
 """Computing gradients that are clipped per sample."""
 
+import dataclasses
+import functools
+
 import chex
 import jax
 import jax.numpy as jnp
@@ -111,7 +114,8 @@ def _value_and_clipped_grad_single_sample(
 
   Returns:
     Function that computes the gradient for a single (unbatched) sample  and
-    clips it.
+    clips it. The metrics per sample being returned do *not* have a batch
+    dimension.
   """
 
   def clipped_grad_fn(
@@ -135,9 +139,16 @@ def _value_and_clipped_grad_single_sample(
 
     clipped_grad, grad_norm = clipping_fn(grad)
 
+    metrics_per_example = {
+        'grad_norm': grad_norm,
+        # Remove batch dimension in metrics per example.
+        **jax.tree_map(functools.partial(jnp.squeeze, axis=0),
+                       metrics.per_example),
+    }
     # Log the gradient norm per example.
-    metrics = metrics.replace(
-        per_example={'grad_norm': grad_norm, **metrics.per_example},
+    metrics = dataclasses.replace(
+        metrics,
+        per_example=metrics_per_example,
     )
 
     # Apply the clipping function
@@ -149,6 +160,7 @@ def _value_and_clipped_grad_single_sample(
 def value_and_clipped_grad_loop(
     grad_fn: typing.ValueAndGradFn,
     clipping_fn: typing.GradClippingFn,
+    state_acc_strategies: grad_clipping_utils.StateAccumulationStrategyTree,
 ) -> typing.ValueAndGradFn:
   """Create a function that computes grads clipped per example using a loop.
 
@@ -162,6 +174,7 @@ def value_and_clipped_grad_loop(
       their key (`per_sample` / 'scalars_avg` / `scalars_sum`).
     clipping_fn: clipping function to apply to every per-example gradient before
       those get averaged.
+    state_acc_strategies: Prefix tree of network state accumulation strategies.
 
   Returns:
     Function that clips gradient per-example and average them.
@@ -171,7 +184,8 @@ def value_and_clipped_grad_loop(
       clipping_fn=clipping_fn,
   )
 
-  accumulator = grad_clipping_utils.LoopAccumulator(grad_fn)
+  accumulator = grad_clipping_utils.LoopAccumulator(
+      grad_fn, state_acc_strategies)
 
   def clipped_grad_fn(
       params: typing.ParamsT,
@@ -186,23 +200,35 @@ def value_and_clipped_grad_loop(
     rng_per_example = jax.random.split(rng_per_example, num=batch_size)
 
     if batch_size == 1:
-      inputs_0 = jax.tree_util.tree_map(lambda x: x[0], inputs)
-      return grad_fn_single_sample(
+      inputs_0 = jax.tree_util.tree_map(
+          functools.partial(jnp.squeeze, axis=0),
+          inputs,
+      )
+      (loss, (network_state, metrics)), clipped_grad = grad_fn_single_sample(
           params, network_state, rng_per_example[0], inputs_0)
+      metrics = dataclasses.replace(
+          metrics,
+          # Add batch dimension for metrics per example.
+          per_example=jax.tree_map(
+              functools.partial(jnp.expand_dims, axis=0),
+              metrics.per_example),
+      )
+      return (loss, (network_state, metrics)), clipped_grad
 
     def body(value_and_grad, i):
       inputs_i = jax.tree_util.tree_map(lambda x: x[i], inputs)
       value_and_grad_i = grad_fn_single_sample(
           params, network_state, rng_per_example[i], inputs_i)
       value_and_grad = accumulator.accumulate(
-          value_and_grad, value_and_grad_i, i, batch_size)
+          value_and_grad, value_and_grad_i, batch_size, i)
       return value_and_grad, None
 
     # We only need to know the shape and dtype for the initialization, so we
     # pass the arguments through `_placeholder_like` to make that clear.
     placeholder_args = _placeholder_like(params, network_state,
                                          rng_per_example[0], inputs)
-    value_and_grad = accumulator.initialize(batch_size, *placeholder_args)
+    value_and_grad = accumulator.initialize(
+        network_state, batch_size, *placeholder_args)
 
     # Actually perform the loop.
     value_and_grad, _ = jax.lax.scan(
@@ -215,6 +241,7 @@ def value_and_clipped_grad_loop(
 def value_and_clipped_grad_vectorized(
     grad_fn: typing.ValueAndGradFn,
     clipping_fn: typing.GradClippingFn,
+    state_acc_strategies: grad_clipping_utils.StateAccumulationStrategyTree,
 ) -> typing.ValueAndGradFn:
   """Create a function that computes grads clipped per example using vmapping.
 
@@ -228,6 +255,7 @@ def value_and_clipped_grad_vectorized(
       their key (`per_sample` / 'scalars_avg` / `scalars_sum`).
     clipping_fn: clipping function to apply to every per-example gradient before
       those get averaged.
+    state_acc_strategies: Prefix tree of network state accumulation strategies.
 
   Returns:
     Function that clips gradient per-example and average them.
@@ -257,6 +285,7 @@ def value_and_clipped_grad_vectorized(
     value_and_grad = grad_fn_vectorized(
         params, network_state, rng_per_example, inputs)
 
-    return grad_clipping_utils.reduce_vmap(value_and_grad)
+    return grad_clipping_utils.reduce_vmap(
+        state_acc_strategies, value_and_grad, network_state)
 
   return clipped_grad_fn

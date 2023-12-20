@@ -43,7 +43,7 @@ class TestTreeMapAddNormalNoise(chex.TestCase):
     self.assertEqual(jax.tree_util.tree_structure(noisy_tree),
                      jax.tree_util.tree_structure(self.tree))
     with self.assertRaises(AssertionError):
-      chex.assert_tree_all_close(self.tree, noisy_tree)
+      chex.assert_trees_all_close(self.tree, noisy_tree)
 
   def test_without_noise(self):
     tree_with_zero_noise = optim.tree_map_add_normal_noise(
@@ -51,7 +51,7 @@ class TestTreeMapAddNormalNoise(chex.TestCase):
 
     self.assertEqual(jax.tree_util.tree_structure(tree_with_zero_noise),
                      jax.tree_util.tree_structure(self.tree))
-    chex.assert_tree_all_close(self.tree, tree_with_zero_noise)
+    chex.assert_trees_all_close(self.tree, tree_with_zero_noise)
 
 
 if __name__ == '__main__':
