@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 DeepMind Technologies Limited.
+# Copyright 2024 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,9 @@
 """Setup for pip package."""
 
 import unittest
+
+from Cython.Build import cythonize
+import numpy
 from setuptools import find_namespace_packages
 from setuptools import setup
 
@@ -33,13 +36,17 @@ def test_suite():
 
 setup(
     name='jax_privacy',
-    version='0.3.0',
+    version='0.4.0',
     description='Algorithms for Privacy-Preserving Machine Learning in JAX.',
     url='https://github.com/google-deepmind/jax_privacy',
     author='Google DeepMind',
     author_email='jax-privacy-dev@google.com',
     # Contained modules and scripts.
-    packages=find_namespace_packages(exclude=['*_test.py']),
+    packages=find_namespace_packages(
+        exclude=['*_test.py', 'examples*', 'experiments*']
+    ),
+    ext_modules=cythonize('jax_privacy/auditing/auditing_utils.pyx'),
+    include_dirs=[numpy.get_include()],
     install_requires=_parse_requirements('requirements.txt'),
     requires_python='>=3.10',
     platforms=['any'],
