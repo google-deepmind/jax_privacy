@@ -35,11 +35,11 @@ flake8 `find jax_privacy -name '*.py' | xargs` --count --select=E9,F63,F7,F82,E2
 PYLINT_ARGS="-efail -wfail -cfail -rfail"
 # Lint modules and tests separately.
 pylint --rcfile=.pylintrc `find jax_privacy -name '*.py' | grep -v 'test.py' | xargs` || pylint-exit $PYLINT_ARGS $?
-# Disable `protected-access` warnings for tests.
-pylint --rcfile=.pylintrc `find jax_privacy -name '*_test.py' | xargs` -d W0212 || pylint-exit $PYLINT_ARGS $?
+# Disable `protected-access` warnings and `missing-module-docstring` convention for tests.
+pylint --rcfile=.pylintrc `find jax_privacy -name '*_test.py' | xargs` -d W0212,C0114 || pylint-exit $PYLINT_ARGS $?
 
 # Check types with pytype.
-pytype `find jax_privacy/src/ -name "*py" | xargs` -k
+pytype `find jax_privacy/ -name "*py" | xargs` -k
 
 # Build the package.
 pip install -e .
