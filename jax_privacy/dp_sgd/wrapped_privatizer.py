@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,14 +17,20 @@
 
 from collections.abc import Callable
 
+from absl import logging
 import chex
 import jax
 import jax.numpy as jnp
 from jax_privacy.dp_sgd import grad_clipping
 from jax_privacy.dp_sgd import gradients
 from jax_privacy.dp_sgd import typing
-from jax_privacy.stream_privatization import gradient_privatizer
+from jax_privacy.noise_addition import gradient_privatizer
 import optax
+
+logging.warning(
+    'wrapped_privatizer.WrappedPrivatizer is deprecated and will be removed in '
+    'Jax Privacy 1.5. Please use the Privatizer directly.'
+)
 
 
 class WrappedPrivatizer(
@@ -37,7 +43,12 @@ class WrappedPrivatizer(
     ]
     # pytype: enable=not-indexable
 ):
-  """Gradient computer that defers noising to a gradient privatizer."""
+  """Gradient computer that defers noising to a gradient privatizer.
+
+  Note that the input Privatizer handles the rng state internally, and hence
+  this `WrappedPrivatizer` ignores the rng passed to the instance method
+  `add_noise_to_grads`.
+  """
 
   def __init__(
       self,
@@ -66,17 +77,22 @@ class WrappedPrivatizer(
   def add_noise_to_grads(
       self,
       grads: typing.ParamsT,
-      rng_per_batch: chex.PRNGKey,
+      rng_per_batch: chex.PRNGKey | None,
       total_batch_size: jax.Array,
       noise_state: typing.NoiseStateT,
   ) -> tuple[typing.ParamsT, jax.Array, typing.NoiseStateT]:
+    if rng_per_batch is not None:
+      logging.warning(
+          'rng_per_batch is unused in WrappedPrivatizer. The rng is handled'
+          ' internally by the privatizer. Set rng_per_batch to None to disable'
+          ' this warning'
+      )
 
     sum_of_clipped_grads = jax.tree.map(lambda x: x * total_batch_size, grads)
 
     noisy_grads, noise_state = self._privatizer.privatize(
         sum_of_clipped_grads=sum_of_clipped_grads,
         noise_state=noise_state,
-        prng_key=rng_per_batch,
     )
 
     noisy_grads = jax.tree.map(lambda x: x / total_batch_size, noisy_grads)

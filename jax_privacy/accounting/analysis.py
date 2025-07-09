@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import abc
 from collections.abc import Sequence
 import dataclasses
 import enum
+import math
 import numbers
 import time
 from typing import Protocol, TypeAlias
@@ -154,9 +155,16 @@ class DpParams:
         This is computed from `batch_size` and `batch_size_scale_schedule`.
     examples_per_user: If multiple examples per user are used, this is the
       maximum number any user contributes to the training set.
+    cycle_length: If using cyclic Poisson sampling with BandMF, the length of
+      the cycle, i.e. the number of partitions formed for sampling. It is
+      assumed the number of bands in BandMF is at most cycle_length.
     sampling_method: If our privacy analysis assumes sampling, which sampling
       method it should assume. See SamplingMethod enum for details on each
       sampling method and the adjacency definitions it assumes.
+    truncated_batch_size: If using Poisson sampling, a limit on the batch size
+      enforced by truncation. If None, we assume no truncation is used.
+      Otherwise, we assume that a random subset of the sampled batch is used,
+      and the remaining examples are discarded.
   """
 
   noise_multipliers: float | Sequence[tuple[int, float]] | None
@@ -169,7 +177,9 @@ class DpParams:
       init=False
   )
   examples_per_user: int | None = None
+  cycle_length: int | None = None
   sampling_method: SamplingMethod = SamplingMethod.POISSON
+  truncated_batch_size: int | None = None
 
   def __post_init__(self):
     if self.batch_size_scale_schedule:
@@ -248,7 +258,14 @@ class DpTrainingAccountant(metaclass=abc.ABCMeta):
 
 
 class DpsgdTrainingAccountant(DpTrainingAccountant):
-  """Defines privacy computations for DP-SGD style analysis."""
+  """Defines privacy computations for Band-MF with Cyclic Poisson sampling.
+
+  This includes DP-SGD style analysis as a special case.
+
+  For accounting we follow the reduction in https://arxiv.org/abs/2306.08153. We
+  assume that if num_samples % cycle_length != 0, then num_samples %
+  cycle_length examples are discarded.
+  """
 
   def can_calibrate_steps(self) -> bool:
     return True
@@ -270,6 +287,22 @@ class DpsgdTrainingAccountant(DpTrainingAccountant):
           'Choose a different examples_per_user or use '
           'DpsgdTrainingUserLevelAccountant instead.'
       )
+    if dp_params.cycle_length is not None and dp_params.cycle_length != 1:
+      if not isinstance(dp_params.batch_size, numbers.Number):
+        raise ValueError(
+            'DpsgdTrainingAccountant with cycle_length != 1 requires a single'
+            ' batch size.'
+        )
+      if not isinstance(dp_params.noise_multipliers, numbers.Number):
+        raise ValueError(
+            'DpsgdTrainingAccountant with cycle_length != 1 requires a single'
+            ' noise multiplier.'
+        )
+      if dp_params.batch_size * dp_params.cycle_length > dp_params.num_samples:
+        raise ValueError(
+            'DpsgdTrainingAccountant with cycle_length != 1 requires batch_size'
+            ' * cycle_length <= num_samples.'
+        )
     if (
         dp_params.sampling_method is not SamplingMethod.POISSON
         and dp_params.sampling_method is not SamplingMethod.FIXED_BATCH_SIZE
@@ -278,6 +311,19 @@ class DpsgdTrainingAccountant(DpTrainingAccountant):
           'DpsgdTrainingAccountant requires sampling_method = POISSON or '
           'FIXED_BATCH_SIZE.'
       )
+    if dp_params.truncated_batch_size is not None:
+      if dp_params.sampling_method is not SamplingMethod.POISSON:
+        raise ValueError(
+            'DpsgdTrainingAccountant does not support truncated_batch_size'
+            ' unless using sampling_method = POISSON.'
+        )
+      if not isinstance(
+          self._dp_accountant_config, accountants.PldAccountantConfig
+      ):
+        raise ValueError(
+            'DpsgdTrainingAccountant with truncated_batch_size != None requires'
+            ' a PLDAccountant.'
+        )
 
   def _compute_epsilon(
       self, num_updates: chex.Numeric, dp_params: DpParams
@@ -286,25 +332,55 @@ class DpsgdTrainingAccountant(DpTrainingAccountant):
     batch_sizes = dp_params.batch_sizes
     num_samples = dp_params.num_samples
     sampling_method = dp_params.sampling_method
+    cycle_length = dp_params.cycle_length if dp_params.cycle_length else 1
+    truncated_batch_size = dp_params.truncated_batch_size
     dp_accountant = self._dp_accountant_config.create_accountant()
 
     t_nm_and_bs = _interleave_nm_and_bs(nms, batch_sizes, num_updates)
     match sampling_method:
       case SamplingMethod.POISSON:
-        nm_multiplier = 1.0
+        sensitivity_multiplier = 1.0
       case SamplingMethod.FIXED_BATCH_SIZE:
-        nm_multiplier = 0.5
+        # Fixed batch size sampling's privacy analysis reduces to Poisson
+        # sampling with the same noise but the sensitivity doubled.
+        sensitivity_multiplier = 2.0
     for t, nm, bs in t_nm_and_bs:
-      q = bs / float(num_samples)
-      event = dp_accounting.PoissonSampledDpEvent(
-          q, dp_accounting.GaussianDpEvent(nm * nm_multiplier)
-      )
-      dp_accountant.compose(event, t)
+      min_group_size = num_samples // cycle_length
+      q = bs / float(min_group_size)
+      if truncated_batch_size is None:
+        event = dp_accounting.PoissonSampledDpEvent(
+            q, dp_accounting.GaussianDpEvent(nm / sensitivity_multiplier)
+        )
+      else:
+        # This calculation involves a sum over num_samples terms corresponding
+        # to the possible batch sizes before truncation. To save time and memory
+        # we truncate this sum at a threshold chosen such that the terms in the
+        # sum after the threshold are smaller than the precision of computation.
+        threshold = truncated_batch_size
+        while stats.binom.sf(threshold, min_group_size - 1, q) > 0.0:
+          threshold = max(2 * threshold, min_group_size)
+        sample_sizes = np.arange(truncated_batch_size, threshold)
+        prob_2 = q * np.sum(
+            stats.binom.pmf(sample_sizes, min_group_size - 1, q)
+            * truncated_batch_size
+            / (sample_sizes + 1)
+        )
+        prob_1 = q * (
+            1 - stats.binom.sf(truncated_batch_size, min_group_size - 1, q)
+        )
+        prob_0 = 1 - prob_1 - prob_2
+        event = dp_accounting.dp_event.MixtureOfGaussiansDpEvent(
+            nm, [0, 1, 2], [prob_0, prob_1, prob_2]
+        )
+      dp_accountant.compose(event, math.ceil(t / cycle_length))
     return dp_accountant.get_epsilon(target_delta=dp_params.delta)
 
 
 class DpsgdTrainingUserLevelAccountant(DpTrainingAccountant):
-  """Defines privacy computations for DP-SGD analysis with user-level DP."""
+  """Defines privacy computations for DP-SGD analysis with user-level DP.
+
+  This class uses the calculations in https://arxiv.org/abs/2401.10294.
+  """
 
   def can_calibrate_steps(self) -> bool:
     return True
@@ -321,6 +397,10 @@ class DpsgdTrainingUserLevelAccountant(DpTrainingAccountant):
       raise ValueError(
           'DpsgdTrainingUserLevelAccountant requires examples_per_user.'
       )
+    if dp_params.cycle_length is not None and dp_params.cycle_length != 1:
+      raise ValueError(
+          'DpsgdTrainingUserLevelAccountant requires cycle_length = 1 or None.'
+      )
     if (
         dp_params.sampling_method is not SamplingMethod.POISSON
         and dp_params.sampling_method is not SamplingMethod.FIXED_BATCH_SIZE
@@ -328,6 +408,17 @@ class DpsgdTrainingUserLevelAccountant(DpTrainingAccountant):
       raise ValueError(
           'DpsgdTrainingUserLevelAccountant requires sampling_method = POISSON '
           'or FIXED_BATCH_SIZE.'
+      )
+    if dp_params.truncated_batch_size is not None:
+      raise ValueError(
+          'DpsgdTrainingUserLevelAccountant requires truncated_batch_size ='
+          ' None.'
+      )
+    if not isinstance(
+        self._dp_accountant_config, accountants.PldAccountantConfig
+    ):
+      raise ValueError(
+          'DpsgdTrainingUserLevelAccountant requires a PLDAccountant.'
       )
 
   def _compute_epsilon(
@@ -349,25 +440,28 @@ class DpsgdTrainingUserLevelAccountant(DpTrainingAccountant):
       match sampling_method:
         case SamplingMethod.POISSON:
           q = bs / float(num_samples)
-          sens = range(examples_per_user + 1)
-          probs = [stats.binom.pmf(x, examples_per_user, q) for x in sens]
+          sensitivities = range(examples_per_user + 1)
+          probs = [
+              stats.binom.pmf(x, examples_per_user, q) for x in sensitivities
+          ]
         case SamplingMethod.FIXED_BATCH_SIZE:
-          sens = [2 * x for x in range(examples_per_user + 1)]
-          sens_rv = stats.hypergeom(num_samples, examples_per_user, bs)
-          probs = [sens_rv.pmf(x) for x in range(examples_per_user + 1)]
+          sensitivities = [2 * x for x in range(examples_per_user + 1)]
+          sensitivity_rv = stats.hypergeom(num_samples, examples_per_user, bs)
+          probs = [sensitivity_rv.pmf(x) for x in range(examples_per_user + 1)]
       event = dp_accounting.dp_event.MixtureOfGaussiansDpEvent(
-          nm, sens, probs
+          nm, sensitivities, probs
       )
       dp_accountant.compose(event, t)
     return dp_accountant.get_epsilon(target_delta=dp_params.delta)
 
 
 class SingleReleaseTrainingAccountant(DpTrainingAccountant):
-  """Defines privacy computations for single release analysis (go/memf-paper).
+  """Defines privacy computations for single release analysis.
 
   This style of analysis is used for un-amplified DP-FTRL mechanisms, as
-  detailed in (go/memf-paper). Unlike DP-SGD analysis, which relies on Poisson
-  amplification, this analysis treats accounting as a single Gaussian DP event.
+  detailed in https://arxiv.org/pdf/2211.06530. Unlike DP-SGD analysis, which
+  relies on Poisson amplification, this analysis treats accounting as a single
+  Gaussian DP event.
   """
 
   def can_calibrate_steps(self) -> bool:

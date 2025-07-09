@@ -1,0 +1,25 @@
+# Requirements for jax_privacy developmnent.
+#
+# NOTE: This file includes dependencies needed for development,
+# including the experiments/ and examples/ directories.
+# Requirements for the core library are more limited (e.g.,
+# no tensorflow or tensorflow_datasets).
+
+-r requirements.txt
+
+dinosaur
+dm-haiku==0.0.14
+# `flax is required by `haiku.experimental.flax`. We do
+# not actually use `haiku.experimental.flax`, but there
+# appears to be a bug in the interaction of `hypothesis` introspection
+# and the way `haiku` detects that `flax` is missing which raises an error.
+# The simplest fix is to just install `flax` here.
+flax>=0.7.1
+drjax==0.1.4
+equinox
+jaxline @ git+https://github.com/deepmind/jaxline.git
+orbax
+scikit-learn==1.5.0
+tensorflow
+tensorflow_datasets
+pytest-xdist

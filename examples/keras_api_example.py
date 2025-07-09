@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -63,6 +63,8 @@ def load_data():
 
 
 def main(_):
+  # Marker to insert the main part of the example into ReadTheDocs.
+  # [START example]
   (x_train, y_train), (x_test, y_test) = load_data()
   model = get_model()
 
@@ -101,6 +103,7 @@ def main(_):
       epochs=epochs,
       validation_data=(x_test, y_test),
   )
+  # [END example]
   print("DP: expected train accuracy: ~96%, val accuracy: ~92%")
   print("Non-DP: expected train accuracy: ~98%, val accuracy: ~98%")
 

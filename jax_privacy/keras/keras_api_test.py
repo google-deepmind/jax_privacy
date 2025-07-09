@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ import types
 from unittest import mock
 
 os.environ["KERAS_BACKEND"] = "jax"
-
 # pylint: disable=g-import-not-at-top, wrong-import-position
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -36,16 +35,20 @@ from scipy import stats
 
 class KerasApiTest(parameterized.TestCase):
 
-  def test_validate_params(self):
-    # Valid parameters, does not raise an error.
-    valid_params = keras_api.DPKerasConfig(
+  def _get_params(self):
+    return keras_api.DPKerasConfig(
         epsilon=1.1,
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=10,
+        gradient_accumulation_steps=1,
         train_steps=100,
         train_size=1000,
     )
+
+  def test_validate_params(self):
+    # Valid parameters, does not raise an error.
+    valid_params = self._get_params()
 
     # Invalid epsilon
     with self.assertRaisesRegex(ValueError, "Epsilon .* must be positive"):
@@ -93,6 +96,20 @@ class KerasApiTest(parameterized.TestCase):
     ):
       dataclasses.replace(valid_params, noise_multiplier=0.1)
 
+    # Gradient accumulation steps must be positive
+    with self.assertRaisesRegex(
+        ValueError,
+        "Gradient accumulation steps 0 must be positive",
+    ):
+      dataclasses.replace(valid_params, gradient_accumulation_steps=0)
+
+  def test_effective_batch_size(self):
+    params1 = dataclasses.replace(self._get_params(), batch_size=5)
+    self.assertEqual(params1.effective_batch_size, 5)
+
+    params2 = dataclasses.replace(params1, gradient_accumulation_steps=10)
+    self.assertEqual(params2.effective_batch_size, 50)
+
   def test_dp_params_calculates_noise_multiplier(self):
     params = keras_api.DPKerasConfig(
         noise_multiplier=None,
@@ -100,6 +117,7 @@ class KerasApiTest(parameterized.TestCase):
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=10,
+        gradient_accumulation_steps=1,
         train_steps=100,
         train_size=1000,
     )
@@ -114,6 +132,7 @@ class KerasApiTest(parameterized.TestCase):
         epsilon=1.1,
         delta=1e-5,
         batch_size=10,
+        gradient_accumulation_steps=1,
         clipping_norm=1.0,
         train_steps=20,
         train_size=500,
@@ -160,6 +179,7 @@ class KerasApiTest(parameterized.TestCase):
         delta=1e-5,
         clipping_norm=clipping_norm,
         batch_size=batch_size,
+        gradient_accumulation_steps=1,
         train_steps=20,
         train_size=500,
         rescale_to_unit_norm=rescale_to_unit_norm,
@@ -201,6 +221,7 @@ class KerasApiTest(parameterized.TestCase):
         delta=1e-5,
         clipping_norm=clipping_norm,
         batch_size=batch_size,
+        gradient_accumulation_steps=1,
         train_steps=20,
         train_size=500,
         rescale_to_unit_norm=False,
@@ -240,6 +261,48 @@ class KerasApiTest(parameterized.TestCase):
     self._check_distribution(sample[:, 0], -10, stddev)
     self._check_distribution(sample[:, 1], -20, stddev)
 
+  def test_validate_optimizer_mismatched_gradient_accumulation_steps(self):
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = dataclasses.replace(
+        self._get_params(), gradient_accumulation_steps=10
+    )
+    model = keras_api.make_private(model, dp_params)
+    optimizer = keras.optimizers.Adam(gradient_accumulation_steps=5)
+    model.compile(optimizer=optimizer)
+    with self.assertRaisesRegex(
+        ValueError, "optimizer.gradient_accumulation_steps = 5 must be equal to"
+    ):
+      keras_api._validate_optimizer(model, dp_params)
+
+  def test_noise_multiplier_per_batch(self):
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=200,
+        batch_size=1,
+        gradient_accumulation_steps=1,
+        train_steps=20,
+        train_size=500,
+        rescale_to_unit_norm=False,
+    ).update_with_calibrated_noise_multiplier()
+    gradient_computer = keras_api._get_gradient_computer(dp_params)
+    initial_noise_multiplier = gradient_computer._noise_multiplier
+
+    dp_params = dataclasses.replace(dp_params, gradient_accumulation_steps=4)
+    gradient_computer = keras_api._get_gradient_computer(dp_params)
+    self.assertAlmostEqual(
+        gradient_computer._noise_multiplier,
+        # the noise is scaled as 1/sqrt(gradient_accumulation_steps)
+        initial_noise_multiplier / 2,
+        delta=1e-6,
+    )
+
+  # TODO: Add test when input is tf batched dataset dict
+  # (as in Gemma), try to make a test as similar as possible to Gemma.
+  # Also good to add tests for all possible setups we know (especially for all
+  # possible setups of input data we know (tf dataset, np array,
+  # python generators, etc.). Might make sense to have a separate test file for
+  # that.
   def test_dp_training_e2e_work(self):
     np.random.seed(42)
     train_size = 200
@@ -255,6 +318,7 @@ class KerasApiTest(parameterized.TestCase):
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
+        gradient_accumulation_steps=1,
         train_steps=train_steps,
         train_size=train_size,
     )
@@ -276,6 +340,7 @@ class KerasApiTest(parameterized.TestCase):
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
+        gradient_accumulation_steps=1,
         train_steps=train_steps,
         train_size=train_size,
     )
@@ -310,7 +375,8 @@ class KerasApiTest(parameterized.TestCase):
     train_size = 64
     train_steps = 15
     dp_params = keras_api.DPKerasConfig(
-        batch_size=32,  # default value in Keras fit()
+        batch_size=32,
+        gradient_accumulation_steps=1,
         epsilon=1.1,
         delta=1e-5,
         clipping_norm=1.0,
@@ -351,7 +417,7 @@ class KerasApiTest(parameterized.TestCase):
 
     # Act & assert.
     # train_steps = epochs (=1) * train_size (=64) / batch_size (=32)= 2
-    model.fit(x, y)  # optimizer steps = 1 * 2 = 2  # pylint: disable=not-callable
+    model.fit(x, y, batch_size=32)  # optimizer steps = 1 * 2 = 2  # pylint: disable=not-callable
     with self.assertRaisesRegex(
         RuntimeError,
         "you will run out of privacy budget",
@@ -363,6 +429,7 @@ class KerasApiTest(parameterized.TestCase):
     model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
     dp_params = keras_api.DPKerasConfig(
         batch_size=100,
+        gradient_accumulation_steps=1,
         epsilon=1.1,
         delta=1e-5,
         clipping_norm=1.0,
@@ -378,6 +445,40 @@ class KerasApiTest(parameterized.TestCase):
     ):
       model.fit(batch_size=101)  # pylint: disable=not-callable
 
+  @parameterized.named_parameters(
+      ("plain arg", np.zeros((101, 4)), np.zeros((101,))),
+      ("tuple", (np.zeros((101, 4)),), np.zeros((101,))),
+      ("list", [np.zeros((101, 4))], np.zeros((101,))),
+      ("dict", {"x": np.zeros((101, 4))}, np.zeros((101,))),
+  )
+  def test_fit_raises_error_when_dp_batch_size_not_equal_to_actual_data_batch_size(  # pylint: disable=line-too-long
+      self, batched_x, batched_y
+  ):
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_batch_size = 100  # actual batch size is 101
+    dp_params = keras_api.DPKerasConfig(
+        batch_size=dp_batch_size,
+        gradient_accumulation_steps=1,
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        train_steps=28,
+        train_size=200,
+    )
+    model = keras_api.make_private(model, dp_params)
+
+    def data_generator():
+      while True:
+        yield batched_x, batched_y
+
+    model.compile()
+    with self.assertRaisesRegex(
+        ValueError,
+        "The batch size in the DP parameters is not equal to the batch size of"
+        " the actual data",
+    ):
+      model.fit(data_generator())  # pylint: disable=not-callable
+
   def test_train_step_call_noised_clipped_grads(self):
     train_size = 200
     batch_size = 100
@@ -392,6 +493,7 @@ class KerasApiTest(parameterized.TestCase):
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=100,
+        gradient_accumulation_steps=1,
         train_steps=train_steps,
         train_size=train_size,
     )

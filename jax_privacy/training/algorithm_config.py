@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -56,11 +56,13 @@ class NoDpConfig(AlgorithmConfig):
   noise_multiplier: float = dataclasses.field(init=False, default=0.0)
 
 
+# TODO: Rename this to DpBandMfConfig
 @dataclasses.dataclass(kw_only=True, slots=True)
 class DpsgdConfig(AlgorithmConfig):
   """Configuration for the DP-SGD mechanism."""
 
   noise_multiplier: float | None
+  num_bands: int | None = None
 
   def __post_init__(self):
     if self.noise_multiplier is None:

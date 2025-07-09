@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,8 @@ from concurrent import futures
 import dataclasses
 from typing import Callable
 
-from jax_privacy.auditing import auditing_utils  # pytype: disable=import-error
+import jax
+import jax.numpy as jnp
 import numpy as np
 import scipy.optimize
 import scipy.stats
@@ -39,13 +40,44 @@ class BootstrapParams:
 
   Attributes:
     num_samples: The number of times to resample the dataset.
-    confidence: The confidence level for the interval.
+    quantiles: An array-like of quantiles to report. E.g., for a 95% confidence
+      interval, use (0.025, 0.975).
     seed: The seed for the random number generator.
   """
 
   num_samples: int = 1000
-  confidence: float = 0.95
+  quantiles: np.typing.ArrayLike = (0.025, 0.975)
   seed: int | None = None
+
+  def __post_init__(self):
+    quantile_arr = np.asarray(self.quantiles)
+    if quantile_arr.size == 0:
+      raise ValueError('quantiles cannot be empty.')
+    if not np.all((0 < quantile_arr) & (quantile_arr < 1)):
+      raise ValueError(f'quantiles must be in (0, 1), got {self.quantiles}.')
+
+  @classmethod
+  def confidence_interval(
+      cls,
+      num_samples: int = 1000,
+      confidence: float = 0.95,
+      seed: int | None = None,
+  ) -> 'BootstrapParams':
+    """Creates a BootstrapParams object for a confidence interval.
+
+    Args:
+      num_samples: The number of times to resample the dataset.
+      confidence: The desired confidence level.
+      seed: The seed for the random number generator.
+
+    Returns:
+      A BootstrapParams object.
+    """
+    if not 0 < confidence < 1:
+      raise ValueError(f'confidence must be in (0, 1), got {confidence}.')
+    alpha = 1 - confidence
+    quantiles = (alpha / 2, 1 - alpha / 2)
+    return cls(num_samples=num_samples, quantiles=quantiles, seed=seed)
 
 
 def _log_sub(x, y):
@@ -71,6 +103,71 @@ def _clopper_pearson_upper(
     n Bernoilli(p) trials is approximately alpha.
   """
   return scipy.stats.beta.ppf(1 - alpha, k + 1, n - k)
+
+
+@jax.jit
+def _signed_area(a, b, c):
+  """Computes (twice) the signed area of the triangle formed by three points."""
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+@jax.jit
+def _pareto_frontier_jax(points: jnp.ndarray) -> tuple[jnp.ndarray, jax.Array]:
+  """JAX implementation of _pareto_frontier."""
+
+  # Use the simple linear-time algorithm of Graham & Yao (1983).
+
+  def scan_fn(carry, point):
+    hull, n = carry
+
+    def cond_fn(n):
+      return (n > 1) & (_signed_area(hull[n - 2], hull[n - 1], point) >= 0)
+
+    def body_fn(n):
+      return n - 1
+
+    # Pop points from the end of the hull until the current point makes a
+    # clockwise turn from the last two.
+    n = jax.lax.while_loop(cond_fn, body_fn, n)
+
+    # Add the current point.
+    hull = hull.at[n].set(point)
+    return (hull, n + 1), None  # We don't need the scan to output anything.
+
+  n = 2  # Number of points in the hull.
+  hull = jnp.empty_like(points)
+  hull = hull.at[:n].set(points[:n])
+
+  (hull, n), _ = jax.lax.scan(scan_fn, (hull, n), points[n:])
+  return hull, n  # pytype: disable=bad-return-type  # lax-types
+
+
+def _pareto_frontier(points: np.ndarray) -> np.ndarray:
+  """Computes the pareto frontier of a piecewise linear function.
+
+  Given a piecewise linear function defined by a sequence of points, computes
+  the set of points that are not weakly linearly dominated by any pair of outer
+  points. That is, given a list of points (sorted by x coordinate), retain only
+  points (x_i, y_i) for which there do not exist j < i and k > i and number a
+  with 0 <= a <= 1 such that x_i = (1-a)x_j + ax_k and y_i <= (1-a)y_j + ay_k.
+
+  Args:
+    points: An array of shape (N, 2) with N >= 2 containing the vertices
+      defining the segments of the piecewise linear function, sorted by x
+      coordinate.
+
+  Returns:
+    A numpy array of shape (M, 2) with 2 <= M <= N, containing the subset of
+    vertices_np on the pareto frontier.
+  """
+  if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 2:
+    raise ValueError(f'Expected at least two 2D points, got {points.shape}.')
+
+  if not np.all(points[:-1, 0] <= points[1:, 0]):
+    raise ValueError('Expected points to be sorted by x-coordinate.')
+
+  hull, n = _pareto_frontier_jax(jnp.array(points))
+  return np.array(hull[:n])
 
 
 def _get_tn_fn_counts(
@@ -111,11 +208,8 @@ def _get_tn_fn_counts(
   tn_counts = np.searchsorted(out_sorted, thresholds, side='left')
 
   counts = np.stack([fn_counts, tn_counts], axis=1)
-  counts = auditing_utils.get_convex_hull(counts)
-  # TODO: b/410531037 - Avoid np.unstack temporarily due to numpy version
-  # mismatch with dp_accounting.
-  # fn_counts, tn_counts = np.unstack(counts, axis=1)
-  fn_counts, tn_counts = tuple(np.moveaxis(counts, source=1, destination=0))
+  counts = _pareto_frontier(counts)
+  fn_counts, tn_counts = np.unstack(counts, axis=1)
 
   return tn_counts, fn_counts
 
@@ -181,15 +275,15 @@ class CanaryScoreAuditor:
       self,
       fn: Callable[['CanaryScoreAuditor'], float],
       params: BootstrapParams,
-  ) -> tuple[float, float]:
-    """Computes a confidence interval for a function.
+  ) -> np.ndarray:
+    """Computes bootstrapped quantiles for a function.
 
     Args:
       fn: A function of a CanaryScoreAuditor returning a scalar.
       params: The parameters for the bootstrap.
 
     Returns:
-      A tuple representing the confidence interval.
+      An array of bootstrapped quantiles.
     """
     rng = np.random.default_rng(seed=params.seed)
     seeds = rng.integers(np.iinfo(np.int64).max, size=params.num_samples)
@@ -207,8 +301,7 @@ class CanaryScoreAuditor:
     with futures.ThreadPoolExecutor() as pool:
       values = list(pool.map(get_value, seeds))
 
-    q = (1 - params.confidence) / 2
-    return tuple(np.quantile(values, (q, 1 - q)))
+    return np.quantile(values, params.quantiles)
 
   def epsilon_lower_bound(
       self,
@@ -255,7 +348,7 @@ class CanaryScoreAuditor:
       one_sided: bool = True,
       *,
       bootstrap_params: BootstrapParams | None = None,
-  ) -> float | tuple[float, float]:
+  ) -> float | np.ndarray:
     """Estimates epsilon from raw count statistics of seen/unseen canaries.
 
     `min_count` is the minimum number of TP/FP (TN/FN) required to consider a
@@ -267,7 +360,9 @@ class CanaryScoreAuditor:
       min_count: Only consider thresholds with this many TP/FP (TN/FN).
       delta: Approximate DP delta.
       one_sided: Whether to use only TPR/FPR (vs. max of TPR/FPR and TNR/FNR).
-      bootstrap_params: If provided, compute and return a confidence interval of
+      bootstrap_params: If provided, compute and return bootstrapped quantiles
+        of the estimate. Note that this should not be interpreted as a formal
+        confidence interval on the true epsilon, merely a confidence interval of
         the estimate.
 
     Returns:
@@ -303,15 +398,15 @@ class CanaryScoreAuditor:
       fpr: np.typing.ArrayLike,
       *,
       bootstrap_params: BootstrapParams | None = None,
-  ) -> np.ndarray | tuple[float, float]:
+  ) -> np.ndarray | float:
     """Computes maximum TPR at a given FPR.
 
     Args:
       fpr: The desired false positive rate. May be a scalar, or an array of
         independent FPR values, in which case an array of the same shape is
         returned with the TPR at each FPR.
-      bootstrap_params: If provided, compute and return a confidence interval of
-        the TPR. `fpr` must be a scalar in this case.
+      bootstrap_params: If provided, compute and return bootstrapped quantiles
+        of the TPR. `fpr` must be a scalar in this case.
 
     Returns:
       The maximum true positive rate at the given false positive rate,
@@ -359,12 +454,12 @@ class CanaryScoreAuditor:
       self,
       *,
       bootstrap_params: BootstrapParams | None = None,
-  ) -> float | tuple[float, float]:
+  ) -> float | np.ndarray:
     """Computes the area under the ROC curve from the attack scores.
 
     Args:
-      bootstrap_params: If provided, compute and return a confidence interval of
-        the AUROC.
+      bootstrap_params: If provided, compute and return bootstrapped quantiles
+        of the AUROC.
 
     Returns:
       The area under the ROC curve from the attack scores, allowing classifiers
@@ -375,10 +470,13 @@ class CanaryScoreAuditor:
 
     # Calculate AUROC using the trapezoidal rule. Since we have TN counts and FN
     # counts handy, we're actually computing the area under the curve of the TNR
-    # as a function of FNR, which is equivalent.
+    # as a function of FNR, which is equivalent. Cast to float64 to prevent
+    # overflow.
+    tn_counts_float = self._tn_counts.astype(np.float64)
+    fn_counts_float = self._fn_counts.astype(np.float64)
     unnorm = np.dot(
-        self._tn_counts[:-1] + self._tn_counts[1:],
-        self._fn_counts[1:] - self._fn_counts[:-1],
+        tn_counts_float[:-1] + tn_counts_float[1:],
+        fn_counts_float[1:] - fn_counts_float[:-1],
     )
     return 0.5 * unnorm / (self._n_in * self._n_out)
 

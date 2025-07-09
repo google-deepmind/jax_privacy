@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -147,7 +147,12 @@ def tree_map_add_normal_noise(
   )
 
   def with_noise(rng: chex.Array, x: chex.Array) -> chex.Array:
-    scale = jnp.asarray(noise_std, dtype=x.dtype)
-    return x + scale * jax.random.normal(rng, shape=x.shape, dtype=x.dtype)
+    x_dtype = x.dtype
+    x = x.astype(jnp.float32)
+    scale = jnp.asarray(noise_std, dtype=jnp.float32)
+    x_with_noise = x + scale * jax.random.normal(
+        rng, shape=x.shape, dtype=jnp.float32
+    )
+    return x_with_noise.astype(x_dtype)
 
   return jax.tree_util.tree_map(with_noise, rng_tree, tree)

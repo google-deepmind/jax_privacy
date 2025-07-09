@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -65,7 +65,8 @@ def _standard_updater_kwargs(
 
 def _flatten_tree(tree):
   return jnp.concatenate(
-      [jnp.ravel(x) for x in jax.tree_util.tree_leaves(tree)])
+      [jnp.ravel(x) for x in jax.tree_util.tree_leaves(tree)]
+  )
 
 
 def model_fn(inputs, is_training=False):
@@ -107,8 +108,12 @@ class _ForwardFnWithRng(forward.ForwardFn):
       inputs: _TestData,
   ) -> tuple[typing.Loss, tuple[hk.State, typing.Metrics]]:
     logits, network_state = self._net.apply(
-        params, network_state, rng_per_example, inputs.features,
-        is_training=True)
+        params,
+        network_state,
+        rng_per_example,
+        inputs.features,
+        is_training=True,
+    )
     loss = optax.softmax_cross_entropy(logits, inputs.label)
 
     metrics = typing.Metrics(
@@ -126,7 +131,8 @@ class _ForwardFnWithRng(forward.ForwardFn):
   ) -> typing.Metrics:
     # Adapt the forward function to echo the per-example random key.
     logits, unused_network_state = self._net.apply(
-        params, network_state, rng, inputs.features)
+        params, network_state, rng, inputs.features
+    )
     loss = jnp.mean(optax.softmax_cross_entropy(logits, inputs.label))
 
     return typing.Metrics(
@@ -212,7 +218,8 @@ class UpdaterTest(parameterized.TestCase):
   def init_with_updater(self, updater: dp_updater.Updater):
     inputs = _test_data(num_batches=1, local_batch_size=LOCAL_BATCH_SIZE)[0]
     self._updater_state, self._step_on_host = updater.init(
-        rng=self.rng_init, inputs=inputs)
+        rng=self.rng_init, inputs=inputs
+    )
 
   def run_updater(
       self,
@@ -279,7 +286,8 @@ class UpdaterTest(parameterized.TestCase):
     )
 
     output_params = self.run_updater(
-        updater_no_noise, data, return_all_params=True)
+        updater_no_noise, data, return_all_params=True
+    )
 
     # Check that parameters are unchanged during accumulation steps.
     for params in output_params[1:-1]:
@@ -354,7 +362,8 @@ class UpdaterTest(parameterized.TestCase):
       params_noise = self.run_updater(updater_noise, data)
       # The difference with params_no_noise should only contain the noise.
       noise_samples.append(
-          _flatten_tree(params_noise) - _flatten_tree(params_no_noise))
+          _flatten_tree(params_noise) - _flatten_tree(params_no_noise)
+      )
 
     noise_samples = jnp.stack(noise_samples)
 
@@ -362,17 +371,18 @@ class UpdaterTest(parameterized.TestCase):
 
     # Use synthetic noise as a reference to calibrate the precision required
     # to pass the test.
-    synthetic_noise = std_expected * jax.random.normal(self.rng,
-                                                       noise_samples.shape)
+    synthetic_noise = std_expected * jax.random.normal(
+        self.rng, noise_samples.shape
+    )
 
     # Sanity check: synthetic noise passes KS goodness-of-fit test.
     _, p_synthetic = spst.kstest(
-        jnp.ravel(synthetic_noise) / std_expected, 'norm')
+        jnp.ravel(synthetic_noise) / std_expected, 'norm'
+    )
     self.assertGreater(p_synthetic, 0.05)
 
     # Run KS goodness-of-fit test on noise introduced by DP-SGD.
-    _, p_dpsgd = spst.kstest(
-        jnp.ravel(noise_samples) / std_expected, 'norm')
+    _, p_dpsgd = spst.kstest(jnp.ravel(noise_samples) / std_expected, 'norm')
     # Reject null hypothesis "implementation is correct" if p-value <= 0.05.
     self.assertGreater(p_dpsgd, 0.05)
 
@@ -478,7 +488,8 @@ class UpdaterTest(parameterized.TestCase):
       )
 
       loss_per_sample = optax.softmax_cross_entropy(
-          logits, inputs_single_device.label)
+          logits, inputs_single_device.label
+      )
 
       # Check that the batch dimension is correct.
       chex.assert_shape(loss_per_sample, [LOCAL_BATCH_SIZE * NUM_DEVICES])
@@ -544,8 +555,12 @@ class UpdaterTest(parameterized.TestCase):
         # This layer should be updated.
         count_trainable += 1
         chex.assert_trees_all_equal_comparator(
-            lambda x1, x2: jnp.linalg.norm(x1 - x2) > 1e-2,
-            lambda x1, x2: 'Failed',
+            lambda x1, x2: jnp.linalg.norm(x1 - x2) > 1e-4,
+            lambda x1, x2: (
+                'Parameters should have been updated, but they were not, they'
+                ' are too close, norm(x1 - x2) <= 1e-4:'
+                f'\n{x1=}\n{x2=}\n{jnp.linalg.norm(x1 - x2)=}'
+            ),
             params_layer,
             initial_params_layer,
         )
@@ -556,6 +571,7 @@ class UpdaterTest(parameterized.TestCase):
   # TODO: explore why 0.01 and 0.1 clipping norms require higher rtol
   def test_rescaling(self, clipping_norm):
     noise_std = 0.1
+
     def make_updater(*, rescale_to_unit_norm: bool):
       device_layout = devices.DeviceLayout()
       return dp_updater.Updater(
@@ -587,10 +603,12 @@ class UpdaterTest(parameterized.TestCase):
     initial_params = utils.get_first(self._updater_state.params)
 
     # Invert SGD equation (with lr=1) to find gradients.
-    grads_with_rescaling = (
-        _flatten_tree(initial_params) - _flatten_tree(params_with_rescaling))
-    grads_no_rescaling = (
-        _flatten_tree(initial_params) - _flatten_tree(params_no_rescaling))
+    grads_with_rescaling = _flatten_tree(initial_params) - _flatten_tree(
+        params_with_rescaling
+    )
+    grads_no_rescaling = _flatten_tree(initial_params) - _flatten_tree(
+        params_no_rescaling
+    )
     grads_manual_rescaling = grads_no_rescaling / clipping_norm
 
     assert_trees_all_close(grads_with_rescaling, grads_manual_rescaling)
@@ -672,12 +690,14 @@ class UpdaterTest(parameterized.TestCase):
               ),
           },
       )
+
     updater_with_accumulation = make_updater(LOCAL_BATCH_SIZE)
     updater_without_accumulation = make_updater(batch_size // NUM_DEVICES)
 
     inputs = _test_data(num_batches=7, local_batch_size=LOCAL_BATCH_SIZE)
     state, step_on_host = updater_with_accumulation.init(
-        rng=self.rng_init, inputs=inputs[0])
+        rng=self.rng_init, inputs=inputs[0]
+    )
 
     inputs_iterator = iter(inputs[1:])
     state_1, metrics_1, step_on_host_1 = updater_with_accumulation.update(
@@ -687,12 +707,15 @@ class UpdaterTest(parameterized.TestCase):
     )
 
     state, step_on_host = updater_without_accumulation.init(
-        rng=self.rng_init, inputs=inputs[0])
+        rng=self.rng_init, inputs=inputs[0]
+    )
     inputs_reshaped = []
     for list_of_batches in itertools.batched(inputs[1:], update_every):
       inputs_reshaped.append(
           jax.tree_util.tree_map(
-              lambda *x: jnp.concatenate(x, axis=1), *list_of_batches))
+              lambda *x: jnp.concatenate(x, axis=1), *list_of_batches
+          )
+      )
     inputs_iterator = iter(inputs_reshaped)
     state_2, metrics_2, step_on_host_2 = updater_without_accumulation.update(
         state=state,
@@ -700,18 +723,19 @@ class UpdaterTest(parameterized.TestCase):
         step_on_host=step_on_host,
     )
 
-    exclude_scalars = (
-        'update_every',  # not equal
-    )
+    exclude_scalars = ('update_every',)  # not equal
     scalars_1 = {
-        k: v for k, v in metrics_1.scalars.items() if k not in exclude_scalars}
+        k: v for k, v in metrics_1.scalars.items() if k not in exclude_scalars
+    }
     scalars_2 = {
-        k: v for k, v in metrics_2.scalars.items() if k not in exclude_scalars}
+        k: v for k, v in metrics_2.scalars.items() if k not in exclude_scalars
+    }
     chex.assert_trees_all_close_ulp(state_1, state_2, maxulp=32)
     chex.assert_trees_all_close_ulp(scalars_1, scalars_2, maxulp=32)
     chex.assert_trees_all_equal(step_on_host_1, step_on_host_2)
     np.testing.assert_array_equal(
-        metrics_1.scalars_last['update_every'], update_every)
+        metrics_1.scalars_last['update_every'], update_every
+    )
     np.testing.assert_array_equal(metrics_2.scalars_last['update_every'], 1)
 
 

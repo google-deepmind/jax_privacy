@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -458,9 +458,13 @@ class ImageClassificationAuditEvaluator(evaluator.ImageClassificationEvaluator):
     metrics['num_samples'] = num_samples
 
     for params_name, logits in logits_by_params.items():
-      metrics[f'logits_{params_name}'] = logits.asarray()
-
-    for params_name, labels in labels_by_params.items():
-      metrics[f'labels_{params_name}'] = labels.asarray()
+      logits_array = logits.asarray()
+      if params_name in labels_by_params:
+        labels_array = labels_by_params[params_name].asarray()
+        loss_values = np.sum(
+            -jax.nn.log_softmax(logits_array) * labels_array, axis=-1
+        )
+        for i, loss_value in enumerate(loss_values):
+          metrics[f'loss_{i}_{params_name}'] = float(loss_value)
 
     return metrics
