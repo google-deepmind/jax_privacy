@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,6 +29,8 @@ from jax_privacy.dp_sgd import gradients
 from jax_privacy.dp_sgd import typing
 import numpy as np
 import optax
+
+jax.config.update('jax_threefry_partitionable', False)
 
 
 def _tree_dot(w: chex.ArrayTree, x: chex.ArrayTree) -> chex.Array:

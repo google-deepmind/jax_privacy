@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import functools
-import os
+import importlib
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -50,15 +50,19 @@ _PER_EXAMPLE_GRAD_METHODS = [
             use_shard_alike=False,
         ),
     ),
-    (
-        'vectorized_reshape_then_vmap_shard_alike',
-        functools.partial(
-            grad_clipping._value_and_clipped_grad_reshape_then_vmap,
-            spmd_axis_name=SPMD_AXIS_NAME,
-            use_shard_alike=True,
-        ),
-    ),
 ]
+
+if importlib.util.find_spec('drjax'):
+  _PER_EXAMPLE_GRAD_METHODS.append(
+      (
+          'vectorized_reshape_then_vmap_shard_alike',
+          functools.partial(
+              grad_clipping._value_and_clipped_grad_reshape_then_vmap,
+              spmd_axis_name=SPMD_AXIS_NAME,
+              use_shard_alike=True,
+          ),
+      ),
+  )
 
 
 def grad_clipped_per_sample_naive(forward_fn, clipping_norm):
@@ -74,7 +78,8 @@ def grad_clipped_per_sample_naive(forward_fn, clipping_norm):
 
   def clipped_grad_fn(params, network_state, rng_per_example, inputs):
     loss, (network_state, metrics) = forward_fn(
-        params, network_state, rng_per_example, inputs)
+        params, network_state, rng_per_example, inputs
+    )
     batch_size = inputs.shape[0]
     grads = jax.tree_util.tree_map(jnp.zeros_like, params)
     grad_norms = []
@@ -84,10 +89,12 @@ def grad_clipped_per_sample_naive(forward_fn, clipping_norm):
       # Forward function expects a batch dimension.
       input_i = jnp.expand_dims(inputs[i], 0)
       grad_i, unused_aux = grad_fn(
-          params, network_state, rng_per_example, input_i)
+          params, network_state, rng_per_example, input_i
+      )
 
       norm_grad_i = jnp.sqrt(
-          sum(jnp.sum(x**2) for x in jax.tree_util.tree_leaves(grad_i)))
+          sum(jnp.sum(x**2) for x in jax.tree_util.tree_leaves(grad_i))
+      )
 
       # multiplicative factor equivalent to clipping norm
       coeff = jnp.minimum(1, clipping_norm / norm_grad_i) / batch_size
@@ -112,6 +119,7 @@ class TestClippedGradients(chex.TestCase):
 
   def setUp(self):
     super().setUp()
+    chex.set_n_cpu_devices(8)
 
     self.model_dim = 5
     self.clipping_norm = 1e-4
@@ -145,7 +153,8 @@ class TestClippedGradients(chex.TestCase):
 
   @parameterized.named_parameters(_PER_EXAMPLE_GRAD_METHODS)
   def test_clipped_gradients(
-      self, per_example_grad_method: grad_clipping.PerExampleGradMethod):
+      self, per_example_grad_method: grad_clipping.PerExampleGradMethod
+  ):
     value_and_grad_fn = jax.value_and_grad(self.forward, has_aux=True)
     clipping_fn = grad_clipping.global_clipping(
         clipping_norm=self.clipping_norm
@@ -175,7 +184,4 @@ class TestClippedGradients(chex.TestCase):
 
 
 if __name__ == '__main__':
-  os.environ['XLA_FLAGS'] = (
-      '--xla_force_host_platform_device_count=8'  # Use 8 CPU devices
-  )
   absltest.main()

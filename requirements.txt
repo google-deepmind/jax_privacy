@@ -1,32 +1,20 @@
-# Requirements for jax_privacy developmnent.
-#
-# NOTE: This file includes dependencies needed for development,
-# including the experiments/ and examples/ directories.
-# Requirements for the core library are more limited (e.g.,
-# no tensorflow or tensorflow_datasets).
+# Requirements for the jax privacy core libary.
+
+# NOTE: Some experiments and examples that utilize this library may require
+# additional dependencies, like ML frameworks.
 
 
 absl-py
-Cython
-dinosaur
-dm-haiku==0.0.13
-dp_accounting==0.4.4
-drjax
+dp_accounting
 einshape @ git+https://github.com/google-deepmind/einshape
-equinox
 grain
 hypothesis
-jax==0.4.37
-jaxlib==0.4.36
-jaxline @ git+https://github.com/deepmind/jaxline.git
+jax==0.6.2
+jaxlib==0.6.2
 jaxtyping
+pydantic
 ml_collections
 more_itertools==10.1.0
 numpy
 optax
-orbax
-scikit-learn==1.5.0
 scipy
-sympy
-tensorflow
-tensorflow_datasets

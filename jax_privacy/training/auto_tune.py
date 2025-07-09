@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,6 +30,8 @@ def dp_auto_tune(
     num_updates: int,
     dp_config: experiment_config.DpConfig,
     num_examples_per_user: int | None = None,
+    cycle_length: int | None = None,
+    truncated_batch_size: int | None = None,
 ) -> tuple[float | None, int, float, int]:
   """Auto-tune DP parameters so that we can obtain the desired DP guarantees.
 
@@ -39,6 +41,10 @@ def dp_auto_tune(
     num_updates: number of updates to be performed.
     dp_config: Configuration for DP.
     num_examples_per_user: Number of examples per user.
+    cycle_length: If using cyclic Poisson sampling with BandMF, the length of
+      the cycle.
+    truncated_batch_size: If using truncated Poisson sampling, the maximum batch
+      size to truncate to.
 
   Returns:
     Potentially updated values for dp_epsilon, num_updates, noise_multiplier,
@@ -61,6 +67,8 @@ def dp_auto_tune(
       num_samples=num_samples,
       batch_size=batch_sizes,
       examples_per_user=num_examples_per_user,
+      cycle_length=cycle_length,
+      truncated_batch_size=truncated_batch_size,
   )
   if auto_tune == 'epsilon':
     epsilon: float = accountant.compute_epsilon(num_updates, dp_params)
@@ -73,6 +81,8 @@ def dp_auto_tune(
         num_samples=num_samples,
         target_delta=dp_config.delta,
         examples_per_user=num_examples_per_user,
+        cycle_length=cycle_length,
+        truncated_batch_size=truncated_batch_size,
     )
   elif auto_tune == 'noise_multiplier':
     noise_multiplier: float = accounting.calibrate_noise_multiplier(
@@ -83,6 +93,8 @@ def dp_auto_tune(
         num_samples=num_samples,
         target_delta=dp_config.delta,
         examples_per_user=num_examples_per_user,
+        cycle_length=cycle_length,
+        truncated_batch_size=truncated_batch_size,
     )
   elif auto_tune == 'batch_size':
     batch_sizes: int = accounting.calibrate_batch_size(
@@ -93,6 +105,8 @@ def dp_auto_tune(
         num_samples=num_samples,
         target_delta=dp_config.delta,
         examples_per_user=num_examples_per_user,
+        cycle_length=cycle_length,
+        truncated_batch_size=truncated_batch_size,
     )
   else:
     raise ValueError(f'Unsupported auto-tuning option: {auto_tune}.')
@@ -104,6 +118,8 @@ def dp_auto_tune_config(
     training_config: experiment_config.TrainingConfig,
     num_samples: int,
     num_examples_per_user: int | None = None,
+    cycle_length: int | None = None,
+    truncated_batch_size: int | None = None,
 ) -> experiment_config.TrainingConfig:
   """Apply DP auto-tuning to the config (modified in-place)."""
   if training_config.batch_size.scale_schedule is not None:
@@ -115,6 +131,8 @@ def dp_auto_tune_config(
       num_samples=num_samples,
       dp_config=training_config.dp,
       num_examples_per_user=num_examples_per_user,
+      cycle_length=cycle_length,
+      truncated_batch_size=truncated_batch_size,
   )
 
   algorithm = algorithm_config.DpsgdConfig(noise_multiplier=noise_multiplier)

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -51,46 +51,61 @@ class DPKerasConfig:
   """Parameters for adding DP-SGD to a Keras model.
 
   Attributes:
-    epsilon: The epsilon that defines the differential-privacy budget. It should
-      be in (0; +infinity) range. 0 means perfect privacy guarantee (not
-      achievable in practice due to infinite noise), +infinity means no privacy
-      guarantee. A commonly used value is ln(3) (smaller value more noise). You
-      should set this value before training and only based on the privacy
-      guarantees you have to achieve. You should not increase the epsilon only
-      because of poor model performance.
-    delta: The delta that defines the differential-privacy budget. The value of
-      it means the probablility of full disclosure, no-privacy. It should be in
-      (0, 1] and be as small as possible (e.g. 1e-5, smaller value more noise).
-      You should set this value before training and only based on the privacy
-      guarantees you have to achieve. You should not increase the delta only
-      because of poor model performance.
-    clipping_norm: The clipping norm for the gradients.
-    batch_size: The batch size for the training.
-    train_steps: The number of training steps (optimizer update steps). If you
-      try to train the model for more steps, it will fail. If you train by
-      epochs, then it is epochs * (train_size // batch_size). If you train while
-      the dataset iterator is not over then it is the length of the dataset
-      iterator.
-    train_size: The number of training examples in the dataset. If you repeat
-      the examples in your dataset iterator, it should be the number of training
-      examples in the original dataset before repeating.
-    noise_multiplier: The noise multiplier for the gradients. If None, the noise
-      multiplier will be automatically calculated based on the DP training
-      parameters: epsilon, delta, batch_size, train_steps, train_size. The noise
-        added to average of gradients per batch is normal with mean 0 and
-        stddev= noise_multiplier * clipping_norm / batch_size.
-    rescale_to_unit_norm: Whether to rescale the gradients to unit norm.
-      Simplifies learning-rate tuning, see https://arxiv.org/abs/2204.13650.
-    clipping_method: To optimize memory or speed when computing clipped
-      gradients.
-    seed: The seed for the random number generator. If None, a random seed is
-      used. It must be an int64.
+      epsilon: The epsilon that defines the differential-privacy budget. It
+        should be in (0; +infinity) range. 0 means perfect privacy guarantee
+        (not achievable in practice due to infinite noise), +infinity means no
+        privacy guarantee. A commonly used value is ln(3) (smaller value more
+        noise). You should set this value before training and only based on the
+        privacy guarantees you have to achieve. You should not increase the
+        epsilon only because of poor model performance.
+      delta: The delta that defines the differential-privacy budget. The value
+        of it means the probablility of full disclosure, no-privacy. It should
+        be in (0, 1] and be as small as possible (e.g. 1e-5, smaller value more
+        noise). You should set this value before training and only based on the
+        privacy guarantees you have to achieve. You should not increase the
+        delta only because of poor model performance.
+      clipping_norm: The clipping norm for the gradients. TODO: how to choose
+        it?
+      batch_size: The batch size for the training.
+      gradient_accumulation_steps: The number of gradient accumulation steps.
+        This is the number of batches to accumulate before adding noise and
+        performing an optimizer step. 1 means that there is no gradient
+        accumulation, each optimizer step is performed after a single batch.
+        This parameter defines the effective batch size = (physical) batch_size
+        * gradient_accumulation_steps, i.e. the real accumulated batch size used
+        for the model update. Usually DP training provides better accuracy with
+        larger effective batch size, therefore it is recommended to set
+        gradient_accumulation_steps to a value larger than 1. In many cases, you
+        won't be able to set the physical batch size to a large enough value due
+        to memory constraints, therefore gradient accumulation technique is very
+        useful during DP training.
+      train_steps: The number of training steps (optimizer update steps). If you
+        try to train the model for more steps, it will fail. If you train by
+        epochs, then it is epochs * (train_size // batch_size). If you train
+        while the dataset iterator is not over then it is the length of the
+        dataset iterator.
+      train_size: The number of training examples in the dataset. If you repeat
+        the examples in your dataset iterator, it should be the number of
+        training examples in the original dataset before repeating.
+      noise_multiplier: The noise multiplier for the gradients. If None
+        (recommended), the noise multiplier will be automatically calculated
+        based on epsilon, delta, effective_batch_size, train_steps and
+        train_size. The noise added to the average of gradients per total batch
+        is normal with mean 0 and stddev = noise_multiplier * clipping_norm /
+        effective_batch_size.
+      rescale_to_unit_norm: Whether to rescale the gradients to unit norm.
+        Simplifies learning-rate tuning, see https://arxiv.org/abs/2204.13650.
+      seed: The seed for the random number generator. If None, a random seed is
+        used. It must be an int64. Useful for reproducibility.
+      clipping_method: To optimize memory or speed when computing clipped
+        gradients. Defaults to SPEED_OPTIMIZED, usually no need to change it.
   """
 
   epsilon: float
   delta: float
   clipping_norm: float
   batch_size: int
+  gradient_accumulation_steps: int
   train_steps: int
   train_size: int
   noise_multiplier: float | None = None
@@ -105,6 +120,14 @@ class DPKerasConfig:
       )
   )
 
+  @property
+  def effective_batch_size(self) -> int:
+    """The effective batch size which is used for the model update.
+
+    It equals to batch_size * gradient_accumulation_steps.
+    """
+    return self.batch_size * self.gradient_accumulation_steps
+
   def update_with_calibrated_noise_multiplier(self) -> 'DPKerasConfig':
     """Calculates the noise multiplier for the given DP training parameters.
 
@@ -114,14 +137,14 @@ class DPKerasConfig:
     """
     print(
         f'Calculating noise multiplier for: {self.epsilon=},'
-        f' {self.delta=}, {self.batch_size=}, {self.train_steps=},'
+        f' {self.delta=}, {self.effective_batch_size=}, {self.train_steps=},'
         f' {self.train_size=}. This might take a few minutes.'
     )
     calculated_noise_multiplier = calibrate.calibrate_noise_multiplier(
         target_epsilon=self.epsilon,
         target_delta=self.delta,
         accountant=self._accountant,
-        batch_sizes=self.batch_size,
+        batch_sizes=self.effective_batch_size,
         num_updates=self.train_steps,
         num_samples=self.train_size,
     )
@@ -150,6 +173,11 @@ class DPKerasConfig:
       raise ValueError(f'Train steps {self.train_steps} must be positive.')
     if self.train_size <= 0:
       raise ValueError(f'Train size {self.train_size} must be positive.')
+    if self.gradient_accumulation_steps <= 0:
+      raise ValueError(
+          f'Gradient accumulation steps {self.gradient_accumulation_steps} must'
+          ' be positive.'
+      )
     if self.noise_multiplier is not None:
       if self.noise_multiplier <= 0:
         raise ValueError(
@@ -185,17 +213,18 @@ class DPKerasConfig:
 
 
 def make_private(model: keras.Model, params: DPKerasConfig):
-  """Adds DP-SGD training to a Keras model.
+  """Adds DP-SGD training to a Keras model without modifying its API.
 
   This function modifies `model` in-place by adding attributes and replaces
-  methods (e.g. it replaces train_step) and returns the modified model.
+  methods (e.g. it replaces train_step) and returns the modified model. The API
+  of the model is not modified, i.e. you can use it as a usual Keras model.
 
   Args:
     model: The Keras model to add DP-SGD training to.
     params: The parameters for DP-SGD training.
 
   Returns:
-    The modified Keras model.
+    The Keras model with overloaded methods for DP-SGD training.
   """
   _validate_model(model)
 
@@ -213,7 +242,9 @@ def make_private(model: keras.Model, params: DPKerasConfig):
   #    that updates the metrics variables for DP-SGD training.
 
   _add_dp_sgd_attributes(model, params)
-  model.fit = types.MethodType(_create_fit_fn_with_validation(model.fit), model)
+  model.fit = types.MethodType(
+      _create_fit_fn_with_validation(model.fit, params), model
+  )
   model.train_step = types.MethodType(_dp_train_step, model)
   if not hasattr(model, '_update_metrics_variables'):
     # _update_metrics_variables was extracted from train_step recently in
@@ -233,6 +264,23 @@ def _validate_model(model: keras.Model):
     raise ValueError(f'Model {model} must use Jax backend.')
   # TODO: Add validation that the model does not contain layers
   # that are not compatible with DP-SGD, e.g. batch norm.
+
+
+def _validate_optimizer(model: keras.Model, params: DPKerasConfig):
+  optimizer_gradient_accumulation_steps = (
+      model.optimizer.gradient_accumulation_steps or 1
+  )
+  dp_params_gradient_accumulation_steps = params.gradient_accumulation_steps
+  if (
+      optimizer_gradient_accumulation_steps
+      != dp_params_gradient_accumulation_steps
+  ):
+    raise ValueError(
+        'optimizer.gradient_accumulation_steps ='
+        f' {optimizer_gradient_accumulation_steps} must be equal to'
+        ' DPKerasConfig.gradient_accumulation_steps ='
+        f' {dp_params_gradient_accumulation_steps}.'
+    )
 
 
 def _add_dp_sgd_attributes(model: keras.Model, params: DPKerasConfig) -> None:
@@ -272,9 +320,14 @@ def _get_gradient_computer(
       if params.noise_multiplier is not None
       else params.update_with_calibrated_noise_multiplier().noise_multiplier
   )
+  # We use the additivity of Gaussian random variables to calculate the noise
+  # multiplier per batch.
+  noise_multiplier_per_batch = noise_multiplier / np.sqrt(
+      params.gradient_accumulation_steps
+  )
   return jp_gradients.DpsgdGradientComputer(
       clipping_norm=params.clipping_norm,
-      noise_multiplier=noise_multiplier,
+      noise_multiplier=noise_multiplier_per_batch,
       rescale_to_unit_norm=params.rescale_to_unit_norm,
       per_example_grad_method=clip_method,
   )
@@ -282,6 +335,7 @@ def _get_gradient_computer(
 
 def _create_fit_fn_with_validation(
     original_fit_fn: typing.Callable[..., typing.Any],
+    params: DPKerasConfig,
 ):
   """Creates a fit function with validation for DP-SGD training.
 
@@ -293,6 +347,7 @@ def _create_fit_fn_with_validation(
 
   Args:
     original_fit_fn: The original fit function of the Keras model.
+    params: The parameters for DP-SGD training.
 
   Returns:
     The fit function with same signature as original_fit_fn but with validation
@@ -305,10 +360,18 @@ def _create_fit_fn_with_validation(
       *args,
       **kwargs,
   ):
+    _validate_optimizer(self, self._dp_params)  # pylint: disable=protected-access
     fit_signature = inspect.signature(original_fit_fn)
 
+    # batch_size is not set explicitely in the fit() call if the input dataset
+    # is already batched. In this case, we assume that the batch sizes are
+    # aligned and use the batch size from the DP parameters. We will check that
+    # the batch sizes are aligned in the train_step function.
+    batch_size = (
+        _get_param(fit_signature, 'batch_size', *args, **kwargs)
+        or params.batch_size
+    )
     # Default values are set according to the Keras documentation.
-    batch_size = _get_param(fit_signature, 'batch_size', *args, **kwargs) or 32
     epochs = _get_param(fit_signature, 'epochs', *args, **kwargs) or 1
     initial_epoch = (
         _get_param(fit_signature, 'initial_epoch', *args, **kwargs) or 0
@@ -337,8 +400,7 @@ def _create_fit_fn_with_validation(
     )
     if (
         performed_optimizer_steps + optimizer_steps_to_perform
-        >
-        self._dp_params.train_steps  # pylint: disable=protected-access
+        > self._dp_params.train_steps  # pylint: disable=protected-access
     ):
       raise RuntimeError(
           'fit() cannot be performed because you will run out of privacy'
@@ -398,6 +460,22 @@ def _dp_train_step(self, state, data):
       _,
   ) = state
   x, y, sample_weight = data_adapter_utils.unpack_x_y_sample_weight(data)
+
+  dp_batch_size = self._dp_params.batch_size  # pylint: disable=protected-access
+  actual_batch_size = jax.tree_util.tree_leaves(x)[0].shape[0]
+  if dp_batch_size != actual_batch_size:
+    # it is ok to throw an exception even though we are in a jit function
+    # because the check is based on the static values, i.e. they won't
+    # change between invocations, and if the condition is violated, it will
+    # always fail during the tracing (first invocation) of this function.
+    raise ValueError(
+        'The batch size in the DP parameters is not equal to the batch size of'
+        f' the actual data: {dp_batch_size=} !='
+        f' actual_batch_size={actual_batch_size}. Please make sure that the'
+        ' batch size in the DP parameters is equal to the batch size of the'
+        ' data you supplied in the fit() call.'
+    )  # pylint: disable=protected-access
+
   (_, aux), grads = _noised_clipped_grads(
       self.compute_loss_and_updates,
       self._dp_params,  # pylint: disable=protected-access

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import itertools
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
@@ -20,7 +22,43 @@ from jax_privacy.auditing import canary_score_auditor
 import numpy as np
 
 
+_signed_area = canary_score_auditor._signed_area
+
+_rotations = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
+_inversions = [[0, 2, 1], [1, 0, 2], [2, 1, 0]]
+
+
 class CanaryScoreAuditorTest(parameterized.TestCase):
+
+  def test_bootstrap_params_empty_quantiles(self):
+    with self.assertRaisesRegex(ValueError, 'quantiles cannot be empty'):
+      canary_score_auditor.BootstrapParams(quantiles=[])
+
+  @parameterized.named_parameters(('zero', (0, 0.5)), ('one', (0.5, 1)))
+  def test_bootstrap_params_quantiles_out_of_range(self, quantiles):
+    with self.assertRaisesRegex(ValueError, 'quantiles must be in'):
+      canary_score_auditor.BootstrapParams(quantiles=quantiles)
+
+  def test_bootstrap_params_confidence_interval_illegal_confidence(self):
+    for confidence in [-1, 0, 1, 2]:
+      with self.assertRaisesRegex(ValueError, 'confidence must be in'):
+        canary_score_auditor.BootstrapParams.confidence_interval(
+            confidence=confidence
+        )
+
+  @parameterized.named_parameters(
+      ('95_percent', 0.95, [0.025, 0.975]),
+      ('99_percent', 0.99, [0.005, 0.995]),
+  )
+  def test_bootstrap_params_confidence_interval_correct_quantiles(
+      self,
+      confidence,
+      expected_quantiles,
+  ):
+    params = canary_score_auditor.BootstrapParams.confidence_interval(
+        confidence=confidence
+    )
+    np.testing.assert_almost_equal(params.quantiles, expected_quantiles)
 
   @parameterized.product(
       n=[10, 100, 1000],
@@ -37,6 +75,118 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         alpha,
         rtol=0.05,
     )
+
+  @parameterized.parameters(
+      ([[0, 0], [1, 0], [1, 1]], 1),
+      ([[0, 0], [2, 0], [1, 2]], 4),
+      ([[1, 0], [2, 3], [0, 2]], 5),
+      ([[0, 0], [1, 1], [2, 2]], 0),
+      ([[-4, 3], [6, -2], [-4, 3]], 0),
+  )
+  def test_signed_area(self, points, expected):
+    points = np.array(points)
+    for perm in _rotations:
+      self.assertEqual(_signed_area(*points[perm]), expected)
+    for perm in _inversions:
+      self.assertEqual(_signed_area(*points[perm]), -expected)
+
+  @parameterized.parameters(
+      ((),),
+      ((1,),),
+      ((1, 2),),
+      ((2, 1),),
+      ((2, 3),),
+      ((1, 2, 3),),
+  )
+  def test_pareto_frontier_bad_shape(self, shape):
+    points = np.zeros(shape, dtype=np.int64)
+    with self.assertRaisesRegex(
+        ValueError, 'Expected at least two 2D points'
+    ):
+      canary_score_auditor._pareto_frontier(points)
+
+  def test_pareto_frontier_unsorted(self):
+    points = np.array([[1, 0], [0, 1]])
+    with self.assertRaisesRegex(
+        ValueError, 'Expected points to be sorted'
+    ):
+      canary_score_auditor._pareto_frontier(points)
+
+  def test_pareto_frontier_two_points(self):
+    points = np.array([[0, 0], [1, 1]])
+    frontier = canary_score_auditor._pareto_frontier(points)
+    np.testing.assert_equal(frontier, points)
+
+  def test_pareto_frontier_linear(self):
+    n = 100
+    points = np.stack([range(n), range(n)], axis=1)
+    frontier = canary_score_auditor._pareto_frontier(points)
+    np.testing.assert_equal(frontier, points[[0, -1]])
+
+  def test_pareto_frontier_simple_1(self):
+    points = np.array([[0, 0], [0, 2], [3, 2], [3, 5], [5, 5]])
+    frontier = canary_score_auditor._pareto_frontier(points)
+    np.testing.assert_equal(frontier, points[[0, 1, 3, 4]])
+
+  def test_pareto_frontier_simple_2(self):
+    points = np.array([[0, 0], [0, 2], [2, 2], [2, 3], [3, 3], [3, 5], [5, 5]])
+    frontier = canary_score_auditor._pareto_frontier(points)
+    # Should not contain [3, 3], which is dominated by [0, 2] and [3, 5].
+    np.testing.assert_equal(frontier, points[[0, 1, 5, 6]])
+
+  def test_pareto_frontier_simple_3(self):
+    points = np.array([[0, 0], [0, 2], [1, 2], [1, 4], [3, 4], [3, 5], [5, 5]])
+    frontier = canary_score_auditor._pareto_frontier(points)
+    # Should contain [1, 4], which is not dominated by [0, 2] and [3, 5].
+    np.testing.assert_equal(frontier, points[[0, 1, 3, 5, 6]])
+
+  def test_pareto_frontier_simple_4(self):
+    points = np.array([[0, 0], [0, 2], [1, 2], [1, 3], [2, 3], [2, 4], [4, 4]])
+    frontier = canary_score_auditor._pareto_frontier(points)
+    # Should not contain [1, 3], which is a combination of [0, 2] and [2, 4].
+    np.testing.assert_equal(frontier, points[[0, 1, 5, 6]])
+
+  @parameterized.named_parameters(
+      ('increasing', np.sin, np.pi / 2),
+      ('decreasing', np.cos, np.pi / 2),
+      ('increasing_and_decreasing', np.sin, np.pi),
+  )
+  def test_pareto_frontier_convex(self, fn, bound):
+    xs = np.linspace(0, bound, 100)
+    points = np.stack([xs, fn(xs)], axis=1)
+    frontier = canary_score_auditor._pareto_frontier(points)
+    # On a convex function, the frontier should be the same as the points.
+    np.testing.assert_almost_equal(frontier, points)
+
+  @parameterized.named_parameters(
+      ('increasing', lambda x: -np.cos(x), np.pi / 2),
+      ('decreasing', lambda x: -np.sin(x), np.pi / 2),
+      ('decreasing_and_increasing', lambda x: -np.sin(x), np.pi),
+  )
+  def test_pareto_frontier_concave(self, fn, bound):
+    xs = np.linspace(0, bound, 100)
+    points = np.stack([xs, fn(xs)], axis=1)
+    frontier = canary_score_auditor._pareto_frontier(points)
+    # On a concave function, the frontier should be the first and last points.
+    np.testing.assert_almost_equal(frontier, points[[0, -1]])
+
+  @parameterized.parameters(range(10))
+  def test_pareto_frontier_random(self, seed):
+    n = 80
+    rng = np.random.default_rng(seed=0xBAD5EED + seed)
+    xs = np.linspace(0, np.pi, n)
+    ys = np.sin(xs) + rng.normal(scale=0.1, size=n)
+    points = np.stack([xs, ys], axis=1)
+    frontier = canary_score_auditor._pareto_frontier(points)
+
+    # Compare to simple cubic time algorithm.
+    is_frontier = [True] * n
+    for i, j, k in itertools.combinations(range(n), 3):
+      if _signed_area(points[i], points[j], points[k]) >= 0:
+        is_frontier[j] = False
+    expected_frontier = points[is_frontier]
+
+    np.testing.assert_almost_equal(frontier, expected_frontier)
 
   def test_get_tn_fn_counts(self):
     in_canary_scores = np.arange(4) + 0.5
@@ -241,7 +391,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     out_canary_scores = [1, 2, 3, 5]
 
     # All FP/TP points: (0,0) (0,1) (0,2) (1,2) (1,3) (2,3) (2,4) (3,4) (4,4)
-    # FP/TP hull points: (0,0) (0,2) (1,3) (4,4)
+    # FP/TP frontier points: (0,0) (0,2) (1,3) (4,4)
     # Area using trapezoids: (0 + 2.5 + 10.5) / 16 = 13 / 16
 
     auditor = canary_score_auditor.CanaryScoreAuditor(
@@ -250,11 +400,11 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     self.assertAlmostEqual(auditor.attack_auroc(), 13 / 16)
 
   @parameterized.product(
+      in_samples=(10_000, 100_000),
       out_samples_ratio=(0.5, 1.0, 1.5),
   )
-  def test_attack_auroc_random(self, out_samples_ratio):
+  def test_attack_auroc_random(self, in_samples, out_samples_ratio):
     rng = np.random.default_rng(seed=0xBAD5EED)
-    in_samples = 10_000
     out_samples = int(in_samples * out_samples_ratio)
     in_canary_scores = rng.uniform(0, 1, in_samples)
     out_canary_scores = rng.uniform(0, 1, out_samples)
@@ -288,9 +438,15 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     )
     np.testing.assert_allclose(eps, true_eps, rtol=0.05)
 
-  def test_bootstrap(self):
+  @parameterized.named_parameters(
+      ('left', 0.025),
+      ('right', 0.975),
+      ('two_sided', (0.025, 0.975)),
+      ('two_sided_with_median', (0.025, 0.5, 0.975)),
+  )
+  def test_bootstrap(self, quantiles):
     rng = np.random.default_rng(seed=0xBAD5EED)
-    n = 10000
+    n = 5000
 
     # Compute interval for mean of scores, which we can also get exactly with
     # the central limit theorem. Use any crazy distribution for the data.
@@ -303,12 +459,15 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     def mean_score(a: canary_score_auditor.CanaryScoreAuditor):
       return np.mean([a._in_canary_scores, a._out_canary_scores])
 
-    bootstrap_params = canary_score_auditor.BootstrapParams(seed=0xBAD5EED)
+    bootstrap_params = canary_score_auditor.BootstrapParams(
+        quantiles=quantiles,
+        seed=0xBAD5EED,
+    )
     interval = auditor._bootstrap(mean_score, bootstrap_params)
     mu_hat = np.mean([in_canary_scores, out_canary_scores])
     sigma_hat = np.std([in_canary_scores, out_canary_scores])
-    expected_interval = canary_score_auditor._norm.interval(
-        confidence=bootstrap_params.confidence,
+    expected_interval = canary_score_auditor._norm.ppf(
+        q=quantiles,
         loc=mu_hat,
         scale=sigma_hat / np.sqrt(n),
     )

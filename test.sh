@@ -13,7 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 
-# Runs CI tests on a local machine.
+# Runs unit tests locally.
 set -xeuo pipefail
 
 # Install deps in a virtual env.
@@ -23,38 +23,32 @@ python3 -m venv "${VENV_DIR}"
 source "${VENV_DIR}/bin/activate"
 python --version
 
-# Install dependencies.
-pip install --upgrade pip setuptools wheel
-pip install flake8 pytest-xdist pytype pylint pylint-exit
-pip install -r requirements.txt
-
-# Lint with flake8.
-flake8 `find jax_privacy -name '*.py' | xargs` --count --select=E9,F63,F7,F82,E225,E251 --show-source --statistics
-
-# Lint with pylint.
-PYLINT_ARGS="-efail -wfail -cfail -rfail"
-# Lint modules and tests separately.
-pylint --rcfile=.pylintrc `find jax_privacy -name '*.py' | grep -v 'test.py' | xargs` || pylint-exit $PYLINT_ARGS $?
-# Disable `protected-access` warnings and `missing-module-docstring` convention for tests.
-pylint --rcfile=.pylintrc `find jax_privacy -name '*_test.py' | xargs` -d W0212,C0114 || pylint-exit $PYLINT_ARGS $?
-
-# Check types with pytype.
-pytype `find jax_privacy/ -name "*py" | xargs` -k
-
 # Build the package.
-pip install -e .
+pip install .
 
-# Run tests using pytest.
+# Install dev dependencies.
+pip install -r requirements-dev.txt
+
 # Change directory to avoid importing the package from repo root.
-pip install -r requirements.txt
+# Runing tests from the root can cause an ImportError for cython
+# (.pyx) modules and possibly other issues.
 mkdir _testing && cd _testing
 
 # Main tests.
-pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "not dp_updater_test and not evaluator_test"
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy \
+  -k "not dp_updater_test and not evaluator_test and not matrix_factorization and not grad_clipping_sharded_test and not distributed_noise_generation_test"
+
+# The matrix_factorization tests are expensive, and require the correct
+# HYPOTHESIS_PROFILE to limit the number of examples tested.
+export HYPOTHESIS_PROFILE=dpftrl_default
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "matrix_factorization"
 
 # Isolate tests that use `chex.set_n_cpu_device()`.
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "dp_updater_test"
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "evaluator_test"
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "grad_clipping_sharded_test"
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "distributed_noise_generation_test"
+
 cd ..
 
 set +u

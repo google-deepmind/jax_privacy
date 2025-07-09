@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -47,6 +47,8 @@ def calibrate_num_updates(
     num_samples: int,
     target_delta: float,
     examples_per_user: int | None = None,
+    cycle_length: int | None = None,
+    truncated_batch_size: int | None = None,
     initial_max_updates: int = 4,
     initial_min_updates: int = 1,
     tol: float = 0.1,
@@ -66,6 +68,10 @@ def calibrate_num_updates(
     target_delta: Desired delta for the returned epsilon.
     examples_per_user: If multiple examples per user are used, this is the
       maximum number any user contributes to the training set.
+    cycle_length: If using cyclic Poisson sampling with BandMF, the length of
+      the cycle.
+    truncated_batch_size: If using truncated Poisson sampling, the maximum batch
+      size to truncate to.
     initial_max_updates: An initial estimate of the number of updates.
     initial_min_updates: Minimum number of updates.
     tol: tolerance of the optimizer for the calibration.
@@ -83,6 +89,8 @@ def calibrate_num_updates(
         num_samples=num_samples,
         delta=target_delta,
         examples_per_user=examples_per_user,
+        cycle_length=cycle_length,
+        truncated_batch_size=truncated_batch_size,
     )
     return accountant.compute_epsilon(num_updates, dp_params)
 
@@ -99,10 +107,15 @@ def calibrate_num_updates(
 
   error_epsilon = lambda s: np.abs(get_epsilon(int(s)) - target_epsilon)
   steps = int(
-      math.ceil(_solve_calibration(error_epsilon, min_steps, max_steps, tol))
+      math.floor(_solve_calibration(error_epsilon, min_steps, max_steps, tol))
   )
-
-  return steps
+  if cycle_length is not None and cycle_length != 1:
+    # For BandMF, rounding up to the nearest multiple of cycle length does not
+    # affect the privacy analysis. We should report this rounded up value to
+    # the user so they can get more training steps for the same epsilon.
+    return math.ceil(steps / cycle_length) * cycle_length
+  else:
+    return steps
 
 
 def calibrate_noise_multiplier(
@@ -114,6 +127,8 @@ def calibrate_noise_multiplier(
     num_samples: int,
     target_delta: float,
     examples_per_user: int | None = None,
+    cycle_length: int | None = None,
+    truncated_batch_size: int | None = None,
     initial_max_noise: float = 1.0,
     initial_min_noise: float = 0.0,
     tol: float = 0.01,
@@ -131,6 +146,10 @@ def calibrate_noise_multiplier(
     target_delta: Desired delta for the returned epsilon.
     examples_per_user: If multiple examples per user are used, this is the
       maximum number any user contributes to the training set.
+    cycle_length: If using cyclic Poisson sampling with BandMF, the length of
+      the cycle.
+    truncated_batch_size: If using truncated Poisson sampling, the maximum batch
+      size to truncate to.
     initial_max_noise: An initial estimate of the noise multiplier.
     initial_min_noise: Minimum noise multiplier.
     tol: tolerance of the optimizer for the calibration.
@@ -139,7 +158,9 @@ def calibrate_noise_multiplier(
     Noise multiplier.
   """
   if not accountant.can_calibrate_noise_multipliers():
-    raise ValueError(f'`accountant`={type(accountant)} cannot calibrate steps.')
+    raise ValueError(
+        f'`accountant`={type(accountant)} cannot calibrate noise multipliers.'
+    )
 
   def get_epsilon(noise_multiplier: float) -> float:
     dp_params = analysis.DpParams(
@@ -148,6 +169,8 @@ def calibrate_noise_multiplier(
         num_samples=num_samples,
         delta=target_delta,
         examples_per_user=examples_per_user,
+        cycle_length=cycle_length,
+        truncated_batch_size=truncated_batch_size,
     )
     return accountant.compute_epsilon(num_updates, dp_params)
 
@@ -173,6 +196,8 @@ def calibrate_batch_size(
     num_samples: int,
     target_delta: float,
     examples_per_user: int | None = None,
+    cycle_length: int | None = None,
+    truncated_batch_size: int | None = None,
     initial_max_batch_size: int = 8,
     initial_min_batch_size: int = 1,
     tol: float = 0.01,
@@ -190,6 +215,10 @@ def calibrate_batch_size(
     target_delta: Desired delta for the returned epsilon.
     examples_per_user: If multiple examples per user are used, this is the
       maximum number any user contributes to the training set.
+    cycle_length: If using cyclic Poisson sampling with BandMF, the length of
+      the cycle.
+    truncated_batch_size: If using truncated Poisson sampling, the maximum batch
+      size to truncate to.
     initial_max_batch_size: An initial estimate of the batch size.
     initial_min_batch_size: Minimum batch size.
     tol: tolerance of the optimizer for the calibration.
@@ -198,7 +227,9 @@ def calibrate_batch_size(
     Batch size.
   """
   if not accountant.can_calibrate_batch_size():
-    raise ValueError(f'`accountant`={type(accountant)} cannot calibrate steps.')
+    raise ValueError(
+        f'`accountant`={type(accountant)} cannot calibrate batch size.'
+    )
 
   def get_epsilon(batch_size: int) -> float:
     dp_params = analysis.DpParams(
@@ -207,6 +238,8 @@ def calibrate_batch_size(
         num_samples=num_samples,
         delta=target_delta,
         examples_per_user=examples_per_user,
+        cycle_length=cycle_length,
+        truncated_batch_size=truncated_batch_size,
     )
     return accountant.compute_epsilon(num_updates, dp_params)
 

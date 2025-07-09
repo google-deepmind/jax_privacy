@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -150,6 +150,8 @@ class DpConfig:
   )
   # Accounting options.
   delta: float
+  # TODO: b/415360727 - If only DpSgdConfig is being used here, consider
+  # replacing with DpSgdConfig.
   algorithm: algorithm_config.AlgorithmConfig
   analysis_method: Literal['DP-SGD', 'Single-Release'] = 'DP-SGD'
   sampling_method: accounting.SamplingMethod = accounting.SamplingMethod.POISSON
@@ -190,10 +192,13 @@ class DpConfig:
 
   def make_accountant(
       self,
+      *,
       num_samples: int,
       batch_size: int,
-      batch_size_scale_schedule: accounting.BatchingScaleSchedule = None,
+      batch_size_scale_schedule: accounting.BatchingScaleSchedule | None = None,
       examples_per_user: int | None = None,
+      cycle_length: int | None = None,
+      truncated_batch_size: int | None = None,
   ) -> tuple[accounting.DpTrainingAccountant, accounting.DpParams]:
     """Creates the accountant for the experiment."""
     params = accounting.DpParams(
@@ -203,12 +208,14 @@ class DpConfig:
         batch_size=batch_size,
         batch_size_scale_schedule=batch_size_scale_schedule,
         examples_per_user=examples_per_user,
+        cycle_length=cycle_length,
+        truncated_batch_size=truncated_batch_size,
         sampling_method=self.sampling_method,
         is_finite_guarantee=self.dp_guarantee_is_finite,
     )
     match self.analysis_method:
       case 'DP-SGD':
-        if examples_per_user is None:
+        if examples_per_user is None or examples_per_user == 1:
           accountant = accounting.DpsgdTrainingAccountant(
               dp_accountant_config=self.dp_accountant
           )

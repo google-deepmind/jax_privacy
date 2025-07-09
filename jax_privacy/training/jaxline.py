@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 # limitations under the License.
 
 """Jaxline experiment to define training and eval loops."""
+
 import functools
 from typing import Any
 
@@ -65,6 +66,7 @@ class JaxlineWrapper(jaxline_experiment.AbstractExperiment):
       writer: Any,
   ) -> typing.NumpyMetrics:
     """Perform a single step of training."""
+    del global_step  # unused
     del writer  # unused
     del rng  # inapplicable as it's per-microbatch; managed instead by updater
 
@@ -72,7 +74,8 @@ class JaxlineWrapper(jaxline_experiment.AbstractExperiment):
     # updater_state and step_on_host.
     if self._train_input is None:
       init_updater_state, init_step_on_host, self._train_input = (
-          self._experiment.initialize(self._init_rng))
+          self._experiment.initialize(self._init_rng)
+      )
       # Only set updater_state and step_on_host if needed: they might already be
       # set after e.g. a pre-emption.
       if self._updater_state is None:
@@ -80,12 +83,10 @@ class JaxlineWrapper(jaxline_experiment.AbstractExperiment):
       if self._step_on_host is None:
         self._step_on_host = init_step_on_host
 
-    self._updater_state, scalars, self._step_on_host = (
-        self._experiment.update(
-            state=self._updater_state,
-            inputs_producer=functools.partial(next, self._train_input),
-            step_on_host=self._step_on_host,
-        )
+    self._updater_state, scalars, self._step_on_host = self._experiment.update(
+        state=self._updater_state,
+        inputs_producer=functools.partial(next, self._train_input),
+        step_on_host=self._step_on_host,
     )
     if self._add_prefix_to_scalars:
       scalars = {f'train/{k}': v for k, v in scalars.items()}
@@ -117,6 +118,7 @@ class JaxlineWrapper(jaxline_experiment.AbstractExperiment):
       writer: Any,
   ) -> typing.NumpyMetrics:
     """Run the complete evaluation with the current model parameters."""
+    del global_step  # unused
     del writer  # unused
     del rng  # unused; managed instead by updater
     scalars = self._experiment.evaluate(

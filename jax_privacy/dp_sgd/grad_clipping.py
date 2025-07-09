@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ from typing import Callable, Protocol
 
 from absl import logging
 import chex
-import drjax
 import jax
 import jax.numpy as jnp
 from jax_privacy.dp_sgd import grad_clipping_utils
@@ -464,6 +463,14 @@ def _value_and_clipped_grad_reshape_then_vmap(
     )
 
   if use_shard_alike:
+    try:  # We don't want a hard dependency on drjax, so import it here.
+      import drjax  # pylint: disable=g-import-not-at-top, import-outside-toplevel
+    except ImportError:
+      raise ImportError(
+          'Could not import drjax. Please install it if you want to use the'
+          ' `sharded_vectorized_grad_method` method with use_shard_alike=True. '
+          ' You can install it with `pip install drjax`.'
+      ) from None
     if spmd_axis_name is None:
       raise ValueError(
           'spmd_axis_name must be provided if use_shard_alike is True.'
@@ -484,7 +491,9 @@ def _value_and_clipped_grad_reshape_then_vmap(
       batch_size = jax.tree.leaves(inputs)[0].shape[0]
       logging.info('Inferred batch size for drjax.map_fn: %d', batch_size)
 
-      @drjax.program(placements={spmd_axis_name: batch_size})
+      @drjax.program(
+          placements={spmd_axis_name: batch_size},
+      )
       def map_grad_fn(x, y):
         return drjax.map_fn(grad_fn_with_params_and_state, (x, y))
 

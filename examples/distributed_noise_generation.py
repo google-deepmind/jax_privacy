@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2024 DeepMind Technologies Limited.
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,9 +36,10 @@ from absl import app
 from absl import flags
 import jax
 import jax.numpy as jnp
-from jax_privacy.dpftrl_mechanisms import toeplitz
-from jax_privacy.stream_privatization import distributed_noise_generation
-import numpy as np
+# pylint: disable=g-importing-member
+from jax.experimental.shard import reshard
+from jax_privacy import noise_addition
+from jax_privacy.matrix_factorization import toeplitz
 
 
 jax.config.update('jax_threefry_partitionable', True)
@@ -102,37 +103,24 @@ def bert_shapes(hidden_size: int) -> Any:
 
 def bert_model_params(hidden_size: int) -> Any:
   """Returns a PyTree of model parameters for a Bert model."""
-  mesh = jax.sharding.Mesh(
-      np.array(jax.devices()).reshape(-1, 1, 1), ('replica', 'data', 'model')
-  )
 
   # Model fits on one device, so we configure it for pure data parallelism.
-  def sharding_from_array(_) -> jax.sharding.NamedSharding:
-    return jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
   model_params = jax.tree.map(
       jnp.zeros,
       bert_shapes(hidden_size),
       is_leaf=lambda x: isinstance(x, tuple),
   )
-  shardings = jax.tree.map(sharding_from_array, model_params)
-  return jax.device_put(model_params, shardings)
+
+  return reshard(model_params, jax.sharding.PartitionSpec())
 
 
 def toy_model_params(hidden_size: int) -> jax.Array:
   """Returns model parameters for a toy model."""
   # This is a toy example where the model is just a 2D array of size (H, H^2).
-  assert jax.device_count() >= 8, 'Toy model requires at least 8 devices.'
-  mesh = jax.sharding.Mesh(
-      np.array(jax.devices()).reshape(2, 4, -1), ('x', 'y', 'z')
-  )
   leaf_shape = (hidden_size, hidden_size**2)
 
-  sharding = jax.sharding.NamedSharding(
-      mesh=mesh, spec=jax.sharding.PartitionSpec('x', 'y')
-  )
-
-  return jax.jit(lambda: jnp.zeros(leaf_shape), out_shardings=sharding)()
+  return reshard(jnp.zeros(leaf_shape), jax.sharding.PartitionSpec('x', 'y'))
 
 
 def generate_noise(
@@ -150,29 +138,24 @@ def generate_noise(
 
   iterations = 1_000
   strategy_coefs = toeplitz.optimal_max_error_strategy_coefs(bands)
-  privatizer = (
-      distributed_noise_generation.streaming_matrix_to_sharded_privatizer(
-          noising_matrix=toeplitz.inverse_as_streaming_matrix(
-              strategy_coefs, column_normalize_for_n=iterations
-          ),
-          stddev=1.0,
-          out_sharding=jax.tree.map(lambda x: x.sharding, model_params),
-      )
+  privatizer = noise_addition.streaming_matrix_to_sharded_privatizer(
+      noising_matrix=toeplitz.inverse_as_streaming_matrix(
+          strategy_coefs, column_normalize_for_n=iterations
+      ),
+      stddev=1.0,
+      noise_key=jax.random.key(0),
   )
 
   @jax.jit
   def run(pytree_like_model_params):
     state = privatizer.init(pytree_like_model_params)
     noisy_grad = None
-    rng_key = jax.random.key(0)
     for _ in range(steps):
-      rng_key, sub_key = jax.random.split(rng_key)
       # In real applications, pass in the actual clipped gradient here.
       # For benchmarking, we just pass in something that has the same structure.
       noisy_grad, state = privatizer.privatize(
           sum_of_clipped_grads=pytree_like_model_params,
           noise_state=state,
-          prng_key=sub_key
       )
     return state, noisy_grad
 
@@ -194,17 +177,24 @@ def main(_):
         os.environ.get('XLA_FLAGS', '') + f' --xla_dump_to={_XLA_DUMP.value}'
     )
 
-  if _MODEL.value == 'bert':
-    model_params = bert_model_params(_HIDDEN_SIZE.value)
+  assert jax.device_count() >= 8, 'Toy model requires at least 8 devices.'
+  axis_types = (jax.sharding.AxisType.Explicit,) * 3
+  mesh = jax.make_mesh(
+      (2, 4, jax.device_count() // 8), ('x', 'y', 'z'), axis_types=axis_types
+  )
 
-    state, noisy_grad = generate_noise(model_params, _BANDS.value, _STEPS.value)
+  if _MODEL.value == 'bert':
+
+    with jax.sharding.use_mesh(mesh):
+      params = bert_model_params(_HIDDEN_SIZE.value)
+      state, noisy_grad = generate_noise(params, _BANDS.value, _STEPS.value)
 
     def qkv(tree):
       return tree['params']['transformer']['x_layers_0']['self_attention']['combined_qkv']['w']  # pylint: disable=line-too-long
 
     print('[BandMF] Model Shape + Sharding [combined_qkv]')
-    print(qkv(model_params).shape)
-    print(qkv(model_params).sharding)
+    print(qkv(params).shape)
+    print(qkv(params).sharding)
 
     print('[BandMF] State Shape + Sharding [combined_qkv]')
     print(qkv(state[1])[1].shape)
@@ -215,13 +205,14 @@ def main(_):
     print(qkv(noisy_grad).sharding)
 
   else:
-    model_params = toy_model_params(_HIDDEN_SIZE.value)
-    state, noisy_grad = generate_noise(model_params, _BANDS.value, _STEPS.value)
+    with jax.sharding.use_mesh(mesh):
+      params = toy_model_params(_HIDDEN_SIZE.value)
+      state, noisy_grad = generate_noise(params, _BANDS.value, _STEPS.value)
 
     print('[BandMF] Model Shape + Sharding')
-    print(model_params.shape)
-    print(model_params.sharding)
-    jax.debug.visualize_array_sharding(model_params)
+    print(params.shape)
+    print(params.sharding)
+    jax.debug.visualize_array_sharding(params)
 
     print('[BandMF] State Shape + Sharding')
     print(state[1][1].shape)
