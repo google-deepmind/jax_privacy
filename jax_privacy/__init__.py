@@ -26,4 +26,4 @@ from jax_privacy import training
 # Carefully selected member imports for the top-level public API.
 from jax_privacy.experimental import clipped_grad
 
-__version__ = '0.4.0'
+__version__ = '1.0.0'
