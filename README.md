@@ -1,6 +1,6 @@
 # JAX-Privacy: Algorithms for Privacy-Preserving Machine Learning in JAX
 
-| [**Library**](#library) | [**Installation**](#installation) |
+| [**Docs**](https://jax-privacy.readthedocs.io/) | [**Library**](#library) | [**Installation**](#installation) |
 [**Reproducing Results**](#reproducing-results) | [**Citing**](#citing) |
 [**Contact**](#contact)
 
