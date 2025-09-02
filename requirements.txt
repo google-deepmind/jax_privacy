@@ -6,7 +6,7 @@
 
 absl-py
 dp_accounting
-einshape
+einshape @ git+https://github.com/google-deepmind/einshape
 grain
 hypothesis
 jax==0.6.2
