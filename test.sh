@@ -48,6 +48,7 @@ pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "dp_upda
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "evaluator_test"
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "grad_clipping_sharded_test"
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "distributed_noise_generation_test"
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "sharding_utils_test"
 
 cd ..
 
