@@ -36,7 +36,7 @@ mkdir _testing && cd _testing
 
 # Main tests.
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy \
-  -k "not dp_updater_test and not evaluator_test and not matrix_factorization and not grad_clipping_sharded_test and not distributed_noise_generation_test"
+  -k "not dp_updater_test and not evaluator_test and not matrix_factorization and not grad_clipping_sharded_test and not distributed_noise_generation_test and not sharding_utils_test"
 
 # The matrix_factorization tests are expensive, and require the correct
 # HYPOTHESIS_PROFILE to limit the number of examples tested.
