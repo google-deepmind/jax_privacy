@@ -25,7 +25,7 @@ from jax_privacy.dp_sgd import typing
 import image_data
 from image_classification import metrics as metrics_module
 from image_classification.models import base
-from jax_privacy.training import forward
+from training import forward
 import optax
 
 

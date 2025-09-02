@@ -74,26 +74,21 @@ def inverse_as_streaming_matrix(
 ) -> streaming_matrix.StreamingMatrix:
   """Create $C^{-1}$ as a StreamingMatrix object.
 
-  If column_normalize_for_n is None, the returned object represents $C^{-1}$,the
-  inverse of an arbitrarily large banded Toeplitz matrix $C$ with coefficients
-  `coef`.
+  If column_normalize_for_n is None, the returned object represents $C^{-1}$,
+  the inverse of an arbitrarily large banded Toeplitz matrix $C$ with
+  coefficients `coef`.
 
   If column_normalize_for_n is finite, the returned object represents
   $C^{-1}$, the inverse of a banded matrix $C$ of the given size n x n, formed
   by taking the banded Toeplitz matrix with coefficients `coef` and re-scaling
   each column so it has L2 norm 1.0. We recommend setting column_normalize_for_n
-  in centralized training scenarios where `n` is known in advance. The supplied
-  `coef` must have an L2 norm of 1.0 in this case. Without this check, if
-  `coef` had say an L2 norm of 0.5 and privacy calculations were done based on
-  this, then column normalization would increase
-  the sensitivity by a factor of 2 and the actual DP guarantee would be worse
-  than calculated.
+  in centralized training scenarios where `n` is known in advance.
 
-  TODO: b/409863240 - Consider other approaches to avoid this issue, and provide
-  a method for computing the sensitivity of column-normalized Toeplitz matrices.
-
-  Note: If the supplied `coef` do not have an L2 norm of 1.0, then specifying
-  column_normalize_for_n may change the sensitivity of the implied $C$ matrix.
+  Formal Guarantees:
+    * The maximum L2 norm of the strategy matrix $C$ is || coef ||_2 if
+      column_normalize_for_n is None, and 1.0 if it is not None.
+    * The strategy matrix $C$ corresponding to the returned noising matrix
+      $C^{-1}$ is b-banded, where b = coef.size.
 
   This implementation is based on Algorithm 9 from
   https://arxiv.org/abs/2306.08153.
@@ -113,32 +108,28 @@ def inverse_as_streaming_matrix(
   coef, _ = _reconcile(coef, column_normalize_for_n)
   bands = coef.shape[0]
 
-  def init_fn(shape):
-    return jnp.zeros((bands - 1,) + shape, dtype=coef.dtype)
+  def init(abstract_yi):
+    dtype = jnp.promote_types(abstract_yi.dtype, coef.dtype)
+    # *_like preserves shape, dtype, and (if possible) sharding.
+    zero = jnp.zeros_like(abstract_yi, dtype=dtype)
+    return jnp.broadcast_to(zero, (bands-1,) + zero.shape)
 
-  def next_fn(yi, state):
+  def _next(yi, state):
     if bands == 1:
       return yi / coef[0], state
     inner = jnp.tensordot(coef[1:], state, axes=1)
     xi = (yi - inner) / coef[0]
     return xi, jnp.roll(state, 1, axis=0).at[0].set(xi)
 
-  C_inv = streaming_matrix.StreamingMatrix(init_fn, next_fn)
+  Cinv = streaming_matrix.StreamingMatrix.from_array_implementation(init, _next)
 
   if column_normalize_for_n is not None:
-    coef_norm = jnp.linalg.norm(coef)
-    if jnp.abs(coef_norm - 1) > 1e-6:
-      raise ValueError(
-          'If column_normalize_for_n is specified, then the supplied `coef`'
-          f' must have an L2 norm of 1.0, but found norm {coef_norm}.'
-      )
     # 1/s scale on the cols of C translates to scale of s on the rows of C^{-1}.
-    col_norms = jnp.sqrt(
-        jnp.cumsum(jnp.pad(coef**2, (0, column_normalize_for_n - bands)))[::-1]
-    )
-    C_inv = streaming_matrix.scale_rows_and_columns(C_inv, row_scale=col_norms)
+    full_coef = jnp.pad(coef, (0, column_normalize_for_n - bands))
+    col_norms = jnp.sqrt(jnp.cumsum(full_coef**2))[::-1]
+    Cinv = streaming_matrix.scale_rows_and_columns(Cinv, row_scale=col_norms)
 
-  return C_inv
+  return Cinv
 
 
 def optimal_max_error_strategy_coefs(n: int) -> jax.Array:

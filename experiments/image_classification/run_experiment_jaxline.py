@@ -24,7 +24,7 @@ import functools
 from absl import app
 from absl import flags
 from image_classification import experiment as experiment_py
-from jax_privacy.training import jaxline
+from training import jaxline
 
 from jaxline import platform
 

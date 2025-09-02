@@ -22,10 +22,10 @@ import random
 import image_data as data
 from image_classification import auditing
 from image_classification.models import base
-from jax_privacy.training import auto_tune
-from jax_privacy.training import averaging as averaging_py
-from jax_privacy.training import experiment_config as experiment_config_py
-from jax_privacy.training import optimizer_config
+from training import auto_tune
+from training import averaging as averaging_py
+from training import experiment_config as experiment_config_py
+from training import optimizer_config
 from jaxline import base_config as jaxline_base_config
 import ml_collections
 

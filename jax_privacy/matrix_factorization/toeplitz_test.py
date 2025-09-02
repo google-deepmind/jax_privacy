@@ -206,11 +206,6 @@ class ToeplitzTest(parameterized.TestCase):
         atol=1e-6,
     )
 
-  def test_column_normalized_for_n_raises_on_bad_coef(self):
-    coef = jnp.array([1, 0.8, 0.6, 0.4])
-    with self.assertRaisesRegex(ValueError, 'must have an L2 norm of 1.0'):
-      toeplitz.inverse_as_streaming_matrix(coef, column_normalize_for_n=10)
-
   @hypothesis.given(n=st.integers(1, 32))
   def test_inverse_is_correct(self, n: int):
     coef = jnp.array([1, 0.8, 0.6, 0.4])

@@ -43,6 +43,8 @@ pylint --rcfile=.pylintrc `find jax_privacy -name '*_test.py' | xargs` -d W0212,
 
 # Check types with pytype.
 pytype `find jax_privacy/ -name "*py" | xargs` -k
+pytype `find examples/ -name "*py" | xargs` -k
+
 
 set +u
 deactivate

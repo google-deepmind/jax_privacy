@@ -40,38 +40,38 @@ _PARAM_SHAPES = {
 }
 
 
-def gaussian_privatizer_fn(noise_key: jax.Array | None = None):
-  if noise_key is None:
-    noise_key = jax.random.key(_SEED)
+def gaussian_privatizer_fn(prng_key: jax.Array | None = None):
+  if prng_key is None:
+    prng_key = jax.random.key(_SEED)
   return additive_privatizers.gaussian_privatizer(
-      noise_key=noise_key, stddev=_STDDEV
+      prng_key=prng_key, stddev=_STDDEV
   )
 
 
 def dense_matrix_factorization_privatizer_fn(
     noising_matrix: jax.Array | None = None,
-    noise_key: jax.Array | None = None,
+    prng_key: jax.Array | None = None,
     stddev: float = _STDDEV,
 ):
-  if noise_key is None:
-    noise_key = jax.random.key(_SEED)
+  if prng_key is None:
+    prng_key = jax.random.key(_SEED)
   if noising_matrix is None:
     noising_matrix = jnp.eye(_ITERATIONS) + 0.1
   return additive_privatizers.matrix_factorization_privatizer(
-      noising_matrix, noise_key=noise_key, stddev=stddev,
+      noising_matrix, prng_key=prng_key, stddev=stddev,
   )
 
 
 def streaming_matrix_factorization_privatizer_fn(
     noising_matrix: streaming_matrix.StreamingMatrix | None = None,
-    noise_key: jax.Array | None = None,
+    prng_key: jax.Array | None = None,
 ):
   if noising_matrix is None:
     noising_matrix = streaming_matrix.momentum_sgd_matrix(momentum=0.95)
-  if noise_key is None:
-    noise_key = jax.random.key(_SEED)
+  if prng_key is None:
+    prng_key = jax.random.key(_SEED)
   return additive_privatizers.matrix_factorization_privatizer(
-      noising_matrix, noise_key=noise_key, stddev=_STDDEV,
+      noising_matrix, prng_key=prng_key, stddev=_STDDEV,
   )
 
 
@@ -92,7 +92,7 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'Expected 2D'):
       additive_privatizers.matrix_factorization_privatizer(
           jnp.ones(10),
-          noise_key=jax.random.key(10),
+          prng_key=jax.random.key(10),
           stddev=0.0,
       )
 
@@ -110,9 +110,7 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     values = []
 
     for _ in range(_ITERATIONS):
-      noise, state = privatizer.privatize(
-          sum_of_clipped_grads=grads, noise_state=state,
-      )
+      noise, state = privatizer.update(grads, state)
       values.extend(jax.tree.leaves(noise))
 
     samples = [float(x) for x in jnp.concatenate(values)]
@@ -150,7 +148,7 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     state = state0 = maybe_jit(privatizer.init)(example_params)
     grads = optax.tree.zeros_like(example_params)
     for _ in range(_ITERATIONS):
-      result, state = maybe_jit(privatizer.privatize)(
+      result, state = maybe_jit(privatizer.update)(
           sum_of_clipped_grads=grads, noise_state=state,
       )
       chex.assert_trees_all_equal_shapes_and_dtypes(result, example_params)
@@ -170,22 +168,17 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     correlated_noise_vectors = []
     uncorrelated_noise_vectors = []
     for _ in range(_ITERATIONS):
-      mf_noise, mf_state = mf_privatizer.privatize(
-          sum_of_clipped_grads=grads, noise_state=mf_state,
-      )
-      sgd_noise, sgd_state = sgd_privatizer.privatize(
-          sum_of_clipped_grads=grads, noise_state=sgd_state,
-      )
+      mf_noise, mf_state = mf_privatizer.update(grads, mf_state)
+      sgd_noise, sgd_state = sgd_privatizer.update(grads, sgd_state)
       correlated_noise_vectors.append(mf_noise)
       uncorrelated_noise_vectors.append(sgd_noise)
 
     mf_noise = tree_stack(correlated_noise_vectors)
     sgd_noise = tree_stack(uncorrelated_noise_vectors)
     def matrix_multiply(x):
-      return (noising_matrix @ x.reshape(x.shape[0], -1)).reshape(x.shape)
-    expected_noise = additive_privatizers._cast_to_dtype(
-        jax.tree.map(matrix_multiply, sgd_noise), mf_noise
-    )
+      Cinv = noising_matrix  # pylint: disable=invalid-name
+      return (Cinv @ x.reshape(x.shape[0], -1)).reshape(x.shape).astype(x.dtype)
+    expected_noise = jax.tree.map(matrix_multiply, sgd_noise)
     chex.assert_trees_all_close(mf_noise, expected_noise, atol=1e-7)
 
   @parameterized.named_parameters(_PARAM_SHAPES.items())
@@ -196,9 +189,7 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     state = mf_privatizer.init(grads)
 
     for _ in range(_ITERATIONS):
-      result, state = mf_privatizer.privatize(
-          sum_of_clipped_grads=grads, noise_state=state,
-      )
+      result, state = mf_privatizer.update(grads, state)
       # No noise is added with noising_matrix = 0, so we expect grads unchanged.
       chex.assert_trees_all_close(result, grads, atol=1e-5)
 
@@ -208,20 +199,16 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     grads = jnp.zeros(10)
     state1 = state2 = privatizer.init(grads)
     for _ in range(_ITERATIONS):
-      result1, state1 = privatizer.privatize(
-          sum_of_clipped_grads=grads, noise_state=state1,
-      )
-      result2, state2 = privatizer.privatize(
-          sum_of_clipped_grads=grads, noise_state=state2,
-      )
+      result1, state1 = privatizer.update(grads, state1)
+      result2, state2 = privatizer.update(grads, state2)
       chex.assert_trees_all_equal(result1, result2)
       chex.assert_trees_all_equal(state1, state2)
 
   @parameterized.parameters(*_PRIVATIZER_FNS)
   def test_noise_unique(self, privatizer_fn):
-    # Tests uniqueness across iterations, indices, pytree leaves, and noise_key.
-    privatizer1 = privatizer_fn(noise_key=jax.random.key(1234))
-    privatizer2 = privatizer_fn(noise_key=jax.random.key(5678))
+    # Tests uniqueness across iterations, indices, pytree leaves, and prng_key.
+    privatizer1 = privatizer_fn(prng_key=jax.random.key(1234))
+    privatizer2 = privatizer_fn(prng_key=jax.random.key(5678))
     grads = {'a': jnp.zeros(4), 'b': jnp.zeros(4)}
 
     values = []
@@ -229,14 +216,8 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     state2 = privatizer2.init(grads)
 
     for _ in range(_ITERATIONS):
-      noise1, state1 = privatizer1.privatize(
-          sum_of_clipped_grads=grads,
-          noise_state=state1,
-      )
-      noise2, state2 = privatizer2.privatize(
-          sum_of_clipped_grads=grads,
-          noise_state=state2,
-      )
+      noise1, state1 = privatizer1.update(grads, state1)
+      noise2, state2 = privatizer2.update(grads, state2)
 
       values.extend(jax.tree.leaves(noise1))
       values.extend(jax.tree.leaves(noise2))
@@ -256,10 +237,10 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     key = jax.random.key(_SEED)
 
     privatizer0 = additive_privatizers.matrix_factorization_privatizer(
-        noising_matrix=noising_matrix, noise_key=key, stddev=_STDDEV
+        noising_matrix=noising_matrix, prng_key=key, stddev=_STDDEV
     )
     privatizer1 = additive_privatizers.matrix_factorization_privatizer(
-        noising_matrix=noising_matrix * _STDDEV, noise_key=key, stddev=1.0
+        noising_matrix=noising_matrix * _STDDEV, prng_key=key, stddev=1.0
     )
 
     params = jnp.zeros(10)
@@ -267,12 +248,8 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     state1 = privatizer1.init(params)
 
     for _ in range(_ITERATIONS):
-      noise0, state0 = privatizer0.privatize(
-          sum_of_clipped_grads=params, noise_state=state0,
-      )
-      noise1, state1 = privatizer1.privatize(
-          sum_of_clipped_grads=params, noise_state=state1,
-      )
+      noise0, state0 = privatizer0.update(params, state0)
+      noise1, state1 = privatizer1.update(params, state1)
       chex.assert_trees_all_close(noise0, noise1, atol=1e-5)
 
 

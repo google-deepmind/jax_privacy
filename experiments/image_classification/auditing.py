@@ -32,9 +32,9 @@ from image_classification import evaluator
 from image_classification import metrics as metrics_module
 from image_data import base
 from image_data import loader
-from jax_privacy.training import experiment_config
-from jax_privacy.training import forward
-from jax_privacy.training import updater
+from training import experiment_config
+from training import forward
+from training import updater
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds

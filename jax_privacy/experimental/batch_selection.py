@@ -30,6 +30,7 @@ i.e., roughly that num_examples < 1e9.
 
 import abc
 import dataclasses
+import itertools
 from typing import Iterator
 
 from jax_privacy.experimental import microbatching
@@ -57,9 +58,9 @@ def split_and_pad_global_batch(
 
   Args:
     indices: A 1D or 2D numpy array of indices representing the global batch.
-    minibatch_size: The desired size of each minibatch. Minibatches of this
-      size will typically be passed into a compiled function that computes
-      and accumulates clipped gradients.
+    minibatch_size: The desired size of each minibatch. Minibatches of this size
+      will typically be passed into a compiled function that computes and
+      accumulates clipped gradients.
     microbatch_size: The size of each microbatch. If set, will reorder the last
       minibatch to ensure that the padding indices appear in the right indices
       to enable early stopping within the last minibatch gradient evaluation.
@@ -74,12 +75,37 @@ def split_and_pad_global_batch(
   minibatches = np.array_split(indices, sections, axis=0)
   minibatch_shape = (minibatch_size,) + indices.shape[1:]
   last_minibatch = np.full(minibatch_shape, -1, dtype=indices.dtype)
-  last_minibatch[:minibatches[-1].shape[0]] = minibatches[-1]
+  last_minibatch[: minibatches[-1].shape[0]] = minibatches[-1]
   permutation = microbatching.compute_early_stopping_order(
       minibatch_size, microbatch_size
   )
   minibatches[-1] = last_minibatch[permutation]
   return minibatches
+
+
+def pad_to_multiple_of(indices: np.ndarray, multiple: int) -> np.ndarray:
+  """Pads the last dimension of indices to a multiple of multiple.
+
+  Example Usage:
+    >>> indices = np.arange(10)
+    >>> pad_to_multiple_of(indices, multiple=4)
+    array([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, -1, -1])
+
+  Args:
+    indices: A 1D array of batch indices.
+    multiple: A positive integer. The input batch will be padded to a multiple
+      of this value.
+
+  Returns:
+    A new 1D array of inidices padded with `-1`s.
+  """
+  if indices.ndim > 1:
+    raise ValueError('pad_to_multiple_of currently expects 1D indices.')
+  curr_size = indices.shape[0]
+  pad_size = (multiple - curr_size) % multiple
+  new_indices = np.full(curr_size + pad_size, -1, dtype=indices.dtype)
+  new_indices[:curr_size] = indices
+  return new_indices
 
 
 class BatchSelectionStrategy(abc.ABC):
@@ -88,10 +114,7 @@ class BatchSelectionStrategy(abc.ABC):
   A batch selection strategy is a function that takes a random number generator
   and returns an iterator of batches of data indices. The strategy can
   either be deterministic or random, it may produce equal-sized batches or
-  variable-sized batches. A given strategy may produce either batches of 1D
-  numpy arrays of integers, or 2D arrays of integers. In the latter case,
-  it is expected that the gradient for each group (i.e., row) will be computed
-  and clipped, rather than each example. Note that the batches of indices, which
+  variable-sized batches. Note that the batches of indices, which
   specify which examples contribute in which iterations, are generally
   considered sensitive, and should not be inspected directly.
 
@@ -101,10 +124,9 @@ class BatchSelectionStrategy(abc.ABC):
 
   @abc.abstractmethod
   def batch_iterator(
-      self,
-      rng: RngType = None
+      self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
-    """Yields batches of data indices."""
+    """Yields 1D batches of data indices."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -140,7 +162,6 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     discarded, i.e. never sampled.
 
   Attributes:
-    num_examples: The number of examples in the dataset.
     sampling_prob: The probability of sampling an example in rounds when it is
       eligible to participate. To achieve an average batch size of
       expected_batch_size, one should ideally set sampling_prob =
@@ -160,7 +181,6 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       uneven partitions. Defaults to True for ease of analysis.
   """
 
-  num_examples: int
   sampling_prob: float
   iterations: int
   truncated_batch_size: int | None = None
@@ -168,16 +188,18 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   shuffle: bool = False
   even_partition: bool = True
 
-  def batch_iterator(self, rng: RngType = None) -> Iterator[np.ndarray]:
+  def batch_iterator(
+      self, num_examples: int, rng: RngType = None
+  ) -> Iterator[np.ndarray]:
     rng = np.random.default_rng(rng)
-    dtype = np.min_scalar_type(self.num_examples)
+    dtype = np.min_scalar_type(-num_examples)
 
-    indices = np.arange(self.num_examples, dtype=dtype)
+    indices = np.arange(num_examples, dtype=dtype)
     if self.shuffle:
       rng.shuffle(indices)
     if self.even_partition:
-      group_size = self.num_examples // self.cycle_length
-      indices = indices[:group_size * self.cycle_length]
+      group_size = num_examples // self.cycle_length
+      indices = indices[: group_size * self.cycle_length]
 
     partition = np.array_split(indices, self.cycle_length)
 
@@ -187,7 +209,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       if self.truncated_batch_size is not None:
         sample_size = min(sample_size, self.truncated_batch_size)
       yield rng.choice(
-          current_group, size=sample_size, replace=False
+          current_group, size=sample_size, replace=False, shuffle=False
       )
 
 
@@ -207,24 +229,24 @@ class BallsInBinsSampling(BatchSelectionStrategy):
     in no other batches.
 
   Attributes:
-    num_examples: The number of examples in the dataset.
     iterations: The number of total iterations / batches to generate.
     cycle_length: The number of batches in a cycle, equivalently the separation
       between two consecutive appearances of the same example.
   """
 
-  num_examples: int
   iterations: int
   cycle_length: int
 
-  def batch_iterator(self, rng: RngType = None) -> Iterator[np.ndarray]:
+  def batch_iterator(
+      self, num_examples: int, rng: RngType = None
+  ) -> Iterator[np.ndarray]:
     rng = np.random.default_rng(rng)
-    dtype = np.min_scalar_type(self.num_examples)
-    indices = np.arange(self.num_examples, dtype=dtype)
+    dtype = np.min_scalar_type(-num_examples)
+    indices = np.arange(num_examples, dtype=dtype)
     rng.shuffle(indices)
 
     bin_sizes = rng.multinomial(
-        n=self.num_examples,
+        n=num_examples,
         pvals=np.ones(self.cycle_length) / self.cycle_length,
     )
     # Pad bin_sizes so that cumsum's output starts with 0.
@@ -234,3 +256,85 @@ class BallsInBinsSampling(BatchSelectionStrategy):
       start_index = batch_cutoffs[i % self.cycle_length]
       end_index = batch_cutoffs[(i % self.cycle_length) + 1]
       yield indices[start_index:end_index]
+
+
+@dataclasses.dataclass(frozen=True)
+class UserSelectionStrategy:
+  """Applies base_strategy at the user level, and selects multiple examples per user.
+
+  Each batch returned by the batch_iterator is a 2D array of integer indices,
+  where all entries in the same row are examples owned by the same user. The
+  examples in this `user-batch` are chosen in a cyclic fashion (maybe after
+  shuffling). For example, if a user owns 3 examples [0, 5, 10], then each
+  time this user is selected, the batches will be selected from
+  [0, 5, 10, 0, 5, 10, 0, 5, 10, ...]. It is expected that the gradient will be
+  evaluated and clipped w.r.t. this `user-batch` before being aggregated across
+  users.
+
+  Example Usage:
+    >>> base_strategy = CyclicPoissonSampling(sampling_prob=1, iterations=5)
+    >>> strategy = UserSelectionStrategy(base_strategy, 2)
+    >>> user_ids = np.array([0,0,0,1,1,2])
+    >>> iterator = strategy.batch_iterator(user_ids)
+    >>> print(next(iterator))
+    [[0 1]
+     [3 4]
+     [5 5]]
+    >>> print(next(iterator))
+    [[2 0]
+     [3 4]
+     [5 5]]
+
+  Attributes:
+    base_strategy: The base batch selection strategy to apply at the user level.
+      Will be used to select batches of users from the set of users.
+    examples_per_user_per_batch: The number of examples to select for each user
+      in each batch. Determines the number of columns in the returned batches.
+    shuffle_per_user: Whether to shuffle the examples for each user before
+      selecting examples_per_user_per_batch.
+  """
+
+  base_strategy: BatchSelectionStrategy
+  examples_per_user_per_batch: int = 1
+  shuffle_per_user: bool = False
+
+  def batch_iterator(
+      self, user_ids: np.ndarray, rng: RngType = None
+  ) -> Iterator[np.ndarray]:
+    """Yields 2D batches of data indices.
+
+    Args:
+      user_ids: A 1D array that maps each example to a user id, where each
+        user_id can be an arbitrary integer.
+      rng: A random seed or random number generator.
+
+    Yields:
+      2D batches of data indices, where users are sampled according to the
+      base_strategy and all entries in the same row are examples owned by the
+      same selected user.
+    """
+    rng = np.random.default_rng(rng)
+    # inverse contains cleaned ids in the range [0, ..., nunique-1].
+    unique, inverse = np.unique(user_ids, return_inverse=True)
+    num_users = unique.size
+    num_examples = user_ids.size
+    dtype = np.min_scalar_type(-num_examples)
+
+    def create_user_generator(user_id):
+      # TODO: b/415360727 - this where is suboptimal, as it is O(n) per user_id.
+      owned_examples = np.where(inverse == user_id)[0].astype(dtype)
+      if self.shuffle_per_user:
+        rng.shuffle(owned_examples)
+      return itertools.cycle(list(owned_examples))
+
+    user_generators = [create_user_generator(i) for i in range(num_users)]
+
+    examples_per_user = self.examples_per_user_per_batch or 1
+
+    def get_user_batch(user_id):
+      generator = user_generators[user_id]
+      sample = itertools.islice(generator, examples_per_user)
+      return np.array(list(sample))
+
+    for user_batch in self.base_strategy.batch_iterator(num_users, rng):
+      yield np.array([get_user_batch(uid) for uid in user_batch])

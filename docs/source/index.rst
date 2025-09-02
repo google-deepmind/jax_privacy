@@ -16,6 +16,7 @@
    :maxdepth: 2
    :caption: API Documentation
 
+   core_library
    jax_api
    keras_api
 
@@ -36,6 +37,7 @@
    :maxdepth: 2
    :caption: Technical Documentation
 
+   sharp_edges
    troubleshooting
    library_design
    contribution_guide

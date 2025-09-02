@@ -90,12 +90,14 @@ class StreamingMatrixBuilder:
     assert self.output_scale.dtype == self.buf_decay.dtype
     return self.output_scale.dtype
 
-  def _init(self, shape):
+  def _init(self, abstract_value):
     # Common logic in the StreamingMatrix representation of C and C^{-1}
     # The state is simply the contents of the buffers, each of `shape`.
     assert len(self.buf_decay) == len(self.output_scale)
     num_buffers = self.buf_decay.shape[0]
-    return jnp.zeros(shape=(num_buffers,) + shape, dtype=self.dtype)
+    # *_like preserves shape, dtype, and (if possible) sharding.
+    zero = jnp.zeros_like(abstract_value, dtype=self.dtype)
+    return jnp.broadcast_to(zero, (num_buffers,) + zero.shape)
 
   def _read(self, state):
     # Common logic in the StreamingMatrix representation of C and C^{-1}
@@ -127,7 +129,9 @@ class StreamingMatrixBuilder:
       state = self._update(state, xi)
       return yi, state
 
-    return streaming_matrix.StreamingMatrix(self._init, multiply_next)
+    return streaming_matrix.StreamingMatrix.from_array_implementation(
+        self._init, multiply_next
+    )
 
   def build_inverse(
       self,
@@ -142,7 +146,9 @@ class StreamingMatrixBuilder:
       state = self._update(state, xi)
       return xi, state
 
-    return streaming_matrix.StreamingMatrix(self._init, inv_multiply_next)
+    return streaming_matrix.StreamingMatrix.from_array_implementation(
+        self._init, inv_multiply_next
+    )
 
 
 @chex.dataclass

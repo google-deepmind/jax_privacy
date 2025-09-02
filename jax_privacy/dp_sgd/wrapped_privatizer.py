@@ -24,7 +24,6 @@ import jax.numpy as jnp
 from jax_privacy.dp_sgd import grad_clipping
 from jax_privacy.dp_sgd import gradients
 from jax_privacy.dp_sgd import typing
-from jax_privacy.noise_addition import gradient_privatizer
 import optax
 
 logging.warning(
@@ -58,7 +57,7 @@ class WrappedPrivatizer(
       per_example_grad_method: grad_clipping.PerExampleGradMethod,
       rng_per_param_fn: Callable[[chex.PRNGKey], chex.PRNGKey] = lambda x: x,
       global_norm_fn: Callable[[typing.ParamsT], jax.Array] = optax.global_norm,
-      privatizer: gradient_privatizer.GradientPrivatizer,
+      privatizer: optax.GradientTransformation,
   ):
     super().__init__(
         clipping_norm=clipping_norm,
@@ -88,11 +87,11 @@ class WrappedPrivatizer(
           ' this warning'
       )
 
+    # We assume the privatizer noise was calibrated to the sum-of-clipped-grads.
     sum_of_clipped_grads = jax.tree.map(lambda x: x * total_batch_size, grads)
 
-    noisy_grads, noise_state = self._privatizer.privatize(
-        sum_of_clipped_grads=sum_of_clipped_grads,
-        noise_state=noise_state,
+    noisy_grads, noise_state = self._privatizer.update(
+        sum_of_clipped_grads, noise_state
     )
 
     noisy_grads = jax.tree.map(lambda x: x / total_batch_size, noisy_grads)

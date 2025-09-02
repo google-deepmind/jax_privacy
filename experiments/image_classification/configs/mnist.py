@@ -22,10 +22,10 @@ import jax
 import image_data
 from image_classification import config_base
 from image_classification.models import models
-from jax_privacy.training import algorithm_config
-from jax_privacy.training import averaging
-from jax_privacy.training import experiment_config
-from jax_privacy.training import optimizer_config
+from training import algorithm_config
+from training import averaging
+from training import experiment_config
+from training import optimizer_config
 import ml_collections
 
 

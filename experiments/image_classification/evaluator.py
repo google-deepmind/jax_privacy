@@ -26,10 +26,10 @@ from einshape import jax_einshape as einshape
 import jax
 import image_data as data
 from image_classification import metrics as metrics_module
-from jax_privacy.training import devices
-from jax_privacy.training import evaluator as evaluator_py
-from jax_privacy.training import forward
-from jax_privacy.training import updater
+from training import devices
+from training import evaluator as evaluator_py
+from training import forward
+from training import updater
 
 
 class ImageClassificationEvaluator(evaluator_py.AbstractEvaluator):

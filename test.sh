@@ -51,6 +51,12 @@ pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "distrib
 
 cd ..
 
+# Build readthedocs
+cd docs
+pip install -r source/requirements.txt
+make html
+cd ..
+
 set +u
 deactivate
 echo "All tests passed. Congrats!"

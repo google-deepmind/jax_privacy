@@ -18,12 +18,14 @@ from typing import Optional
 
 from absl.testing import absltest
 from absl.testing import parameterized
+import chex
 import jax
 from jax import numpy as jnp
 from jax_privacy.matrix_factorization import banded
 from jax_privacy.matrix_factorization import streaming_matrix
 import numpy as np
 import scipy
+
 
 # pylint:disable=invalid-name
 
@@ -226,8 +228,18 @@ class StreamingMatrixTest(parameterized.TestCase):
   @parameterized.named_parameters(matrix_and_n_params())
   def test_multiply_array_on_tensor(self, A, n):
     A = A(n)
-    Z = jnp.arange(n * 2 * 3).reshape((n, 2, 3))
+    Z = jnp.arange(n * 2 * 3).reshape((n, 2, 3)).astype(float)
     assert_allclose(A @ Z, jnp.tensordot(A.materialize(n), Z, axes=1))
+
+  @parameterized.named_parameters(matrix_and_n_params())
+  def test_jit_matches_not_jit(self, A, n):
+    # Fails if e.g., the non-jitted version returns plain python ints.
+    A = A(n)
+    abstract_value = jax.ShapeDtypeStruct((3,), jnp.float32)
+    chex.assert_trees_all_equal_shapes_and_dtypes(
+        A.init_multiply(abstract_value),
+        jax.jit(A.init_multiply, static_argnums=0)(abstract_value)
+    )
 
 
 if __name__ == '__main__':

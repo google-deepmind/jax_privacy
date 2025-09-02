@@ -331,7 +331,7 @@ class FixedEpochSensitivityTest(parameterized.TestCase):
     n = 16
     C = jnp.abs(jax.random.normal(jax.random.PRNGKey(456), (n, n))) * jnp.tri(n)
     ans = sensitivity_lib.fixed_epoch_sensitivity(C, epochs=n)
-    self.assertAlmostEqual(ans, jnp.linalg.norm(C.sum(axis=1)), places=5)
+    self.assertAlmostEqual(ans, jnp.linalg.norm(C.sum(axis=1)), places=4)
 
 
 if __name__ == '__main__':

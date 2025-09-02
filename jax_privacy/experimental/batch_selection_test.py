@@ -64,6 +64,15 @@ def _check_element_range(batches, num_examples):
     assert np.all(batch >= 0)
 
 
+def _check_signed_indices(batches):
+  for batch in batches:
+    assert np.issubdtype(batch.dtype, np.signedinteger)
+
+
+def _check_all_equal(x):
+  assert np.all(x == x[0]), f"Elements of x are not all equal: {x}"
+
+
 class BatchSelectionTest(parameterized.TestCase):
 
   @parameterized.product(
@@ -78,14 +87,13 @@ class BatchSelectionTest(parameterized.TestCase):
   ):
     """Tests the use of CyclicPoissonSampling instantiated to do shuffling."""
     strategy = batch_selection.CyclicPoissonSampling(
-        num_examples=num_examples,
         sampling_prob=1.0,
         iterations=iterations,
         cycle_length=cycle_length,
         shuffle=shuffle,
         even_partition=even_partition,
     )
-    batches = list(strategy.batch_iterator(rng=0))
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
 
     self.assertLen(batches, iterations)
     min_batch_size = num_examples // cycle_length
@@ -94,6 +102,7 @@ class BatchSelectionTest(parameterized.TestCase):
     _check_no_repeated_indices(batches[:cycle_length])
     _check_cyclic_property(batches, cycle_length)
     _check_element_range(batches, num_examples)
+    _check_signed_indices(batches)
 
   @parameterized.product(
       num_examples=[100],
@@ -118,7 +127,6 @@ class BatchSelectionTest(parameterized.TestCase):
     """Tests for Poisson sampling, potentially cyclic and truncated."""
     sampling_prob = expected_batch_size / (num_examples // cycle_length)
     strategy = batch_selection.CyclicPoissonSampling(
-        num_examples=num_examples,
         sampling_prob=sampling_prob,
         iterations=iterations,
         cycle_length=cycle_length,
@@ -126,7 +134,7 @@ class BatchSelectionTest(parameterized.TestCase):
         even_partition=even_partition,
         truncated_batch_size=truncated_batch_size,
     )
-    batches = list(strategy.batch_iterator(rng=0))
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
 
     self.assertLen(batches, iterations)
     min_batch_size = 0
@@ -165,13 +173,12 @@ class BatchSelectionTest(parameterized.TestCase):
     iterations = 1100
     sampling_prob = 0.5
     strategy = batch_selection.CyclicPoissonSampling(
-        num_examples=num_examples,
         sampling_prob=sampling_prob,
         iterations=iterations,
         cycle_length=cycle_length,
         even_partition=False,
     )
-    batches = list(strategy.batch_iterator(rng=0))
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
 
     self.assertLen(batches, iterations)
     min_batch_size = 0
@@ -192,11 +199,10 @@ class BatchSelectionTest(parameterized.TestCase):
   def test_balls_in_bins_sampling(self, num_examples, cycle_length, iterations):
     """Tests for balls-in-bins."""
     strategy = batch_selection.BallsInBinsSampling(
-        num_examples=num_examples,
         iterations=iterations,
         cycle_length=cycle_length,
     )
-    batches = list(strategy.batch_iterator(rng=0))
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
     self.assertLen(batches, iterations)
     _check_element_range(batches, num_examples)
     self.assertEqual(
@@ -205,6 +211,7 @@ class BatchSelectionTest(parameterized.TestCase):
     )
     _check_no_repeated_indices(batches[:cycle_length])
     _check_cyclic_property(batches, cycle_length)
+    _check_signed_indices(batches)
 
   def test_balls_in_bins_sampling_with_large_cycle_length(self):
     """Test for balls-in-bins with cycle_length > num_examples."""
@@ -212,11 +219,10 @@ class BatchSelectionTest(parameterized.TestCase):
     cycle_length = 20
     iterations = 40
     strategy = batch_selection.BallsInBinsSampling(
-        num_examples=num_examples,
         iterations=iterations,
         cycle_length=cycle_length,
     )
-    batches = list(strategy.batch_iterator(rng=0))
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
     self.assertLen(batches, iterations)
     _check_element_range(batches, num_examples)
     self.assertEqual(
@@ -226,8 +232,27 @@ class BatchSelectionTest(parameterized.TestCase):
     _check_no_repeated_indices(batches[:cycle_length])
     _check_cyclic_property(batches, cycle_length)
 
+  def test_user_selection_strategy(self):
+    """Tests for UserSelectionStrategy."""
+    base_strategy = batch_selection.CyclicPoissonSampling(
+        sampling_prob=0.5,
+        iterations=5,
+        cycle_length=2,
+    )
+    strategy = batch_selection.UserSelectionStrategy(
+        base_strategy, examples_per_user_per_batch=2, shuffle_per_user=True
+    )
+    unique_ids = np.random.choice(2**30, size=16, replace=False)
+    user_ids = np.concatenate([[unique_ids[i]] * i for i in range(16)])
+    np.random.shuffle(user_ids)
+    for batch in strategy.batch_iterator(user_ids, rng=0):
+      for row in batch:
+        _check_all_equal(user_ids[row])
+      user_batch = user_ids[batch[:, 0]]
+      self.assertLen(set(user_batch), user_batch.shape[0])
 
-class BatchPartitionTest(parameterized.TestCase):
+
+class BatchPaddingTest(parameterized.TestCase):
 
   @parameterized.parameters(
       (10, 4, None),
@@ -262,6 +287,19 @@ class BatchPartitionTest(parameterized.TestCase):
     np.testing.assert_array_equal(
         np.sort(new_indices[new_indices != -1]), np.sort(indices)
     )
+
+  @parameterized.parameters(
+      (10, 4),
+      (10, 5),
+      (10, 1),
+      (17, 6),
+      (17, 17),
+  )
+  def test_pad_to_multiple_of(self, global_batch_size, multiple):
+    indices = np.random.randint(0, 1000, size=global_batch_size)
+    new_indices = batch_selection.pad_to_multiple_of(indices, multiple)
+    self.assertEqual(new_indices.size % multiple, 0)
+    np.testing.assert_array_equal(new_indices[new_indices != -1], indices)
 
 
 if __name__ == "__main__":
