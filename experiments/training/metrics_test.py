@@ -17,7 +17,7 @@ from absl.testing import absltest
 import chex
 import jax
 import jax.numpy as jnp
-from jax_privacy.training import metrics
+from training import metrics
 
 
 class AccuracyTest(absltest.TestCase):

@@ -21,7 +21,7 @@ from typing import Any
 
 import haiku as hk
 import jax
-from jax_privacy.training import experiment_config
+from training import experiment_config
 import optax
 
 

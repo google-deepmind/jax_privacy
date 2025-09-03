@@ -15,7 +15,35 @@
 
 """A module for applying a function in a microbatched manner.
 
-See README.md for more details.
+This module provides a `microbatch` function that transforms a
+given function to operate on smaller "microbatches" of data, instead of the
+entire batch at once. This is particularly useful when we can fit a large
+batch of data onto the device, but we do not have enough memory to
+evaluate a function on the entire batch of data at once. Microbatching
+reduces memory but increases sequential computation.
+
+A concrete use case is gradient accumulation, where you need to accumulate
+gradients over a large batch. Microbatching does require that the
+entire batch fits into memory at once, so there is a limit to how large
+of a batch size can be used. If larger batch sizes are needed than
+microbatching can support, then an outer python loop should be used to
+generate batches on the fly one at a time, before transferring to device
+memory and microbatching.
+
+The AccumulationType Enum is essential because microbatching breaks a
+single function execution on a large batch into multiple sequential
+executions on smaller microbatches. The results from these individual
+microbatch executions need to be combined correctly to match the
+result you would have obtained from running the function on the
+full batch originally. Three accumulation types are supported:
+SUM, MEAN, and CONCAT.
+
+- SUM sums the results over the microbatches, suitable when the original
+  function returns a sum across the batch dimension.
+- MEAN averages the results over the microatches, suitable when
+  the original function returns an average over the batch dimension.
+- CONCAT concatenates the results from each microbatch,
+  suitable when the original function returns per_example outputs.
 """
 import dataclasses
 import enum
@@ -40,7 +68,7 @@ def _astype(pytree: Any, dtype: jax.typing.DTypeLike | None = None) -> Any:
 
 
 @dataclasses.dataclass
-class Accumulator:
+class _Accumulator:
   """A class for accumulating values in a microbatched function."""
 
   num_microbatches: int
@@ -118,7 +146,7 @@ def _calculate_num_real_microbatches(
 
   Args:
     is_padding_example: A 1D array of shape (num_examples,).
-    microbatch_size: Argument passed to `inmemory_microbatched_fn_general`.
+    microbatch_size: Argument passed to `microbatch`.
 
   Returns:
     The `true` batch size, as a scalar jax array.
@@ -134,7 +162,7 @@ def _calculate_num_real_microbatches(
 
 
 # pylint: disable=g-bare-generic
-def inmemory_microbatched_fn_general(
+def microbatch(
     fun: Callable,
     batch_argnums: int | Sequence[int],
     microbatch_size: int | None,
@@ -171,7 +199,7 @@ def inmemory_microbatched_fn_general(
     >>> fun(data)
     (Array([2, 3, 4, 5], dtype=int32), Array(30, dtype=int32))
     >>> strategy = (AccumulationType.CONCAT, AccumulationType.SUM)
-    >>> microbatched_fun = inmemory_microbatched_fn_general(
+    >>> microbatched_fun = microbatch(
     ...    fun, batch_argnums=0, microbatch_size=2, accumulation_type=strategy
     ... )
     >>> microbatched_fun(data)
@@ -238,7 +266,7 @@ def inmemory_microbatched_fn_general(
       input_kwargs = {k: fetch(kwarg) for k, kwarg in reshaped_kwargs.items()}
       return fun(*inputs, **input_kwargs)
 
-    accumulator = Accumulator(num_microbatches, accumulation_type, dtype)
+    accumulator = _Accumulator(num_microbatches, accumulation_type, dtype)
 
     def body_fun(index, carry):
       return accumulator.update(carry, f(index), index)
@@ -267,19 +295,19 @@ def compute_early_stopping_order(
   """Return an index permutation so data is processed in order w/ microbatching.
 
   This is a helper function to reorder data so that they get processed in the
-  same order by `inmemory_microbatched_fn_general` as they would be processed
+  same order by `microbatch` as they would be processed
   without microbatching. This can be particularly helpful when the last elements
   of the batch are padding examples, in which case if they appear in the
   same microbatch we can avoid processing them.  This function is only useful
   if using the "is_padding_example" keyword argument with
-  `inmemory_microbatched_fn_general`.
+  `microbatch`.
 
   Example Usage:
     >>> order = compute_early_stopping_order(batch_size=10, microbatch_size=2)
     >>> order
     array([0, 2, 4, 6, 8, 1, 3, 5, 7, 9])
 
-  When permuting the input data to `inmemory_microbatched_fn_general` according
+  When permuting the input data to `microbatch` according
   to the above permutation, the examples will be split up into 5 microbatchs:
   [0, 1], [2, 3], [4, 5], [6, 7], [8, 9] and processed sequentially.
 
@@ -292,7 +320,7 @@ def compute_early_stopping_order(
 
   We can see how this is directly useful in the context of padding below.
   Because the last two microbatches consist of only padding examples,
-  `inmemory_microbatched_fn_general` will skip them, saving compute.
+  `microbatch` will skip them, saving compute.
 
     >>> is_padding = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1])
     >>> _sharding_aware_reshape(is_padding[order], microbatch_size=2)
@@ -305,7 +333,7 @@ def compute_early_stopping_order(
   Args:
     batch_size: The size of the batch axis.
     microbatch_size: The target microbatch size that will be used with
-      `inmemory_microbatched_fn_general`.
+      `microbatch`.
 
   Returns:
     A permutation of the example indices, where padding examples are evenly
@@ -333,7 +361,7 @@ def verify_early_stopping_order(
 
   Args:
     is_padding_example: A 1D array of shape (num_examples,).
-    microbatch_size: Argument passed to `inmemory_microbatched_fn_general`.
+    microbatch_size: Argument passed to `microbatch`.
 
   Returns:
     True if the is_padding_example gives an optimal early-stopping order.

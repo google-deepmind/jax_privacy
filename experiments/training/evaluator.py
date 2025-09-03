@@ -38,9 +38,9 @@ import chex
 import haiku as hk
 import jax
 from jax_privacy.dp_sgd import typing
-from jax_privacy.training import devices
-from jax_privacy.training import forward
-from jax_privacy.training import updater
+from training import devices
+from training import forward
+from training import updater
 from jaxline import utils as jaxline_utils
 
 

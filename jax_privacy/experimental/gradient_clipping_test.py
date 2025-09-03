@@ -18,7 +18,7 @@ from absl.testing import parameterized
 import chex
 import jax
 import jax.numpy as jnp
-from jax_privacy.experimental import gradient_clipping
+from jax_privacy.experimental import clipping as gradient_clipping
 
 
 def mean_quadratic_loss(params: jax.Array, x: jax.Array) -> jax.Array:
@@ -348,6 +348,25 @@ class GradientClippingTest(parameterized.TestCase):
         rescale_to_unit_norm=False,
     )
     sum_grads = jax.jit(clipped_grad_fn)(params, inputs, targets)
+    chex.assert_trees_all_equal_structs(sum_grads, params)
+
+  def test_sum_clipped_grad_prng_key(self):
+    def fun(params, data, key):
+      deterministic_output = params['w'] * data + params['b']
+      noise = jax.random.normal(key, shape=deterministic_output.shape)
+      combined_output = deterministic_output + noise
+      return jnp.mean(combined_output)
+
+    key = jax.random.key(0)
+    params = {'w': 2.5, 'b': 1.0}
+    data = jnp.array([10.0, 20.0, 30.0])
+
+    clipped_grad_fn = gradient_clipping.clipped_grad(
+        fun,
+        l2_clip_norm=1.0,
+        prng_dim=2,
+    )
+    sum_grads = clipped_grad_fn(params, data, key)
     chex.assert_trees_all_equal_structs(sum_grads, params)
 
 

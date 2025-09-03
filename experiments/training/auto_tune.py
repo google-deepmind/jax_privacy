@@ -19,8 +19,8 @@ import dataclasses
 
 from absl import logging
 from jax_privacy import accounting
-from jax_privacy.training import algorithm_config
-from jax_privacy.training import experiment_config
+from training import algorithm_config
+from training import experiment_config
 
 
 def dp_auto_tune(

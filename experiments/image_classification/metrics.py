@@ -19,7 +19,7 @@ from typing import Mapping, Optional, Sequence
 import chex
 import jax
 import jax.numpy as jnp
-from jax_privacy.training import metrics
+from training import metrics
 import numpy as np
 from sklearn import linear_model
 from sklearn import multiclass

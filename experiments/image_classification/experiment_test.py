@@ -24,9 +24,9 @@ import image_data as data
 from image_classification import config_base
 from image_classification import experiment as experiment_py
 from image_classification.models import models
-from jax_privacy.training import averaging
-from jax_privacy.training import experiment_config
-from jax_privacy.training import optimizer_config
+from training import averaging
+from training import experiment_config
+from training import optimizer_config
 
 
 def get_config() -> config_base.ExperimentConfig:

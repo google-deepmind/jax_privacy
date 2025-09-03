@@ -42,13 +42,13 @@ from jax_privacy.dp_sgd import gradients
 from jax_privacy.dp_sgd import metrics_accumulator
 from jax_privacy.dp_sgd import optim
 from jax_privacy.dp_sgd import typing
-from jax_privacy.training import averaging
-from jax_privacy.training import batching as batching_module
-from jax_privacy.training import devices
-from jax_privacy.training import experiment_config
-from jax_privacy.training import forward
-from jax_privacy.training import optimizer_config as opt_config
-from jax_privacy.training import updater
+from training import averaging
+from training import batching as batching_module
+from training import devices
+from training import experiment_config
+from training import forward
+from training import optimizer_config as opt_config
+from training import updater
 import optax
 
 

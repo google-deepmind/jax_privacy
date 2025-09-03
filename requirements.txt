@@ -9,8 +9,8 @@ dp_accounting
 einshape
 grain
 hypothesis
-jax==0.6.2
-jaxlib==0.6.2
+jax>=0.7.0
+jaxlib>=0.7.0
 jaxtyping
 pydantic
 ml_collections

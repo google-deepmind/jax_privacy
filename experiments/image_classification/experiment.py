@@ -26,8 +26,8 @@ from image_classification import auditing
 from image_classification import config_base
 from image_classification import evaluator as evaluator_py
 from image_classification import forward
-from jax_privacy.training import experiment
-from jax_privacy.training import updater as updater_py
+from training import experiment
+from training import updater as updater_py
 from jaxline import utils as jaxline_utils
 import numpy as np
 

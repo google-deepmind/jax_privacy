@@ -44,6 +44,7 @@ extensions = [
     'sphinx.ext.viewcode',
     'sphinx_rtd_theme',
     'myst_nb',
+    'sphinx.ext.doctest',
 ]
 
 autosummary_generate = True

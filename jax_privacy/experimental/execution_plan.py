@@ -15,6 +15,8 @@
 
 """Module for defining DP Execution Plans.
 
+**API Stability: 3/10 -- Subject to change!**
+
 This module introduces the `DPExecutionPlan`, an object designed to encapsulate
 the core components of a differentially private (DP) mechanism. The primary aim
 is to simplify the process of constructing and applying DP mechanisms by
@@ -52,8 +54,8 @@ import jax.numpy as jnp
 from jax_privacy.experimental import batch_selection
 from jax_privacy.experimental import clipping
 from jax_privacy.matrix_factorization import toeplitz
-from jax_privacy.noise_addition import distributed_noise_generation as dng
-from jax_privacy.noise_addition import gradient_privatizer
+from jax_privacy.noise_addition import additive_privatizers
+import optax
 import pydantic
 
 
@@ -102,7 +104,7 @@ class DPExecutionPlan:
 
   clipped_aggregation_fn: clipping.BoundedSensitivityCallable
   batch_selection_strategy: batch_selection.BatchSelectionStrategy
-  noise_addition_transform: gradient_privatizer.GradientPrivatizer
+  noise_addition_transform: optax.GradientTransformation
   dp_event: dp_accounting.DpEvent
 
 
@@ -157,14 +159,14 @@ class BandMFExecutionPlanConfig:
     accountant: A privacy accountant that is used to calibrate the noise
       multiplier. Expected to have an empty state (or calibration may fail).
       Defaults to PLDAccountant with REPLACE_SPECIAL neighboring_relation.
+    noise_seed: A seed for the random number generator used for noise addition.
   """
 
-  num_examples: int = pydantic.Field(ge=0)
   iterations: int = pydantic.Field(ge=0)
   num_bands: int = pydantic.Field(ge=1)
   epsilon: float | None = pydantic.Field(ge=0, allow_inf_nan=True)
   delta: float | None = pydantic.Field(gt=0, le=1)
-  noise_multiplier: float | None = pydantic.Field(ge=0)
+  noise_multiplier: float | None = pydantic.Field(default=None, ge=0)
   sampling_prob: float = pydantic.Field(default=1.0, ge=0, le=1)
   shuffle: bool = False
   use_fixed_size_groups: bool = False
@@ -172,6 +174,7 @@ class BandMFExecutionPlanConfig:
   accountant: dp_accounting.PrivacyAccountant = pydantic.Field(
       default_factory=lambda: dp_accounting.pld.PLDAccountant(_REPLACE_SPECIAL)
   )
+  noise_seed: int | None = None
 
   def __post_init__(self):
     _validate_epsilon_delta_noise_multiplier(
@@ -199,8 +202,9 @@ class BandMFExecutionPlanConfig:
     )
     noise_multiplier = self.noise_multiplier
     if noise_multiplier is None:
+      make_fresh_accountant = functools.partial(copy.deepcopy, self.accountant)
       noise_multiplier = dp_accounting.calibrate_dp_mechanism(
-          make_fresh_accountant=functools.partial(copy.copy, self.accountant),
+          make_fresh_accountant=make_fresh_accountant,
           make_event_from_param=self._get_dp_event,
           target_epsilon=self.epsilon,
           target_delta=self.delta,
@@ -209,7 +213,6 @@ class BandMFExecutionPlanConfig:
     dp_event = self._get_dp_event(noise_multiplier)
 
     batch_selection_strategy = batch_selection.CyclicPoissonSampling(
-        self.num_examples,
         sampling_prob=self.sampling_prob,
         iterations=self.iterations,
         cycle_length=self.num_bands,
@@ -226,18 +229,15 @@ class BandMFExecutionPlanConfig:
     max_column_norm = jnp.linalg.norm(mf_strategy)
     noising_matrix = toeplitz.inverse_as_streaming_matrix(mf_strategy)
 
-    noise_addition_transform = (
-        dng.streaming_matrix_to_single_machine_privatizer(
-            noising_matrix,
-            stddev=float(
-                noise_multiplier * query_sensitivity * max_column_norm
-            ),
-        )
+    privatizer = additive_privatizers.matrix_factorization_privatizer(
+        noising_matrix,
+        stddev=float(noise_multiplier * query_sensitivity * max_column_norm),
+        prng_key=self.noise_seed,
     )
 
     return DPExecutionPlan(
         clipped_aggregation_fn=clipped_aggregation_fn,
         batch_selection_strategy=batch_selection_strategy,
-        noise_addition_transform=noise_addition_transform,
+        noise_addition_transform=privatizer,
         dp_event=dp_event,
     )

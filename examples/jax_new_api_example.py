@@ -123,7 +123,7 @@ def main(_):
       dp_accounting.NeighboringRelation.REPLACE_ONE
   )
   privatizer = noise_addition.gaussian_privatizer(
-      stddev=noise_multiplier * sensitivity, noise_key=noise_rng
+      stddev=noise_multiplier * sensitivity, prng_key=noise_rng
   )
   noise_state = privatizer.init(model_params)
 

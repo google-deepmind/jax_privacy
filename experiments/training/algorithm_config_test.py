@@ -24,7 +24,7 @@ from absl.testing import parameterized
 import jax
 import jax.numpy as jnp
 from jax_privacy.dp_sgd import typing
-from jax_privacy.training import algorithm_config
+from training import algorithm_config
 import numpy as np
 
 

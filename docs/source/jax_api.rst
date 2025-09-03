@@ -1,6 +1,6 @@
-################
- JAX & Flax API
-################
+#######################
+ Core Library (Old API)
+#######################
 
 `accounting` and `dp_sgd` modules provide the API for raw JAX and Flax
 Linen. Flax NNX is not supported yet.

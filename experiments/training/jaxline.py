@@ -21,8 +21,8 @@ from typing import Any
 import chex
 import jax
 from jax_privacy.dp_sgd import typing
-from jax_privacy.training import experiment as experiment_py
-from jax_privacy.training import updater as updater_py
+from training import experiment as experiment_py
+from training import updater as updater_py
 from jaxline import experiment as jaxline_experiment
 import ml_collections
 

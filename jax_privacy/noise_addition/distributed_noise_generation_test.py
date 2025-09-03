@@ -13,30 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
-
 from absl.testing import absltest
 from absl.testing import parameterized
 import chex
 import jax
 import jax.numpy as jnp
-# pylint: disable=g-importing-member
-from jax.experimental.shard import reshard
 from jax_privacy.matrix_factorization import buffered_toeplitz
 from jax_privacy.matrix_factorization import streaming_matrix
 from jax_privacy.matrix_factorization import toeplitz
-from jax_privacy.noise_addition import distributed_noise_generation
+from jax_privacy.noise_addition import additive_privatizers
 import numpy as np
 
 
 # pylint: disable=invalid-name
-
-
-def flatten_shardings_fn(out_sharding):
-  flatten_fn = lambda s: jax.sharding.NamedSharding(
-      s.mesh, distributed_noise_generation._flatten_pspec(s.spec)
-  )
-  return jax.tree.map(flatten_fn, out_sharding)
 
 
 def empty_shardings_fn(out_sharding):
@@ -57,62 +46,19 @@ def buffered_toeplitz_noising_matrix_fn():
   return blt.inverse_as_streaming_matrix()
 
 
-def get_debug_streaming_matrix(
-    num_buffers: int = 3,
-) -> streaming_matrix.StreamingMatrix:
-  """Returns a streaming matrix useful for testing."""
-
-  def _test_init(shape: tuple[int, ...]) -> jax.Array:
-    mat_shape = (num_buffers,) + shape
-    num_entries = math.prod(mat_shape)
-    return jnp.arange(num_entries, dtype=jnp.float32).reshape(mat_shape)
-
-  def _test_multiply(x: jax.Array, y: jax.Array) -> tuple[jax.Array, jax.Array]:
-    return jnp.sum(x * y, axis=0), y
-
-  return streaming_matrix.StreamingMatrix(_test_init, _test_multiply)
-
-
 class ShardedNoiseGenerationTest(parameterized.TestCase):
 
   def setUp(self):
     super().setUp()
     chex.set_n_cpu_devices(8)
 
-  def test_flatten_pspec(self):
-    self.assertEqual(
-        distributed_noise_generation._flatten_pspec(
-            jax.sharding.PartitionSpec(None, ('x', 'y'), None, 'z')
-        ),
-        jax.sharding.PartitionSpec(('x', 'y', 'z')),
-    )
-    self.assertEqual(
-        distributed_noise_generation._flatten_pspec(
-            jax.sharding.PartitionSpec('data', None, ('replica', 'mdl'))
-        ),
-        jax.sharding.PartitionSpec(('data', 'replica', 'mdl')),
-    )
-
-  def test_reshape_add(self):
-    axis_types = (jax.sharding.AxisType.Explicit,) * 3
-    mesh = jax.make_mesh((2, 2, 2), ('x', 'y', 'z'), axis_types=axis_types)
-
-    with jax.sharding.use_mesh(mesh):
-      x = reshard(
-          jnp.zeros((2, 4, 8)), jax.sharding.PartitionSpec(None, 'y', 'x')
-      )
-      y = reshard(
-          jnp.arange(2 * 4 * 8), jax.sharding.PartitionSpec(('x', 'y', 'z'))
-      )
-      z = distributed_noise_generation._reshape_add(x, y)
-
-    self.assertEqual(z.shape, x.shape)
-    self.assertEqual(z.sharding, x.sharding)
-
-    actual = np.sort(np.array(z).flatten())
-    chex.assert_trees_all_equal(actual, y)
+    axis_types = (jax.sharding.AxisType.Explicit,) * 2
+    mesh = jax.make_mesh((4, 2), ('x', 'y'), axis_types=axis_types)
+    jax.sharding.set_mesh(mesh)
 
   @parameterized.named_parameters(
+      ('blt', buffered_toeplitz_noising_matrix_fn),
+      ('bandmf', banded_toeplitz_noising_matrix_fn),
       ('dpsgd', streaming_matrix.identity),
       ('prefix', streaming_matrix.prefix_sum),
       ('momentum', streaming_matrix.momentum_sgd_matrix),
@@ -122,9 +68,6 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
       strategy_inverse_fn=banded_toeplitz_noising_matrix_fn,
   ):
     self.assertEqual(jax.device_count(), 8)
-
-    axis_types = (jax.sharding.AxisType.Explicit,) * 2
-    mesh = jax.make_mesh((4, 2), ('x', 'y'), axis_types=axis_types)
 
     pspecs = {
         'v': jax.sharding.PartitionSpec(),
@@ -142,30 +85,25 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
         'z': jnp.ones((2, 7)),  # matrix, size not divisible by 8
     }
 
-    with jax.sharding.use_mesh(mesh):
-      model_params = reshard(model_params, pspecs)
-      noising_matrix = strategy_inverse_fn()
+    model_params = jax.sharding.reshard(model_params, pspecs)
 
     privatizer = (
-        distributed_noise_generation.streaming_matrix_to_sharded_privatizer(
-            noising_matrix=noising_matrix,
+        additive_privatizers.matrix_factorization_privatizer(
+            noising_matrix=strategy_inverse_fn(),
             stddev=1.0,
-            noise_key=jax.random.key(0),
+            prng_key=jax.random.key(0),
+            intermediate_strategy=additive_privatizers.SupportedStrategies.ZERO,
         )
     )
 
     @jax.jit
     def foo(model_params):
       noise_state = privatizer.init(model_params)
-      sum_of_clipped_grads = model_params
-      noisy_grads, noise_state = privatizer.privatize(
-          sum_of_clipped_grads=sum_of_clipped_grads, noise_state=noise_state
-      )
-      noisy_grads2, _ = privatizer.privatize(
-          sum_of_clipped_grads=sum_of_clipped_grads, noise_state=noise_state
-      )
+      noisy_grads, noise_state = privatizer.update(model_params, noise_state)
+      noisy_grads2, _ = privatizer.update(model_params, noise_state)
       return noisy_grads, noisy_grads2
 
+    model_params = jax.sharding.reshard(model_params, pspecs)
     noisy_grads, noisy_grads2 = foo(model_params)
 
     def assert_shape_dtype_sharding_equal(x, y):
@@ -183,43 +121,36 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
     self.assertLen(set(flat_noise), flat_noise.size)
 
   def test_internal_shardings(self):
-    axis_types = (jax.sharding.AxisType.Explicit,) * 2
-    mesh = jax.make_mesh((4, 2), ('x', 'y'), axis_types=axis_types)
 
+    noising_matrix = toeplitz.inverse_as_streaming_matrix(jnp.ones(3))
     privatizer = (
-        distributed_noise_generation.streaming_matrix_to_sharded_privatizer(
-            noising_matrix=get_debug_streaming_matrix(),
+        additive_privatizers.matrix_factorization_privatizer(
+            noising_matrix=noising_matrix,
             stddev=1.0,
-            noise_key=jax.random.key(0),
+            prng_key=jax.random.key(0),
+            intermediate_strategy=additive_privatizers.SupportedStrategies.ZERO,
         )
     )
 
     def foo(sum_of_clipped_grads):
       noise_state0 = privatizer.init(sum_of_clipped_grads)
-      _, noise_state1 = privatizer.privatize(
-          sum_of_clipped_grads=sum_of_clipped_grads,
-          noise_state=noise_state0,
-      )
-      _, noise_state2 = privatizer.privatize(
-          sum_of_clipped_grads=sum_of_clipped_grads,
-          noise_state=noise_state1,
-      )
+      _, noise_state1 = privatizer.update(sum_of_clipped_grads, noise_state0)
+      _, noise_state2 = privatizer.update(sum_of_clipped_grads, noise_state1)
       return noise_state0, noise_state1, noise_state2
 
-    expected = jax.sharding.NamedSharding(
-        mesh, jax.sharding.PartitionSpec(None, ('x', 'y'))
+    expected = jax.sharding.PartitionSpec(None, ('x', 'y'))
+    params = jax.device_put(
+        jnp.zeros((3, 4, 5)), jax.sharding.PartitionSpec()
     )
-    with jax.sharding.use_mesh(mesh):
-      params = jax.device_put(
-          jnp.zeros((3, 4, 5)), jax.sharding.PartitionSpec()
-      )
-      states = foo(params)
+    states = foo(params)
 
     for full_state in states:
       _, state = full_state
+      print(state)
       self.assertEqual(state.shape[1], 64)
       self.assertEqual(state.dtype, jnp.float32)
-      self.assertTrue(state.sharding.is_equivalent_to(expected, state.ndim))
+      print(state.sharding)
+      self.assertEqual(state.sharding.spec, expected)
 
 
 if __name__ == '__main__':

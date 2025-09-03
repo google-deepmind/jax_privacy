@@ -17,9 +17,9 @@ from absl.testing import absltest
 from absl.testing import parameterized
 from jax_privacy import accounting
 from jax_privacy.dp_sgd import typing
-from jax_privacy.training import algorithm_config
-from jax_privacy.training import auto_tune as auto_tune_py
-from jax_privacy.training import experiment_config
+from training import algorithm_config
+from training import auto_tune as auto_tune_py
+from training import experiment_config
 import numpy as np
 
 

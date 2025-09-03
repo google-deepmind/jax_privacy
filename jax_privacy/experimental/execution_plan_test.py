@@ -18,10 +18,10 @@ from absl.testing import parameterized
 import dp_accounting
 import jax.numpy as jnp
 from jax_privacy.experimental import batch_selection
+from jax_privacy.experimental import clipping
 from jax_privacy.experimental import execution_plan
-from jax_privacy.experimental import gradient_clipping
-from jax_privacy.noise_addition import gradient_privatizer
 import numpy as np
+import optax
 
 
 # TODO: Improve test coverage, including correctness of the
@@ -35,7 +35,6 @@ class ExecutionPlanTest(parameterized.TestCase):
   )
   def test_bandmf_validation(self, **kwargs):
     default_kwargs = {
-        "num_examples": 100,
         "num_bands": 10,
         "iterations": 20,
         "epsilon": None,
@@ -46,21 +45,22 @@ class ExecutionPlanTest(parameterized.TestCase):
     with self.assertRaises(ValueError):
       execution_plan.BandMFExecutionPlanConfig(**default_kwargs)
 
-  def test_bandmf_execution_plan_creation(self):
+  @parameterized.parameters(
+      {"epsilon": None, "delta": None, "noise_multiplier": 1.0},
+      {"epsilon": 1.0, "delta": 1e-06, "noise_multiplier": None},
+  )
+  def test_bandmf_execution_plan_creation(self, **privacy_kwargs):
 
     iterations = 20
     config = execution_plan.BandMFExecutionPlanConfig(
-        num_examples=100,
         num_bands=10,
         iterations=iterations,
-        epsilon=None,
-        delta=None,
-        noise_multiplier=1.0,
         shuffle=False,
         use_fixed_size_groups=False,
+        **privacy_kwargs
     )
 
-    gradient_fn = gradient_clipping.clipped_grad(jnp.mean, l2_clip_norm=1.0)
+    gradient_fn = clipping.clipped_grad(jnp.mean, l2_clip_norm=1.0)
     plan = config.make(gradient_fn)
 
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
@@ -73,17 +73,17 @@ class ExecutionPlanTest(parameterized.TestCase):
     self.assertEqual(plan.batch_selection_strategy.sampling_prob, 1.0)
     self.assertIsInstance(
         plan.noise_addition_transform,
-        gradient_privatizer.GradientPrivatizer,
+        optax.GradientTransformation,
     )
     self.assertLen(
-        list(plan.batch_selection_strategy.batch_iterator()), iterations
+        list(plan.batch_selection_strategy.batch_iterator(100)), iterations
     )
 
     # TODO: b/415360727 - Add tests that the execution plan is correctly
     # configured and has the expected DP properties.
 
     self.assertIsInstance(plan.dp_event, dp_accounting.DpEvent)
-    batch_gen = plan.batch_selection_strategy.batch_iterator(rng=0)
+    batch_gen = plan.batch_selection_strategy.batch_iterator(100, rng=0)
     self.assertIsInstance(next(batch_gen), np.ndarray)
 
 

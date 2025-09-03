@@ -23,13 +23,13 @@ import jax
 import jax.numpy as jnp
 from jax_privacy.dp_sgd import gradients
 from jax_privacy.dp_sgd import typing
-from jax_privacy.training import devices
-from jax_privacy.training import dp_updater
-from jax_privacy.training import evaluator as evaluator_py
-from jax_privacy.training import experiment_config
-from jax_privacy.training import forward
-from jax_privacy.training import metrics as metrics_module
-from jax_privacy.training import optimizer_config
+from training import devices
+from training import dp_updater
+from training import evaluator as evaluator_py
+from training import experiment_config
+from training import forward
+from training import metrics as metrics_module
+from training import optimizer_config
 import optax
 
 

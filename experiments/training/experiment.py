@@ -25,15 +25,15 @@ from jax_privacy.accounting import analysis
 from jax_privacy.accounting import calibrate
 from jax_privacy.dp_sgd import gradients
 from jax_privacy.dp_sgd import typing
-from jax_privacy.training import algorithm_config
-from jax_privacy.training import averaging
-from jax_privacy.training import devices
-from jax_privacy.training import dp_updater
-from jax_privacy.training import evaluator as evaluator_py
-from jax_privacy.training import experiment_config
-from jax_privacy.training import forward
-from jax_privacy.training import optimizer_config as opt_config
-from jax_privacy.training import updater as updater_py
+from training import algorithm_config
+from training import averaging
+from training import devices
+from training import dp_updater
+from training import evaluator as evaluator_py
+from training import experiment_config
+from training import forward
+from training import optimizer_config as opt_config
+from training import updater as updater_py
 from jaxline import utils as jaxline_utils
 import numpy as np
 

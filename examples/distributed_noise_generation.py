@@ -138,12 +138,13 @@ def generate_noise(
 
   iterations = 1_000
   strategy_coefs = toeplitz.optimal_max_error_strategy_coefs(bands)
-  privatizer = noise_addition.streaming_matrix_to_sharded_privatizer(
+  privatizer = noise_addition.matrix_factorization_privatizer(
       noising_matrix=toeplitz.inverse_as_streaming_matrix(
           strategy_coefs, column_normalize_for_n=iterations
       ),
       stddev=1.0,
-      noise_key=jax.random.key(0),
+      prng_key=jax.random.key(0),
+      intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
   )
 
   @jax.jit
@@ -153,9 +154,8 @@ def generate_noise(
     for _ in range(steps):
       # In real applications, pass in the actual clipped gradient here.
       # For benchmarking, we just pass in something that has the same structure.
-      noisy_grad, state = privatizer.privatize(
-          sum_of_clipped_grads=pytree_like_model_params,
-          noise_state=state,
+      noisy_grad, state = privatizer.update(
+          pytree_like_model_params, state,
       )
     return state, noisy_grad
 
@@ -185,7 +185,7 @@ def main(_):
 
   if _MODEL.value == 'bert':
 
-    with jax.sharding.use_mesh(mesh):
+    with jax.set_mesh(mesh):
       params = bert_model_params(_HIDDEN_SIZE.value)
       state, noisy_grad = generate_noise(params, _BANDS.value, _STEPS.value)
 
@@ -205,7 +205,7 @@ def main(_):
     print(qkv(noisy_grad).sharding)
 
   else:
-    with jax.sharding.use_mesh(mesh):
+    with jax.set_mesh(mesh):
       params = toy_model_params(_HIDDEN_SIZE.value)
       state, noisy_grad = generate_noise(params, _BANDS.value, _STEPS.value)
 

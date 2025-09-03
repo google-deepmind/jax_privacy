@@ -13,36 +13,91 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Implementations of GradientPrivatizer constructors which add noise."""
+"""Implementations of optax.GradientTransformations that add noise to gradients."""
 
+import enum
 import functools
+from typing import NamedTuple, Protocol
 
-import chex
 import jax
 from jax import numpy as jnp
-import jaxtyping
+import numpy as np
 import optax
 
 from ..matrix_factorization import streaming_matrix
-from . import gradient_privatizer
+from . import sharding_utils
 
 
-IntScalar = jaxtyping.Int[jaxtyping.Array, '']
-FloatScalar = jaxtyping.Float[jaxtyping.Array, '']
+class _NoiseStructureFn(Protocol):
+  """Protocol specifying the semantics of _IntermediateStrategy.get_noise_structure.
+
+  (Expected) Formal Guarantees of y = get_noise_structure(x):
+    - x.size <= y.size (i.e., math.prod(x.shape) <= math.prod(y.shape)). See
+    property (2) of _NoiseAdder.
+  """
+
+  def __call__(self, value_info: jax.ShapeDtypeStruct) -> jax.ShapeDtypeStruct:
+    """Return the abstract info of the intermediate noise from the value."""
 
 
-def _cast_to_dtype(tree1, tree2):
-  """Casts all leaves of tree1 to the dtype of tree2."""
-  return jax.tree.map(lambda x, y: x.astype(y.dtype), tree1, tree2)
+class _NoiseAdder(Protocol):
+  """Protocol specifying the semantics of _IntermediateStrategy.add.
+
+  Will be called as add(value, noise), where the first argument represents the
+  input and can have abritrary shape/sharding while the second arguments
+  represents the noise and will have shape/sharding
+  specified by get_noise_structure (subject to the formal guarantees above).
+
+  (Expected) Formal Guarantees for z = add(x, y):
+    - Each Element z_i is equal to x_i + y_j for some j.
+    - Each element y_j is added to at most one element x_i.
+    - z as the same shape/dtype/sharding as x.
+  """
+
+  def __call__(self, value: jax.Array, noise: jax.Array) -> jax.Array:
+    """Add the noise to the input tensor, possibly via a reshape operation."""
+
+
+class _IntermediateStrategy(NamedTuple):
+  """Specifies an implementation strategy for adding noise to values.
+
+  Noise may be generated with a different shape and/or sharding than the
+  inputs. This class holds implementations to determine the shape/sharding
+  of the intermediates, and a function to add two arrays with potentially
+  different shapes/shardings.
+  """
+
+  get_noise_structure: _NoiseStructureFn
+  add: _NoiseAdder
+
+
+# Our public API expects an Enum to prevent users from passing in a custom
+# implementation that breaks the formal guarantees. Custom implementatations
+# can be used, but should checked in and reviewed by JAX Privacy authors.
+class SupportedStrategies(enum.Enum):
+  """Supported strategies for generating intermediate noise."""
+
+  DEFAULT = _IntermediateStrategy(
+      get_noise_structure=lambda value_info: value_info,
+      add=lambda value, noise: (value + noise).astype(value.dtype),
+  )
+  """Basic approach for single-machine training scenarios."""
+  ZERO = _IntermediateStrategy(
+      get_noise_structure=sharding_utils.flatten_with_zero_redundancy,
+      add=sharding_utils.local_reshape_add,
+  )
+  """Zero-redundancy approach suitable for multi-machine scenarios. Requires
+  inputs to have explicit sharding annotations."""
 
 
 def matrix_factorization_privatizer(
     noising_matrix: jax.typing.ArrayLike | streaming_matrix.StreamingMatrix,
     *,
-    noise_key: jax.Array,
     stddev: float,
-) -> gradient_privatizer.GradientPrivatizer:
-  """Creates a `GradientPrivatizer` adding DP-MF-FTRL noise to gradients.
+    prng_key: jax.Array | int | None = None,
+    intermediate_strategy: SupportedStrategies = SupportedStrategies.DEFAULT,
+) -> optax.GradientTransformation:
+  """Creates a gradient privatizer that adds correlated noise to gradients.
 
   This implementation is described in Section 4.4 of [Correlated Noise
   Mechanisms for Differentially Private Learning]
@@ -59,15 +114,20 @@ def matrix_factorization_privatizer(
     noising_matrix: A matrix used to generate correlated noise. Noise samples
       will be distributed according to a multivariate Gaussian with covariance
       matrix `noising_matrix.T @ noising_matrix`.
-    noise_key: a PRNGKey array representing the source of randomness.
     stddev: Standard deviation to use for the noise of this privatizer.
+    prng_key: An optional PRNGKey array representing the source of randomness.
+    intermediate_strategy: Strategy to use for generating intermediate noise.
 
   Returns:
-    A `GradientPrivatizer` which adds samples from Gaussian correlated by
-    `noising_matrix` (i.e., samples from a Gaussian with covariance
+    An optax.GradientTransformation which adds samples from Gaussian correlated
+    by `noising_matrix` (i.e., samples from a Gaussian with covariance
     `noising_matrix.T @ noising_matrix`), keyed by `noise_key`, to its stream
     of gradients.
   """
+  if prng_key is None:
+    prng_key = jax.random.key(np.random.randint(0, 2**31))
+  elif isinstance(prng_key, int):
+    prng_key = jax.random.key(prng_key)
   if isinstance(noising_matrix, jax.typing.ArrayLike):
     impl = _dense_matrix_factorization_privatizer
   elif isinstance(noising_matrix, streaming_matrix.StreamingMatrix):
@@ -75,7 +135,8 @@ def matrix_factorization_privatizer(
   else:
     raise NotImplementedError('Unsupported noising_matrix: ', noising_matrix)
 
-  return impl(noising_matrix, noise_key=noise_key, stddev=stddev)
+  strat: _IntermediateStrategy = intermediate_strategy.value
+  return impl(noising_matrix, prng_key=prng_key, stddev=stddev, strategy=strat)
 
 
 gaussian_privatizer = functools.partial(
@@ -83,11 +144,11 @@ gaussian_privatizer = functools.partial(
     streaming_matrix.identity(),
 )
 gaussian_privatizer.__doc__ = (
-    """Constructs `GradientPrivatizer` adding isotropic Gaussian noise."""
+    """Constructs a gradient privatizer that adds isotropic Gaussian noise."""
 )
 
 
-def _compute_loop_bounds(matrix_row: chex.Array) -> tuple[IntScalar, IntScalar]:
+def _compute_loop_bounds(matrix_row):
   """Computes bounds for jax.lax.fori_loop version of row-column reduction."""
   assert matrix_row.ndim == 1
   nonzero_entries = (matrix_row != 0).astype(jnp.int32)
@@ -102,6 +163,7 @@ def _gaussian_linear_combination(
     key: jax.Array,
     shape: tuple[int, ...],
     dtype: jax.typing.DTypeLike,
+    out_sharding: jax.sharding.NamedSharding | None = None,
 ) -> jax.Array:
   """Computes a linear combination of standard Gaussian random variables."""
   assert matrix_row.ndim == 1
@@ -109,7 +171,9 @@ def _gaussian_linear_combination(
   def loop_body(idx, partial):
     coef = matrix_row[idx].astype(dtype)
     sub_key = jax.random.fold_in(key, idx)
-    return partial + coef * jax.random.normal(sub_key, shape, dtype)
+    # We pass sharding because sharding-in-types will replicate otherwise.
+    noise = jax.random.normal(sub_key, shape, dtype, out_sharding=out_sharding)
+    return partial + coef * noise
 
   lower_bound, upper_bound = _compute_loop_bounds(matrix_row)
   loop_state = jnp.zeros(shape, dtype)
@@ -119,70 +183,65 @@ def _gaussian_linear_combination(
 def _dense_matrix_factorization_privatizer(
     noising_matrix: jax.typing.ArrayLike,
     *,
-    noise_key: jax.Array,
     stddev: float,
-) -> gradient_privatizer.GradientPrivatizer:
-  """Creates a `GradientPrivatizer` from a dense matrix C^{-1}."""
+    prng_key: jax.Array,
+    strategy: _IntermediateStrategy,
+) -> optax.GradientTransformation:
+  """Creates a gradient privatizer from a dense matrix C^{-1}."""
   # See Section 4.4.5 of https://arxiv.org/pdf/2506.08201 (Approach 2)
   noising_matrix = jnp.asarray(noising_matrix)
 
   if noising_matrix.ndim != 2:
     raise ValueError(f'Expected 2D matrix, found {noising_matrix.shape=}.')
 
-  def privatize(
-      *,
-      sum_of_clipped_grads: chex.ArrayTree,
-      noise_state: IntScalar,
-  ) -> tuple[chex.ArrayTree, IntScalar]:
+  def privatize(sum_of_clipped_grads, noise_state):
     index = noise_state
-    matrix_row = noising_matrix[index]
+    matrix_row = noising_matrix[index] * stddev
+
+    target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
     noise = optax.tree.random_like(
-        rng_key=noise_key,
-        target_tree=sum_of_clipped_grads,
+        rng_key=prng_key,
+        target_tree=target,
         sampler=functools.partial(_gaussian_linear_combination, matrix_row),
     )
-    noisy_grads = optax.tree.add_scale(sum_of_clipped_grads, stddev, noise)
-    return _cast_to_dtype(noisy_grads, sum_of_clipped_grads), index + 1
+    noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, noise)
+    return noisy_grads, index + 1
 
   init = lambda _: jnp.array(0)
-  return gradient_privatizer.GradientPrivatizer(init, privatize)
+  return optax.GradientTransformation(init, privatize)
 
 
-def _tree_unzip(tree, treedef):
-  """Given a tree of tuples, return a tuple of trees."""
-  leaves = treedef.flatten_up_to(tree)
-  return tuple(treedef.unflatten(x) for x in zip(*leaves))
+def _iid_normal_noise(prng_key, target_tree, stddev):
+  standard_normal = optax.tree.random_like(
+      rng_key=prng_key,
+      target_tree=target_tree,
+      sampler=jax.random.normal,
+  )
+  return optax.tree.scale(stddev, standard_normal)
 
 
 def _streaming_matrix_factorization_privatizer(
     noising_matrix: streaming_matrix.StreamingMatrix,
     *,
-    noise_key: jax.Array,
     stddev: float,
-) -> gradient_privatizer.GradientPrivatizer:
-  """Creates a `GradientPrivatizer` from a StreamingMatrix C^{-1}."""
+    prng_key: jax.Array,
+    strategy: _IntermediateStrategy,
+) -> optax.GradientTransformation:
+  """Creates a a gradient privatizer from a StreamingMatrix C^{-1}."""
 
   def init(model):
-    state = jax.tree.map(lambda x: noising_matrix.init_multiply(x.shape), model)
-    return noise_key, jax.tree.map(jnp.array, state)
+    intermediate = jax.tree.map(strategy.get_noise_structure, model)
+    return prng_key, noising_matrix.init_multiply(intermediate)
 
-  def privatize(*, sum_of_clipped_grads, noise_state):
+  def privatize(sum_of_clipped_grads, noise_state):
     prng_key, inner_state = noise_state
     new_key, sub_key = jax.random.split(prng_key)
 
-    iid_noise = optax.tree.random_like(
-        rng_key=sub_key,
-        target_tree=sum_of_clipped_grads,
-        sampler=jax.random.normal,
-    )
+    target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
+    iid_noise = _iid_normal_noise(sub_key, target, stddev)
+    corr_noise, new_state = noising_matrix.multiply_next(iid_noise, inner_state)
 
-    corr_noise, new_state = _tree_unzip(
-        jax.tree.map(noising_matrix.multiply_next, iid_noise, inner_state),
-        jax.tree.structure(iid_noise),
-    )
-    noisy_grads = optax.tree.add_scale(sum_of_clipped_grads, stddev, corr_noise)
-    new_noise_state = (new_key, new_state)
+    noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, corr_noise)
+    return noisy_grads, (new_key, new_state)
 
-    return _cast_to_dtype(noisy_grads, sum_of_clipped_grads), new_noise_state
-
-  return gradient_privatizer.GradientPrivatizer(init, privatize)
+  return optax.GradientTransformation(init, privatize)

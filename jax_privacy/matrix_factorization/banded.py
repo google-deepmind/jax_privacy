@@ -126,8 +126,12 @@ class ColumnNormalizedBanded:
   ) -> streaming_matrix.StreamingMatrix:
     """Create $C^{-1}$ as a StreamingMatrix object."""
 
-    def init_fn(shape):
-      return 0, jnp.zeros((self.bands,) + shape, dtype=self.params.dtype)
+    def init_fn(abstract_value):
+      dtype = jnp.promote_types(abstract_value.dtype, self.params.dtype)
+      # *_like preserves shape, dtype, and (if possible) sharding.
+      zero = jnp.zeros_like(abstract_value, dtype=dtype)
+      buffers = jnp.broadcast_to(zero, (self.bands,) + zero.shape)
+      return jnp.array(0), buffers
 
     def next_fn(value, state):
       index, bufs = state
@@ -145,7 +149,9 @@ class ColumnNormalizedBanded:
       updated_state = (index + 1, bufs.at[k].set(xi))
       return xi * col_norm, updated_state
 
-    return streaming_matrix.StreamingMatrix(init_fn, next_fn)
+    return streaming_matrix.StreamingMatrix.from_array_implementation(
+        init_fn, next_fn
+    )
 
 
 def minsep_sensitivity_squared(

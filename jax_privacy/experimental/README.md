@@ -3,56 +3,6 @@ that are under active development and evaluation. These APIs are considered
 experimental, meaning their interfaces might change, and they may eventually
 be integrated into the core jax_privacy library or potentially deprecated.
 
-## gradient_clipping.py
-
-Implements a new API for computing per-example clipped gradients. This module
-provides sum_clipped_grad and value_and_sum_clipped_grad functions.
-The primary goal of the gradient_clipping API is to offer a more
-flexible and user-friendly approach to per-example gradient clipping
-within JAX. It's designed as a drop-in replacement for standard JAX
-transformations like jax.grad and jax.value_and_grad. Key features include:
-
-* Familiarity: Aims to match the interface of jax.grad and jax.value_and_grad.
-* Robustness: Handles edge cases like zero or infinite clipping norms and
-  zero-norm gradients without relying on small epsilon additions.
-* Flexibility: Supports per-leaf scaling factors (leaf_scales) for applying
-  different effective clipping norms to different model parts, potentially
-  for preconditioner clipping. Includes a user_level_axis option to handle
-  clipping at a user or group level, useful for user-level DP guarantees or
-  managing data augmentations.
-
-## microbatching.py
-
-This module provides a `microbatched_fn_general` function that transforms a
-given function to operate on smaller "microbatches" of data, instead of the
-entire batch at once. This is particularly useful when we can fit a large
-batch of data onto the device, but we do not have enough memory to
-evaluate a function on the entire batch of data at once. Microbatching
-reduces memory but increases sequential computation.
-
-A concrete use case is gradient accumulation, where you need to accumulate
-gradients over a large batch. Microbatching does require that the
-entire batch fits into memory at once, so there is a limit to how large
-of a batch size can be used. If larger batch sizes are needed than
-microbatching can support, then an outer python loop should be used to
-generate batches on the fly one at a time, before transferring to device
-memory and microbatching.
-
-The AccumulationType Enum is essential because microbatching breaks a
-single function execution on a large batch into multiple sequential
-executions on smaller microbatches. The results from these individual
-microbatch executions need to be combined correctly to match the
-result you would have obtained from running the function on the
-full batch originally. Three accumulation types are supported:
-SUM, MEAN, and CONCAT.
-
-- SUM sums the results over the microbatches, suitable when the original
-  function returns a sum across the batch dimension.
-- MEAN averages the results over the microatches, suitable when
-  the original function returns an average over the batch dimension.
-- CONCAT concatenates the results from each microbatch,
-  suitable when the original function returns per_example outputs.
-
 ## batch_selection.py
 
 Responsible for generating global batches of indices. See definitions below

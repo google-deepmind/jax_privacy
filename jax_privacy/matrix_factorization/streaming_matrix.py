@@ -15,15 +15,22 @@
 
 """Definition of streamin matrix interface."""
 
+from __future__ import annotations
+
 from collections.abc import Callable
-from typing import TypeVar
+import dataclasses
+from typing import Any, TypeAlias, TypeVar
+
+import chex
 import jax
 from jax import numpy as jnp
 import jaxtyping
 
 
 MatrixArray = jaxtyping.Num[jaxtyping.Array, 'dim1 dim2']
-State = TypeVar('State')
+State = TypeVar('State', bound=chex.ArrayTree)
+Shape: TypeAlias = tuple[int, ...]
+ShapePyTree = Any
 
 # Disabling pylint invalid-name to allow mathematical notation including
 # single-capital-letter variables for matrices.
@@ -31,31 +38,32 @@ State = TypeVar('State')
 # pylint:disable=invalid-name
 
 
+@dataclasses.dataclass(frozen=True)
 class StreamingMatrix:
   """A linear mapping x -> A x for a lower-triangular (streaming) A matrix.
 
-  Via the member functions `init_multiply` and `next_multiply_element`,
+  Via the attributes / member functions `init_multiply` and `multiply_next`,
   this class allows you to efficiently compute a linear mapping x -> A x
   in streaming fashion (one element at a time). The precise meaning of the term
-  `efficienctly` is implementation-dependent, with examples including constant
+  `efficiently` is implementation-dependent, with examples including constant
   memory overhead, and / or without fully materializing A or x.
 
-  Example:
-  >>> A = prefix_sum()
-  >>> x = jnp.arange(1, 5).astype(float)
-  >>> slices = []
-  >>> state = A.init_multiply(x[0].shape)
-  >>> for i in range(len(x)):
-  ...   result_slice, state = A.multiply_next(x[i], state)
-  ...   slices.append(result_slice)
-  >>> Ax = jnp.stack(slices)
-  >>> print(Ax)
-  [ 1.  3.  6. 10.]
-  >>> print(jnp.cumsum(x))
-  [ 1.  3.  6. 10.]
+  Example Usage:
+    >>> A = prefix_sum()
+    >>> x = jnp.arange(1, 5).astype(float)
+    >>> slices = []
+    >>> state = A.init_multiply(x[0])
+    >>> for i in range(len(x)):
+    ...   result_slice, state = A.multiply_next(x[i], state)
+    ...   slices.append(result_slice)
+    >>> Ax = jnp.stack(slices)
+    >>> print(Ax)
+    [ 1.  3.  6. 10.]
+    >>> print(jnp.cumsum(x))
+    [ 1.  3.  6. 10.]
 
   See the constructor docstring for a full description of `init_multiply` and
-  `next_multiply_element`.
+  `multiply_next`.
 
   Importantly, this design encodes the fact that Ax[i] may only depend on
   x[i] and state captured from computing Ax[0], ..., Ax[i-1]. This is equivalent
@@ -64,38 +72,52 @@ class StreamingMatrix:
   In general, `A` and `x` may both be infinite; thus we sidestep the
   question of how many elements of `Ax` one wishes to compute by assuming the
   user provides a range.
+
+  Attributes:
+    init_multiply: A function that returns the initial state given the expected
+      shape of inputs to each call to multiply_next.
+    multiply_next: A function that returns (next_slice, updated_state) from
+      (next_input, current_state).
   """
+  init_multiply: Callable[[chex.ArrayTree], State]
+  multiply_next: Callable[[chex.ArrayTree, State], tuple[chex.ArrayTree, State]]
 
-  def __init__(
-      self,
-      init_multiply_fn: Callable[[tuple[int, ...]], State],
+  @classmethod
+  def from_array_implementation(
+      cls,
+      init_multiply_fn: Callable[[jax.Array | jax.ShapeDtypeStruct], State],
       multiply_next_fn: Callable[[jax.Array, State], tuple[jax.Array, State]],
-  ):
-    """Construct a StreamingMatrix object.
+  ) -> StreamingMatrix:
+    """Construct a StreamingMatrix object from an implementation of init/next.
 
-    Naming note: In general, the `rhs_row_shape` need not be a vector, but could
-    be an arbitrary rank tensor. For simplicity we use the name `row`
-    for `x[i]` and `y[i]` as this captures the most common case, and via
-    suitable flattening one can without loss of generality take the RHS
-    `x` to be a matrix.
-
-    Design note: We take the init_fn and next_fn as arguments rather than
-    defining these as abstract methods in order to make it easy to
-    generate different `StreamingMatrix` implementations
-    "on the fly" without subclassing. This class is not intended to be
-    subclassed.
+    This class method expects the `init_multiply_fn` and `multiply_next_fn` to
+    be defined w.r.t. a single `jax.Array` input.  These implementations will
+    be "lifted" to operate on pytrees of `jax.Array`s.
 
     Args:
-      init_multiply_fn: A function that returns the initial state given the
-        expected shape of inputs to each call to next_fn. For example, if
-        multiplying this `LowerTriangularMatrix` with an n x n matrix X, the
-        shape would be (n,) corresponding to each row of X. This function should
-        be jax-jittable.
-      multiply_next_fn: A function that returns (next_slice, updated_state) from
-        (next_input, current_state). This function should be jax-jittable.
+      init_multiply_fn: a function that returns the initial state given the
+        expected shape of inputs to each call to next_fn.
+      multiply_next_fn: a function that returns (next_slice, updated_state) from
+        (next_input, current_state).
+
+    Returns:
+      A StreamingMatrix object that operates over PyTrees of `jax.Array`s.
     """
-    self.init_multiply = init_multiply_fn
-    self.multiply_next = multiply_next_fn
+
+    def tree_unzip(tree, treedef):
+      leaves = treedef.flatten_up_to(tree)
+      return tuple(treedef.unflatten(x) for x in zip(*leaves))
+
+    def lifted_init(abstract_value):
+      return jax.tree.map(init_multiply_fn, abstract_value)
+
+    def lifted_next(value, state):
+      return tree_unzip(
+          jax.tree.map(multiply_next_fn, value, state),
+          jax.tree.structure(value),
+      )
+
+    return cls(lifted_init, lifted_next)
 
   def materialize(self, n: int) -> MatrixArray:
     """A utility method to materialize this matrix as an n x n ndarray.
@@ -153,7 +175,7 @@ class StreamingMatrix:
       return state, row @ row
 
     return scan_fn(
-        next_state_and_row_norm, self.init_multiply((n,)), jnp.arange(n)
+        next_state_and_row_norm, self.init_multiply(zero), jnp.arange(n)
     )[1]
 
 
@@ -180,20 +202,12 @@ def scale_rows_and_columns(
   Returns:
     The wrapped `StreamingMatrix`.
   """
-
-  def init(shape: tuple[int, ...]):
-    return 0, matrix.init_multiply(shape)
-
-  def next_fn(xi: jax.Array, state: State) -> tuple[jax.Array, State]:
-    i, inner_state = state
-    if col_scale is not None:
-      xi = xi * col_scale[i]
-    result, inner_state = matrix.multiply_next(xi, inner_state)
-    if row_scale is not None:
-      result = result * row_scale[i]
-    return result, (i + 1, inner_state)
-
-  return StreamingMatrix(init, next_fn)
+  result = matrix
+  if row_scale is not None:
+    result = multiply_streaming_matrices(diagonal(row_scale), result)
+  if col_scale is not None:
+    result = multiply_streaming_matrices(result, diagonal(col_scale))
+  return result
 
 
 def multiply_array(A: StreamingMatrix, x: jax.Array) -> jax.Array:
@@ -203,7 +217,7 @@ def multiply_array(A: StreamingMatrix, x: jax.Array) -> jax.Array:
   def f(state, value):
     return A.multiply_next(value, state)[::-1]
 
-  return jax.lax.scan(f, A.init_multiply(x.shape[1:]), x)[1]
+  return jax.lax.scan(f, A.init_multiply(x[0]), x)[1]
 
 
 # TODO: b/329444015 - Consider making protected and updating callsites
@@ -222,8 +236,8 @@ def multiply_streaming_matrices(
     A B, represented as another StreamingMatrix.
   """
 
-  def init_multiply(shape=()):
-    return A.init_multiply(shape), B.init_multiply(shape)
+  def init_multiply(abstract_value):
+    return A.init_multiply(abstract_value), B.init_multiply(abstract_value)
 
   def multiply_next(value, state):
     A_state, B_state = state
@@ -242,16 +256,14 @@ def identity() -> StreamingMatrix:
 def prefix_sum() -> StreamingMatrix:
   """An implicit representation of the lower triangular matrix of ones."""
 
-  def init_multiply(shape: tuple[int, ...]) -> jax.Array:
-    return jnp.zeros(shape)
+  def init_multiply(abstract_value):
+    return jnp.zeros_like(abstract_value)
 
-  def multiply_next(
-      state: jax.Array, value: jax.Array
-  ) -> tuple[jax.Array, jax.Array]:
+  def multiply_next(state, value):
     result = state + value
     return result, result
 
-  return StreamingMatrix(init_multiply, multiply_next)
+  return StreamingMatrix.from_array_implementation(init_multiply, multiply_next)
 
 
 def diagonal(diag: jax.Array) -> StreamingMatrix:
@@ -267,8 +279,9 @@ def diagonal(diag: jax.Array) -> StreamingMatrix:
   Returns:
     A StreamingMatrix representing the corresponding diagonal matrix.
   """
-  return StreamingMatrix(
-      lambda _: 0, lambda value, i: (value * diag.at[i].get(mode='clip'), i + 1)
+  return StreamingMatrix.from_array_implementation(
+      lambda _: jnp.array(0),
+      lambda value, i: (value * diag.at[i].get(mode='clip'), i + 1)
   )
 
 
@@ -283,8 +296,10 @@ def momentum_sgd_matrix(
         f'matrix factorization from succeeding.) Found {learning_rates}'
     )
 
-  def init_multiply(shape: tuple[int, ...]) -> tuple[int, jax.Array, jax.Array]:
-    return 0, jnp.zeros(shape), jnp.zeros(shape)
+  def init_multiply(abstract_value):
+    dtype = jnp.promote_types(abstract_value.dtype, lr_sched.dtype)
+    zero = jnp.zeros_like(abstract_value, dtype=dtype)
+    return jnp.array(0), zero, zero
 
   def multiply_next(
       value: jax.Array, state: tuple[int, jax.Array, jax.Array]
@@ -296,7 +311,7 @@ def momentum_sgd_matrix(
     updated_state = (index + 1, momentum_buf, result)
     return result, updated_state
 
-  return StreamingMatrix(init_multiply, multiply_next)
+  return StreamingMatrix.from_array_implementation(init_multiply, multiply_next)
 
 
 T = TypeVar('T', StreamingMatrix, jax.Array)

@@ -27,7 +27,7 @@ import jax.numpy as jnp
 from jax_privacy import accounting
 from jax_privacy.dp_sgd import grad_clipping
 from jax_privacy.dp_sgd import typing
-from jax_privacy.training import algorithm_config
+from training import algorithm_config
 import numpy as np
 
 

@@ -82,7 +82,7 @@ class MicrobatchingTest(parameterized.TestCase):
     batch_arg1 = jnp.array(np.random.normal(size=BATCH_SHAPE))
     batch_arg2 = jnp.array(np.random.normal(size=BATCH_SHAPE))
     fun, accumulation_type = FUNCTION_ACCUM_PAIRS[name]
-    microbatched_fun = microbatching.inmemory_microbatched_fn_general(
+    microbatched_fun = microbatching.microbatch(
         fun,
         batch_argnums=(1, 2),
         microbatch_size=microbatch_size,
@@ -136,7 +136,7 @@ class MicrobatchingTest(parameterized.TestCase):
     expected_answer = 2**2 + 4**2 + 6**2
 
     microbatched_fun = jax.jit(
-        microbatching.inmemory_microbatched_fn_general(
+        microbatching.microbatch(
             fun,
             batch_argnums=0,
             microbatch_size=microbatch_size,
@@ -165,7 +165,7 @@ class MicrobatchingTest(parameterized.TestCase):
     batch_arg1 = jnp.array(np.random.normal(size=BATCH_SHAPE))
     batch_kwarg2 = jnp.array(np.random.normal(size=BATCH_SHAPE))
     fun, accumulation_type = FUNCTION_ACCUM_PAIRS['kwarg']
-    microbatched_fun = microbatching.inmemory_microbatched_fn_general(
+    microbatched_fun = microbatching.microbatch(
         fun,
         batch_argnums=(1,),
         microbatch_size=2,
@@ -182,7 +182,7 @@ class MicrobatchingTest(parameterized.TestCase):
       return x[:-1] @ x[1:]
 
     x = jnp.arange(6)
-    microbatched_fun = microbatching.inmemory_microbatched_fn_general(
+    microbatched_fun = microbatching.microbatch(
         fun,
         batch_argnums=0,
         microbatch_size=3,
@@ -201,7 +201,7 @@ class MicrobatchingTest(parameterized.TestCase):
     batch_arg1 = jnp.array(np.random.normal(size=BATCH_SHAPE))
     batch_arg2 = jnp.array(np.random.normal(size=BATCH_SHAPE))
     fun, accumulation_type = FUNCTION_ACCUM_PAIRS['sum']
-    microbatched_fun = microbatching.inmemory_microbatched_fn_general(
+    microbatched_fun = microbatching.microbatch(
         fun,
         batch_argnums=(1, 2),
         microbatch_size=3,
@@ -219,7 +219,7 @@ class MicrobatchingTest(parameterized.TestCase):
     batch_arg1 = jnp.array(np.random.normal(size=BATCH_SHAPE), arg_dtype)
     batch_arg2 = jnp.array(np.random.normal(size=BATCH_SHAPE), arg_dtype)
     fun, accumulation_type = FUNCTION_ACCUM_PAIRS['sum']
-    microbatched_fun = microbatching.inmemory_microbatched_fn_general(
+    microbatched_fun = microbatching.microbatch(
         fun,
         batch_argnums=(1, 2),
         microbatch_size=2,
