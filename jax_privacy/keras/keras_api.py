@@ -503,12 +503,24 @@ def _dp_train_step(self, state, data):
       metrics_variables, unscaled_loss, x, y, y_pred, sample_weight
   )
 
-  state = self._enforce_jax_state_sharding(  # pylint: disable=protected-access
-      trainable_variables,
-      non_trainable_variables,
-      optimizer_variables,
-      metrics_variables,
-  )
+  if hasattr(self, '_enforce_jax_state_sharding'):
+    # Sharding was moved out from train_step on
+    # https://github.com/keras-team/keras/commit/0387d3057ac455d22f3e8d512f114115dfd7d12a
+    # Which seems to be in Keras 3.12 (not released yet).
+    # We can remove this if-clause once we stop supporting Keras <3.12.
+    state = self._enforce_jax_state_sharding(  # pylint: disable=protected-access
+        trainable_variables,
+        non_trainable_variables,
+        optimizer_variables,
+        metrics_variables,
+    )
+  else:
+    state = (
+        trainable_variables,
+        non_trainable_variables,
+        optimizer_variables,
+        metrics_variables,
+    )
   return logs, state
 
 

@@ -130,11 +130,11 @@ def brute_force_max_loss(blt, n, min_sep=1, max_participations=None):
 class BufferedToeplitzTest(parameterized.TestCase):
 
   @parameterized.named_parameters(
-      ('x64_enabled', jax.experimental.enable_x64),
-      ('x64_disabled', jax.experimental.disable_x64),
+      ('x64_enabled', True),
+      ('x64_disabled', False),
   )
-  def test_float32_dtype(self, x64_context_manager):
-    with x64_context_manager():
+  def test_float32_dtype(self, x64_enabled):
+    with jax.enable_x64(x64_enabled):
       blt = buffered_toeplitz.BufferedToeplitz.build(
           buf_decay=[0.9], output_scale=[0.1], dtype=jnp.float32
       )
@@ -144,7 +144,7 @@ class BufferedToeplitzTest(parameterized.TestCase):
 
   def test_float64_without_x64_raises(self):
     with self.assertRaisesRegex(ValueError, 'dtype=jnp.float64'):
-      with jax.experimental.disable_x64():
+      with jax.enable_x64(False):
         buffered_toeplitz.BufferedToeplitz.build(
             buf_decay=[0.9], output_scale=[0.1]
         )
@@ -325,7 +325,7 @@ def _max_loss_for_identity_strategy(
 
 
 def float64_blt():
-  with jax.experimental.enable_x64():
+  with jax.enable_x64():
     return buffered_toeplitz.BufferedToeplitz.build(
         buf_decay=[0.9], output_scale=[0.1], dtype=jnp.float64
     )
@@ -345,7 +345,7 @@ class BufferedToeplitzFloat32Test(parameterized.TestCase):
   )
   def test_materialize_float32(self, blt_fn):
     blt = blt_fn()
-    with jax.experimental.disable_x64():
+    with jax.enable_x64(False):
       # Materialize of a float32 or float64 BLT without x64 enabled should
       # not fail, and produce a float32 result.
       C = blt.materialize(1)
@@ -354,29 +354,29 @@ class BufferedToeplitzFloat32Test(parameterized.TestCase):
 
   def test_inverse_float64_without_x64_raises(self):
     with self.assertRaisesRegex(ValueError, 'dtype=jnp.float64'):
-      with jax.experimental.disable_x64():
+      with jax.enable_x64(False):
         float64_blt().inverse()
 
   def test_inverse_float32_without_x64(self):
-    with jax.experimental.disable_x64():
+    with jax.enable_x64(False):
       inv_blt = float32_blt().inverse()
       self.assertEqual(inv_blt.dtype, jnp.float32)
 
   def test_iteration_error_raises(self):
     with self.assertRaisesRegex(ValueError, 'dtype=jnp.float64'):
-      with jax.experimental.disable_x64():
+      with jax.enable_x64(False):
         # Note that float64_blt() is really a strategy matrix,
         # not a noising_matrix, but it doesn't matter for this test.
         buffered_toeplitz.iteration_error(float64_blt(), i=3)
 
   def test_max_loss_raises(self):
     with self.assertRaisesRegex(ValueError, 'dtype=jnp.float64'):
-      with jax.experimental.disable_x64():
+      with jax.enable_x64(False):
         buffered_toeplitz.max_loss(float64_blt(), n=3)
 
   def test_limit_max_loss_raises(self):
     with self.assertRaisesRegex(ValueError, 'dtype=jnp.float64'):
-      with jax.experimental.disable_x64():
+      with jax.enable_x64(False):
         buffered_toeplitz.limit_max_loss(float64_blt())
 
 

@@ -18,7 +18,6 @@
 from absl import app
 import jax
 import jax.numpy as jnp
-import jax_privacy
 from jax_privacy.experimental import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
@@ -72,33 +71,26 @@ def main(_):
   params = jax.tree.map(jnp.zeros_like, true_params)
   print('Initial Loss: ', logistic_loss(params, feature_matrix, labels))
 
-  config = execution_plan.BandMFExecutionPlanConfig(
+  plan = execution_plan.BandMFExecutionPlan(
       iterations=ITERATIONS,
       num_bands=BANDS,
       epsilon=EPSILON,
       delta=DELTA,
       sampling_prob=EXPECTED_BATCH_SIZE / USERS * BANDS,
-  )
-  grad_fn = jax_privacy.clipped_grad(
-      logistic_loss,
       l2_clip_norm=L2_CLIP_NORM,
-      batch_argnums=(1, 2),
       normalize_by=EXPECTED_BATCH_SIZE,
   )
-  plan = config.make(grad_fn)
 
+  grad_fn = plan.clipped_grad(logistic_loss, batch_argnums=(1, 2))
   optimizer = optax.sgd(LEARNING_RATE)
-  privatizer = plan.noise_addition_transform
+  privatizer = plan.noise_addition_transform()
 
   @jax.jit
   def update_fn(params, batch, is_padding_example, noise_state, opt_state):
     x, y = batch
     clipped_grad = grad_fn(params, x, y, is_padding_example=is_padding_example)
 
-    noisy_grad, noise_state = privatizer.privatize(
-        sum_of_clipped_grads=clipped_grad,
-        noise_state=noise_state
-    )
+    noisy_grad, noise_state = privatizer.update(clipped_grad, noise_state)
     updates, opt_state = optimizer.update(noisy_grad, opt_state)
     params = optax.apply_updates(params, updates)
     return params, noise_state, opt_state
@@ -106,7 +98,7 @@ def main(_):
   noise_state = privatizer.init(params)
   opt_state = optimizer.init(params)
 
-  for batch_idx in plan.batch_selection_strategy.batch_iterator(USERS):
+  for batch_idx in plan.batch_selection_strategy().batch_iterator(USERS):
 
     # Padding reduces the required number of compilations of update_fn.
     idx = batch_selection.pad_to_multiple_of(batch_idx, PADDING_MULTIPLE)

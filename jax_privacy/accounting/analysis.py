@@ -352,25 +352,11 @@ class DpsgdTrainingAccountant(DpTrainingAccountant):
             q, dp_accounting.GaussianDpEvent(nm / sensitivity_multiplier)
         )
       else:
-        # This calculation involves a sum over num_samples terms corresponding
-        # to the possible batch sizes before truncation. To save time and memory
-        # we truncate this sum at a threshold chosen such that the terms in the
-        # sum after the threshold are smaller than the precision of computation.
-        threshold = truncated_batch_size
-        while stats.binom.sf(threshold, min_group_size - 1, q) > 0.0:
-          threshold = max(2 * threshold, min_group_size)
-        sample_sizes = np.arange(truncated_batch_size, threshold)
-        prob_2 = q * np.sum(
-            stats.binom.pmf(sample_sizes, min_group_size - 1, q)
-            * truncated_batch_size
-            / (sample_sizes + 1)
-        )
-        prob_1 = q * (
-            1 - stats.binom.sf(truncated_batch_size, min_group_size - 1, q)
-        )
-        prob_0 = 1 - prob_1 - prob_2
-        event = dp_accounting.dp_event.MixtureOfGaussiansDpEvent(
-            nm, [0, 1, 2], [prob_0, prob_1, prob_2]
+        event = dp_accounting.TruncatedSubsampledGaussianDpEvent(
+            dataset_size=min_group_size,
+            sampling_probability=q,
+            truncated_batch_size=truncated_batch_size,
+            noise_multiplier=nm,
         )
       dp_accountant.compose(event, math.ceil(t / cycle_length))
     return dp_accountant.get_epsilon(target_delta=dp_params.delta)

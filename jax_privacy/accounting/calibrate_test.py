@@ -25,7 +25,7 @@ _TRUNCATED_BATCH_SIZE = 1056
 _NOISE_MULTIPLIER = 4.0
 _NUM_SAMPLES = 50_000
 _EPSILON = 2.27535
-_EPSILON_TRUNCATED = 3.09152  # Potentially not tight; corresponding tests
+_EPSILON_TRUNCATED = 4.50055  # Potentially not tight; corresponding tests
 # should be updated if the analysis is tightened.
 _EPSILON_USER = 5.00008
 _DELTA = 1e-5
@@ -74,8 +74,7 @@ class CalibrateTest(absltest.TestCase):
         target_delta=_DELTA,
     )
 
-    # TODO: Make this a one-sided test.
-    self.assertLessEqual(np.abs(batch_size - _BATCH_SIZE), 1)
+    self.assertBetween(batch_size, _BATCH_SIZE - 1, _BATCH_SIZE)
 
     dp_params = analysis.DpParams(
         noise_multipliers=_NOISE_MULTIPLIER,
@@ -158,8 +157,7 @@ class CalibrateTest(absltest.TestCase):
         examples_per_user=_EXAMPLES_PER_USER,
     )
 
-    # TODO: Make this a one-sided test.
-    self.assertLessEqual(np.abs(batch_size - _BATCH_SIZE), 1)
+    self.assertBetween(batch_size, _BATCH_SIZE - 1, _BATCH_SIZE)
 
     dp_params = analysis.DpParams(
         noise_multipliers=_NOISE_MULTIPLIER,
@@ -249,8 +247,7 @@ class CalibrateTest(absltest.TestCase):
         cycle_length=_CYCLE_LENGTH,
     )
 
-    # TODO: Make this a one-sided test.
-    self.assertLessEqual(np.abs(batch_size - _BATCH_SIZE), 1)
+    self.assertBetween(batch_size, _BATCH_SIZE - 1, _BATCH_SIZE)
 
     dp_params = analysis.DpParams(
         noise_multipliers=_NOISE_MULTIPLIER,
@@ -347,8 +344,7 @@ class CalibrateTest(absltest.TestCase):
         tol=1e-4,
     )
 
-    # TODO: Make this a one-sided test.
-    self.assertLessEqual(np.abs(batch_size - _BATCH_SIZE), 1)
+    self.assertBetween(batch_size, _BATCH_SIZE - 1, _BATCH_SIZE)
 
     dp_params = analysis.DpParams(
         noise_multipliers=_NOISE_MULTIPLIER,
