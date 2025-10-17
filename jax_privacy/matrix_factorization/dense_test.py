@@ -257,7 +257,7 @@ class DenseTest(parameterized.TestCase):
     self.check_equal_norm(C)
 
   def test_finite_differences(self):
-    with jax.experimental.enable_x64():
+    with jax.enable_x64():
       n = 16
       A = np.tri(n)
       X = np.eye(n)

@@ -45,7 +45,6 @@ pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "grad_cl
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "distributed_noise_generation_test"
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "sharding_utils_test"
 
-
 # The matrix_factorization tests are expensive, and require the correct
 # HYPOTHESIS_PROFILE to limit the number of examples tested.
 export HYPOTHESIS_PROFILE=dpftrl_default

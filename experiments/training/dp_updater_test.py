@@ -693,10 +693,14 @@ class UpdaterTest(parameterized.TestCase):
 
     updater_with_accumulation = make_updater(LOCAL_BATCH_SIZE)
     updater_without_accumulation = make_updater(batch_size // NUM_DEVICES)
+    # NOTE: The updater's init donates the rng buffer, so self.rng_init
+    # can be deleted before it's used again.
+    rng_with_accumulation = jnp.copy(self.rng_init)
+    rng_without_accumulation = jnp.copy(self.rng_init)
 
     inputs = _test_data(num_batches=7, local_batch_size=LOCAL_BATCH_SIZE)
     state, step_on_host = updater_with_accumulation.init(
-        rng=self.rng_init, inputs=inputs[0]
+        rng=rng_with_accumulation, inputs=inputs[0]
     )
 
     inputs_iterator = iter(inputs[1:])
@@ -707,7 +711,7 @@ class UpdaterTest(parameterized.TestCase):
     )
 
     state, step_on_host = updater_without_accumulation.init(
-        rng=self.rng_init, inputs=inputs[0]
+        rng=rng_without_accumulation, inputs=inputs[0]
     )
     inputs_reshaped = []
     for list_of_batches in itertools.batched(inputs[1:], update_every):

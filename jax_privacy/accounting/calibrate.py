@@ -19,23 +19,28 @@ from collections.abc import Callable, Sequence
 import math
 
 from jax_privacy.accounting import analysis
-import numpy as np
 import scipy.optimize
 
 
 def _solve_calibration(
     fn: Callable[[float], float], x_min: float, x_max: float, tol: float
 ) -> float:
-  """Find an x in [x_min, x_max] that minimizes fn(x) using scipy.optimize."""
-  opt_result = scipy.optimize.minimize_scalar(
-      fn,
-      bounds=(x_min, x_max),
-      method='bounded',
-      options={'xatol': tol},
+  """Find an x in [x_min, x_max] such that fn(x) is close to and at most 0."""
+  root, result = scipy.optimize.brentq(
+      fn, x_min, x_max, xtol=tol, full_output=True
   )
-  assert opt_result.success
-
-  return float(opt_result.x)
+  assert result.converged
+  # brentq guarantees a value in [root - tol, root + tol] such that fn(x) <= 0.
+  # This value is not necessarily root, so we need to check root and endpoints.
+  if fn(root) < 0:
+    return root
+  elif fn(root - tol) < 0:
+    return root - tol
+  elif fn(root + tol) < 0:
+    return root + tol
+  else:
+    # Slower but guaranteed to give x such that fn(x) <= 0.
+    return scipy.optimize.bisect(fn, x_min, x_max, xtol=tol)
 
 
 def calibrate_num_updates(
@@ -105,7 +110,7 @@ def calibrate_num_updates(
   while get_epsilon(max_steps) < target_epsilon:
     min_steps, max_steps = max_steps, 2 * max_steps
 
-  error_epsilon = lambda s: np.abs(get_epsilon(int(s)) - target_epsilon)
+  error_epsilon = lambda s: get_epsilon(int(s)) - target_epsilon
   steps = int(
       math.floor(_solve_calibration(error_epsilon, min_steps, max_steps, tol))
   )
@@ -179,7 +184,7 @@ def calibrate_noise_multiplier(
   while get_epsilon(max_noise) > target_epsilon:
     min_noise, max_noise = max_noise, 2 * max_noise
 
-  error_epsilon = lambda s: np.abs(get_epsilon(s) - target_epsilon)
+  error_epsilon = lambda s: get_epsilon(s) - target_epsilon
   noise_multiplier = float(
       _solve_calibration(error_epsilon, min_noise, max_noise, tol)
   )
@@ -254,7 +259,7 @@ def calibrate_batch_size(
   while get_epsilon(max_batch_size) < target_epsilon:
     min_batch_size, max_batch_size = max_batch_size, 2 * max_batch_size
 
-  error_epsilon = lambda s: np.abs(get_epsilon(int(s)) - target_epsilon)
+  error_epsilon = lambda s: get_epsilon(int(s)) - target_epsilon
   batch_size = int(
       math.floor(
           _solve_calibration(error_epsilon, min_batch_size, max_batch_size, tol)

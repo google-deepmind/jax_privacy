@@ -69,7 +69,7 @@ def check_float64_dtype(blt: 'BufferedToeplitz'):
         ' float64 parameters. If you see this error, you likely need to do one'
         ' of the following:\n'
         '1. Locally, add `with '
-        'jax.experimental.enable_x64():` around the code that triggered this '
+        'jax.enable_x64():` around the code that triggered this '
         'error.\n'
         '2. Globally set `jax.config.update("jax_enable_x64", True)`.\n'
         '3. Explicitly cast the parameters of your BufferedToeplitz to '
@@ -218,7 +218,7 @@ class BufferedToeplitz:
         this requires either the global option
         `jax.config.update('jax_enable_x64', True)` or that build() and
         subsequent computations occur within a `with
-        jax.experimental.enable_x64():` context. See also `check_float64_dtype`.
+        jax.enable_x64():` context. See also `check_float64_dtype`.
 
     Returns:
       A `BufferedToeplitz` with buf_decay in decreasing order.

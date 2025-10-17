@@ -18,7 +18,6 @@
 import collections
 from collections.abc import Sequence
 import dataclasses
-import functools
 import numbers
 from typing import Any, Callable, TypeAlias
 
@@ -85,6 +84,7 @@ def clip_pytree(
     clip_norm: float,
     rescale_to_unit_norm: bool = False,
     nan_safe: bool = True,
+    return_zero: bool = False
 ):
   """Clips a PyTree of jax arrays based on its global L2 norm.
 
@@ -98,6 +98,7 @@ def clip_pytree(
   Formal Guarantees:
     - The output PyTree will have norm at most `clip_norm` if
       `rescale_to_unit_norm` is False, and norm at most 1.0 if it is True.
+    - The output PyTree will have the same structure+dtypes as the input PyTree.
 
   Edge Case Handling:
   - clip_norm = 0:
@@ -123,6 +124,8 @@ def clip_pytree(
       although it does require potentially additional computation. If False, the
       NaNs in input PyTree will be preserved in the output PyTree. +/- infs will
       be converted to NaNs as well.
+    return_zero: If True, the output PyTree is guaranteed to be zero no matter
+      what the inputs are. Does not influence the formal guarantees.
 
   Returns:
     A tuple `(clipped_pytree, original_l2_norm)`, where `clipped_pytree` is the
@@ -141,7 +144,9 @@ def clip_pytree(
     scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
   # If l2_norm is 0 or nan, set scale to 0.0.
   scale = jnp.nan_to_num(scale, nan=0.0, posinf=0.0)
-  return jax.tree.map(lambda x: scale * x, pytree), l2_norm.astype(jnp.float32)
+  clipped = jax.tree.map(lambda x: jnp.astype(scale, x.dtype) * x, pytree)
+  maybe_zero = lambda x: jax.lax.select(return_zero, jnp.zeros_like(x), x)
+  return jax.tree.map(maybe_zero, clipped), l2_norm.astype(jnp.float32)
 
 
 # pylint: disable=g-bare-generic
@@ -290,20 +295,13 @@ def clip_sum(
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
-      clipped_value, l2_norm = jax.lax.cond(
-          is_padding_example,
-          # See https://arxiv.org/pdf/2411.04205 for info on why this is useful.
-          lambda pytree: (
-              jax.tree.map(jnp.zeros_like, pytree),
-              jnp.array(0.0, dtype=jnp.float32),
-          ),
-          functools.partial(
-              clip_pytree,
-              clip_norm=l2_clip_norm,
-              rescale_to_unit_norm=rescale_to_unit_norm,
-              nan_safe=nan_safe,
-          ),
+      clipped_value, l2_norm = clip_pytree(
           value,
+          clip_norm=l2_clip_norm,
+          rescale_to_unit_norm=rescale_to_unit_norm,
+          nan_safe=nan_safe,
+          # See https://arxiv.org/pdf/2411.04205 for info on why this is useful.
+          return_zero=is_padding_example,
       )
       return clipped_value, aux, l2_norm
 

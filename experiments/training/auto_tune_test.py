@@ -67,6 +67,7 @@ class AutoTuneTest(parameterized.TestCase):
       num_examples_per_user: int,
       cycle_length: int,
       truncated_batch_size: int,
+      epsilon_tol: float = 0.05,
   ):
     """Asserts that the config is calibrated w.r.t. the target epsilon."""
     dp_params = accounting.DpParams(
@@ -89,7 +90,7 @@ class AutoTuneTest(parameterized.TestCase):
     eps = accountant.compute_epsilon(
         num_updates=config.num_updates, dp_params=dp_params
     )
-    np.testing.assert_allclose(eps, target_eps, atol=0.05)
+    np.testing.assert_allclose(eps, target_eps, atol=epsilon_tol)
 
   @parameterized.parameters(
       ('rdp', None),
@@ -262,12 +263,16 @@ class AutoTuneTest(parameterized.TestCase):
     )
 
     assert config_ref.batch_size.total != config_new.batch_size.total
+    # Epsilon is highly sensitive to the batch size for truncated Poisson
+    # sampling, so we allow a larger error tolerance.
+    epsilon_tol = 0.1 if truncated_batch_size else 0.05
     self._assert_calibrated(
         config_new,
         config_ref.dp.auto_tune_target_epsilon,
         num_examples_per_user=num_examples_per_user,
         cycle_length=cycle_length,
         truncated_batch_size=truncated_batch_size,
+        epsilon_tol=epsilon_tol,
     )
 
 
