@@ -133,20 +133,32 @@ class BatchSelectionStrategy(abc.ABC):
 class CyclicPoissonSampling(BatchSelectionStrategy):
   """Implements Poisson sampling, possibly with cyclic sampling and truncation.
 
-  This generalizes several common sampling strategies:
-  - Shuffling the dataset into b batches and doing multiple epochs over the data
-  can be achieved with sampling_prob=1, cycle_length=b, shuffle=True. This is
-  equivalent to (k, b)-participation as in https://arxiv.org/abs/2211.06530.
-  - Standard DP-SGD with Poisson sampling as in
-  https://arxiv.org/abs/1607.00133 can be achieved with cycle_length=1 and an
-  appropriate sampling_prob.
-  - BandMF with b bands and cyclic Poisson sampling as in
-  https://arxiv.org/abs/2306.08153 can be achieved with cycle_length=b and an
-  appropriate sampling_prob.
-  - Truncated Poisson sampling as in https://arxiv.org/abs/2411.04205 can be
-  achieved with truncated_batch_size (set to the maximum batch size determined
-  by e.g., the hardware or runtime requirements) and otherwise like DP-SGD with
-  (cyclic) Poisson sampling.
+  This generalizes several common sampling strategies [1,2,3,4], exemplified
+  below (all with expected batch size 3):
+
+  Example Usage (fixed order + multi-epoch) [1]:
+    >>> rng = np.random.default_rng(0)
+    >>> b = CyclicPoissonSampling(sampling_prob=1, iterations=8, cycle_length=4)
+    >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
+    [0 1 2] [3 4 5] [6 7 8] [ 9 10 11] [0 1 2] [3 4 5] [6 7 8] [ 9 10 11]
+
+  Example Usage (standard Poisson sampling) [2]:
+    >>> b = CyclicPoissonSampling(sampling_prob=0.25, iterations=8)
+    >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
+    [0 4 9 3 5] [] [5] [4 6 2 7] [ 5 11] [ 2  5  8  6  9 11] [9 1] [7 5 4 3]
+
+  Example Usage (BandMF-style sampling) [3]:
+    >>> p = 0.5
+    >>> b = CyclicPoissonSampling(sampling_prob=p, iterations=8, cycle_length=2)
+    >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
+    [2 4 0] [ 9 10 11] [3 5] [9 8] [0 3 4 5] [8] [2 1 4 5] [11]
+
+
+  References:
+  [1] https://arxiv.org/abs/2211.06530
+  [2] https://arxiv.org/abs/1607.00133
+  [3] https://arxiv.org/abs/2306.08153
+  [4] https://arxiv.org/abs/2411.04205
 
   Formal guarantees of the batch_iterator:
   - All batches consist of indices in the range [0, num_examples).
@@ -179,6 +191,10 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     even_partition: If True, we discard num_examples % cycle_length examples
       before partitioning in cyclic Poisson sampling. If False, we can have
       uneven partitions. Defaults to True for ease of analysis.
+    public_num_examples: The number of examples in the dataset, if known. Is
+      only used for validation purposes, i.e., that the value passed here (which
+      is generally used for accounting under REPLACE_SPECIAL or REPLACE_ONE
+      neighboring relations) matches the value passed to the batch_iterator.
   """
 
   sampling_prob: float
@@ -187,10 +203,14 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   cycle_length: int = 1
   shuffle: bool = False
   even_partition: bool = True
+  public_num_examples: int | None = None
 
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
+    if self.public_num_examples not in [None, num_examples]:
+      raise ValueError('num_examples must match value passed to constructor.')
+
     rng = np.random.default_rng(rng)
     dtype = np.min_scalar_type(-num_examples)
 

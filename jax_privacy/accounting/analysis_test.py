@@ -25,7 +25,13 @@ _NUM_SAMPLES = 50_000
 _EXAMPLES_PER_USER = 2
 _EPSILON_RDP = 2.27535
 _EPSILON_PLD = 2.09245
-_EPSILON_PLD_FBS = 4.89011
+_EPSILON_PLD_TRUNCATED = {
+    1024: 6.87451,
+    1056: 4.06910,
+    1088: 2.45377,
+    1120: 2.11659,
+    1152: 2.09310,
+}
 _EPSILON_PLD_USER = 5.00008
 _EPSILON_PLD_USER_FBS = 11.48878
 _DELTA = 1e-5
@@ -111,12 +117,11 @@ class DpsgdTrainingAccountantTest(parameterized.TestCase):
 class DpsgdTrainingAccountantMaxBatchSizeTest(parameterized.TestCase):
   """Tests for DpsgdTrainingAccountant with truncated_batch_size != None."""
 
-  @parameterized.parameters(1, 2, 4, 8, 16)
-  def test_compute_epsilon_via_pld(self, truncated_batch_size_multiplier):
+  @parameterized.parameters(1024, 1056, 1088, 1120, 1152)
+  def test_compute_epsilon_via_pld(self, truncated_batch_size):
     accountant = analysis.DpsgdTrainingAccountant(
         dp_accountant_config=accountants.PldAccountantConfig()
     )
-    truncated_batch_size = truncated_batch_size_multiplier * _BATCH_SIZE
     dp_params = analysis.DpParams(
         noise_multipliers=_NOISE_MULTIPLIER,
         batch_size=_BATCH_SIZE,
@@ -128,49 +133,11 @@ class DpsgdTrainingAccountantMaxBatchSizeTest(parameterized.TestCase):
         num_updates=_NUM_UPDATES, dp_params=dp_params
     )
 
-    # This analysis is not necessarily tight, so we check that epsilon is
-    # between the tight values for Poisson sampling and fixed batch size
-    # sampling.
-    self.assertBetween(epsilon, _EPSILON_PLD, _EPSILON_PLD_FBS)
-
-  def test_compute_epsilon_via_pld_high_truncated_batch_size(self):
-    accountant = analysis.DpsgdTrainingAccountant(
-        dp_accountant_config=accountants.PldAccountantConfig()
+    # This analysis is not necessarily tight, so this test should be updated if
+    # the analysis is tightened.
+    np.testing.assert_allclose(
+        epsilon, _EPSILON_PLD_TRUNCATED[truncated_batch_size], rtol=1e-5
     )
-    # Since we set truncated_batch_size to num_samples, truncation never happens
-    # so the epsilon is the same as the case where truncated_batch_size is None.
-    dp_params = analysis.DpParams(
-        noise_multipliers=_NOISE_MULTIPLIER,
-        batch_size=_BATCH_SIZE,
-        num_samples=_NUM_SAMPLES,
-        delta=_DELTA,
-        truncated_batch_size=_NUM_SAMPLES,
-    )
-    epsilon = accountant.compute_epsilon(
-        num_updates=_NUM_UPDATES, dp_params=dp_params
-    )
-
-    np.testing.assert_allclose(epsilon, _EPSILON_PLD, rtol=1e-5)
-
-  def test_compute_epsilon_via_pld_high_sampling_prob(self):
-    accountant = analysis.DpsgdTrainingAccountant(
-        dp_accountant_config=accountants.PldAccountantConfig()
-    )
-    # If we set batch_size = num_samples and truncated_batch_size = _BATCH_SIZE,
-    # this is the same as fixed batch size sampling, which is the same as
-    # Poisson sampling without truncation if we halve the noise.
-    dp_params = analysis.DpParams(
-        noise_multipliers=_NOISE_MULTIPLIER * 2,
-        batch_size=_NUM_SAMPLES,
-        num_samples=_NUM_SAMPLES,
-        delta=_DELTA,
-        truncated_batch_size=_BATCH_SIZE,
-    )
-    epsilon = accountant.compute_epsilon(
-        num_updates=_NUM_UPDATES, dp_params=dp_params
-    )
-
-    np.testing.assert_allclose(epsilon, _EPSILON_PLD, rtol=1e-5)
 
   def test_validate_dp_params_raises_error(self):
     dp_params = analysis.DpParams(

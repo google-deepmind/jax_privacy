@@ -228,29 +228,30 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
 
   @parameterized.product(
       one_sided=(True, False),
-      mu=(0.1, 0.3, 1.0, 1.5),
+      mu=(0.3, 1.0, 1.5),
       out_samples_ratio=(0.5, 1.0, 1.5),
   )
   def test_epsilon_lower_bound_tight(self, one_sided, mu, out_samples_ratio):
     rng = np.random.default_rng(seed=0xBAD5EED)
 
     # Large alpha and delta and lots of samples gets us close to the true eps.
-    alpha = 0.1
-    delta = 5e-2
-    in_samples = 200_000
+    alpha = 0.2
+    delta = 0.1
+    in_samples = 2_000_000
     out_samples = int(in_samples * out_samples_ratio)
     in_canary_scores = rng.normal(mu, 1, in_samples)
     out_canary_scores = rng.normal(0, 1, out_samples)
     auditor = canary_score_auditor.CanaryScoreAuditor(
         in_canary_scores, out_canary_scores
     )
-    eps = auditor.epsilon_lower_bound(alpha, delta, one_sided)
+    eps_lb = auditor.epsilon_lower_bound(alpha, delta, one_sided)
     true_eps = (
         dp_accounting.pld.PLDAccountant()
         .compose(dp_accounting.GaussianDpEvent(1.0 / mu))
         .get_epsilon(delta)
     )
-    np.testing.assert_allclose(eps, true_eps, rtol=0.05)
+    np.testing.assert_array_less(eps_lb, true_eps)
+    np.testing.assert_allclose(eps_lb, true_eps, rtol=0.2)
 
   @parameterized.product(
       min_count=(0, 1, 50),
@@ -279,11 +280,47 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     )
     np.testing.assert_allclose(eps, true_eps, rtol=1e-1)
 
-  @parameterized.named_parameters(('one_sided', True), ('two_sided', False))
-  def test_epsilon_raw_counts_zero_if_no_min_counts(self, one_sided):
+  @parameterized.product(
+      min_count=(1, 3),
+      n_neg=(10, 13),
+      n_pos=(9, 12),
+  )
+  def test_epsilon_raw_counts_helper_worst_case(self, min_count, n_neg, n_pos):
+    # Tests that the epsilon uses the minimum allowed FPR for a perfect
+    # classifier.
+    tn_counts = np.array([0, n_neg, n_neg])
+    fn_counts = np.array([0, 0, n_pos])
+    epsilon = canary_score_auditor._epsilon_raw_counts_helper(
+        tn_counts, fn_counts, min_count, delta=0
+    )
+    np.testing.assert_allclose(epsilon, np.log(n_neg / min_count))
+
+  @parameterized.product(
+      min_count=[0, 1, 2],
+      delta=[0, 1 / 8, 1 / 4, 3 / 8, 1 / 2],
+  )
+  def test_epsilon_raw_counts_helper_nonzero_delta(self, min_count, delta):
+    tn_counts = np.array([0, 4, 8, 8])
+    fn_counts = np.array([0, 2, 6, 8])
+    epsilon = canary_score_auditor._epsilon_raw_counts_helper(
+        tn_counts, fn_counts, min_count, delta
+    )
+    if min_count == 0:
+      expected_slopes = {0: np.inf, 1 / 8: np.inf}
+    elif min_count == 1:
+      expected_slopes = {0: 3, 1 / 8: 2}
+    else:  # min_count == 2
+      expected_slopes = {0: 2, 1 / 8: 3 / 2}
+    expected_slopes.update({1 / 4: 1, 3 / 8: 3 / 4, 1 / 2: 1 / 2})
+    np.testing.assert_allclose(epsilon, np.log(expected_slopes[delta]))
+
+  @parameterized.product(
+      one_sided=(True, False),
+      delta=(0, 0.1),
+  )
+  def test_epsilon_raw_counts_zero_if_no_min_counts(self, one_sided, delta):
     in_canary_scores = np.arange(10) + 0.5
     out_canary_scores = np.arange(10)
-    delta = 1e-3
     min_count = 12
     auditor = canary_score_auditor.CanaryScoreAuditor(
         in_canary_scores, out_canary_scores

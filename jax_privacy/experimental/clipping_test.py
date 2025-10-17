@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import itertools
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import chex
@@ -23,64 +25,61 @@ from jax_privacy.experimental import clipping
 import optax
 
 
-class ClipPyTreeTest(absltest.TestCase):
+def cartesian_product(**kwargs):
+  return [dict(zip(kwargs, v)) for v in itertools.product(*kwargs.values())]
 
-  def test_clip_pytree_clips_when_norm_exceeds_max(self):
-    pytree = {'a': jnp.array([3.0, 0.0]), 'b': jnp.array([0.0, 4.0])}
-    clip_norm = 4.0
 
-    clipped_tree, norm = clipping.clip_pytree(
-        pytree, clip_norm, rescale_to_unit_norm=False
-    )
-    chex.assert_trees_all_close(
-        clipped_tree, {'a': jnp.array([2.4, 0.0]), 'b': jnp.array([0.0, 3.2])}
-    )
-    self.assertAlmostEqual(norm, 5.0)
-    self.assertAlmostEqual(optax.global_norm(clipped_tree), clip_norm)
+PYTREE_STRUCTS = [
+    jax.ShapeDtypeStruct(shape=(5, 5), dtype=jnp.float32),
+    dict(
+        a=jax.ShapeDtypeStruct(shape=(10,), dtype=jnp.float16),
+        b=jax.ShapeDtypeStruct(shape=(5, 5), dtype=jnp.float32),
+        c=jax.ShapeDtypeStruct(shape=(), dtype=jnp.bfloat16),
+    ),
+]
 
-    clipped_tree_rescaled, norm_rescaled = clipping.clip_pytree(
-        pytree, clip_norm, rescale_to_unit_norm=True
-    )
-    chex.assert_trees_all_close(
-        clipped_tree_rescaled,
-        {'a': jnp.array([0.6, 0.0]), 'b': jnp.array([0.0, 0.8])},
-    )
-    self.assertAlmostEqual(norm_rescaled, 5.0)
-    self.assertAlmostEqual(optax.global_norm(clipped_tree_rescaled), 1.0)
 
-  def test_clip_pytree_does_not_clip_when_norm_below_max(self):
-    pytree = {'a': jnp.array([1.0, 0.0]), 'b': jnp.array([0.0, 1.0])}
-    clip_norm = 2.0
+class ClipPyTreeTest(parameterized.TestCase):
 
-    clipped_tree, norm = clipping.clip_pytree(
-        pytree, clip_norm, rescale_to_unit_norm=False
-    )
-    chex.assert_trees_all_close(clipped_tree, pytree)
-    self.assertAlmostEqual(norm, jnp.sqrt(2.0))
+  @parameterized.parameters(*cartesian_product(
+      pytree=PYTREE_STRUCTS,
+      clip_norm=[0.0, 1.0, 2.0, jnp.inf],
+      rescale_to_unit_norm=[True, False],
+      nan_safe=[True, False],
+      return_zero=[True, False],
+  ))
+  def test_clip_pytree_output_dtype_matches_input(self, pytree, **kwargs):
+    pytree = optax.tree.random_like(jax.random.key(0), pytree)
+    clipped, _ = clipping.clip_pytree(pytree, **kwargs)
 
-    clipped_tree_rescaled, norm_rescaled = clipping.clip_pytree(
-        pytree, clip_norm, rescale_to_unit_norm=True
-    )
-    expected_rescaled = jax.tree.map(lambda x: x / clip_norm, pytree)
-    chex.assert_trees_all_close(clipped_tree_rescaled, expected_rescaled)
-    self.assertAlmostEqual(norm_rescaled, jnp.sqrt(2.0))
-    self.assertAlmostEqual(
-        optax.global_norm(clipped_tree_rescaled),
-        jnp.sqrt(2.0) / clip_norm,
-    )
+    jitted = jax.jit(clipping.clip_pytree, static_argnums=(2, 3))
+    clipped2, _ = jitted(pytree, **kwargs)
+    chex.assert_trees_all_equal_shapes_and_dtypes(pytree, clipped, clipped2)
 
-  def test_clip_pytree_clip_norm_zero(self):
-    """Tests clip_pytree when clip_norm is 0."""
-    pytree = {'a': jnp.array([3.0, 0.0]), 'b': jnp.array([0.0, 4.0])}
-    zero_tree = jax.tree.map(jnp.zeros_like, pytree)
-    clip_norm = 0.0
+  @parameterized.parameters(*cartesian_product(
+      pytree=PYTREE_STRUCTS,
+      clip_norm=[0.0, 1.0, 2.0, jnp.inf],
+      rescale_to_unit_norm=[True, False],
+      nan_safe=[True, False],
+      return_zero=[True, False],
+  ))
+  def test_clip_pytree_has_bounded_norm(self, pytree, **kwargs):
+    pytree = optax.tree.random_like(jax.random.key(0), pytree)
+    clipped, _ = clipping.clip_pytree(pytree, **kwargs)
 
-    clipped, norm = clipping.clip_pytree(
-        pytree, clip_norm, rescale_to_unit_norm=False
-    )
-    self.assertAlmostEqual(norm, 5.0)
-    chex.assert_trees_all_close(clipped, zero_tree)
-    self.assertAlmostEqual(optax.global_norm(clipped), 0.0)
+    if kwargs['return_zero']:
+      chex.assert_trees_all_close(clipped, optax.tree.zeros_like(pytree))
+    if kwargs['rescale_to_unit_norm']:
+      self.assertLessEqual(optax.global_norm(clipped), 1.0)
+    else:
+      self.assertLessEqual(optax.global_norm(clipped), kwargs['clip_norm'])
+
+  @parameterized.parameters(*cartesian_product(pytree=PYTREE_STRUCTS))
+  def test_clip_pytree_with_large_clip_norm(self, pytree):
+    pytree = optax.tree.random_like(jax.random.key(0), pytree)
+    clip_norm = optax.global_norm(pytree) * 1.5
+    clipped_tree, _ = clipping.clip_pytree(pytree, clip_norm)
+    chex.assert_trees_all_close(clipped_tree, pytree, atol=1e-6)
 
   def test_clip_pytree_clip_norm_zero_rescale(self):
     """Tests clip_pytree when clip_norm is 0."""
@@ -96,33 +95,15 @@ class ClipPyTreeTest(absltest.TestCase):
     expected = {'a': jnp.array([0.6, 0.0]), 'b': jnp.array([0.0, 0.8])}
     chex.assert_trees_all_close(clipped, expected)
 
-  def test_clip_pytree_clip_norm_inf(self):
-    """Tests clip_pytree when clip_norm is infinity."""
-    pytree = {'a': jnp.array([3.0, 0.0]), 'b': jnp.array([0.0, 4.0])}
-    zero_tree = jax.tree.map(jnp.zeros_like, pytree)
-    clip_norm = jnp.inf
-
-    clipped, norm = clipping.clip_pytree(
-        pytree, clip_norm, rescale_to_unit_norm=False
-    )
-    self.assertAlmostEqual(norm, 5.0)
-    chex.assert_trees_all_close(clipped, pytree)
-    self.assertAlmostEqual(optax.global_norm(clipped), 5.0)
-
-    clipped_rescaled, norm_rescaled = clipping.clip_pytree(
-        pytree, clip_norm, rescale_to_unit_norm=True
-    )
-    self.assertAlmostEqual(norm_rescaled, 5.0)
-    chex.assert_trees_all_close(clipped_rescaled, zero_tree)
-    self.assertAlmostEqual(optax.global_norm(clipped_rescaled), 0.0)
-
-  def test_clip_pytree_zero_norm_pytree(self):
+  @parameterized.parameters(
+      *cartesian_product(pytree=PYTREE_STRUCTS, clip_norm=[0.0, 1.0, jnp.inf])
+  )
+  def test_clip_pytree_zero_norm_pytree(self, pytree, clip_norm):
     """Tests clip_pytree when the input pytree has zero norm."""
-    zero_tree = {'a': jnp.array([0.0, 0.0]), 'b': jnp.array([0.0, 0.0])}
-    clip_norm = 5.0
+    zero_tree = optax.tree.zeros_like(pytree)
 
     clipped, norm = clipping.clip_pytree(
-        zero_tree, clip_norm, rescale_to_unit_norm=False
+        zero_tree, clip_norm, rescale_to_unit_norm=False, nan_safe=True
     )
     self.assertAlmostEqual(norm, 0.0)
     chex.assert_trees_all_close(clipped, zero_tree)
@@ -135,43 +116,19 @@ class ClipPyTreeTest(absltest.TestCase):
     chex.assert_trees_all_close(clipped_rescaled, zero_tree)
     self.assertAlmostEqual(optax.global_norm(clipped_rescaled), 0.0)
 
-  def test_clip_pytree_zero_norm_and_zero_clip(self):
-    """Tests clip_pytree when both input norm and clip_norm are zero."""
-    zero_tree = {'a': jnp.array([0.0, 0.0]), 'b': jnp.array([0.0, 0.0])}
-    clip_norm = 0.0
+  @parameterized.parameters(*cartesian_product(
+      clip_norm=[0.0, 1.0, 2.0, jnp.inf],
+      return_zero=[False, True],
+      rescale_to_unit_norm=[False, True],
+  ))
+  def test_nan_safety(self, **kwargs):
+    pytree = jnp.array([3.0, 0.0, 1.0, jnp.nan, 2.0])
+    clipped, _ = clipping.clip_pytree(pytree, nan_safe=True, **kwargs)
+    chex.assert_tree_all_finite(clipped)
 
-    clipped, norm = clipping.clip_pytree(
-        zero_tree, clip_norm, rescale_to_unit_norm=False
-    )
-    self.assertAlmostEqual(norm, 0.0)
-    chex.assert_trees_all_close(clipped, zero_tree)
-    self.assertAlmostEqual(optax.global_norm(clipped), 0.0)
-
-    clipped_rescaled, norm_rescaled = clipping.clip_pytree(
-        zero_tree, clip_norm, rescale_to_unit_norm=True
-    )
-    self.assertAlmostEqual(norm_rescaled, 0.0)
-    chex.assert_trees_all_close(clipped_rescaled, zero_tree)
-    self.assertAlmostEqual(optax.global_norm(clipped_rescaled), 0.0)
-
-  def test_clip_pytree_zero_norm_and_inf_clip(self):
-    """Tests clip_pytree when input norm is zero and clip_norm is inf."""
-    zero_tree = {'a': jnp.array([0.0, 0.0]), 'b': jnp.array([0.0, 0.0])}
-    clip_norm = jnp.inf
-
-    clipped, norm = clipping.clip_pytree(
-        zero_tree, clip_norm, rescale_to_unit_norm=False
-    )
-    self.assertAlmostEqual(norm, 0.0)
-    chex.assert_trees_all_close(clipped, zero_tree)
-    self.assertAlmostEqual(optax.global_norm(clipped), 0.0)
-
-    clipped_rescaled, norm_rescaled = clipping.clip_pytree(
-        zero_tree, clip_norm, rescale_to_unit_norm=True
-    )
-    self.assertAlmostEqual(norm_rescaled, 0.0)
-    chex.assert_trees_all_close(clipped_rescaled, zero_tree)
-    self.assertAlmostEqual(optax.global_norm(clipped_rescaled), 0.0)
+    pytree = jnp.array([3.0, 0.0, jnp.inf, -jnp.inf, 2.0])
+    clipped, _ = clipping.clip_pytree(pytree, nan_safe=True, **kwargs)
+    chex.assert_tree_all_finite(clipped)
 
   def test_clip_pytree_with_nan(self):
     """Tests clip_pytree when the input pytree has nan."""
@@ -224,9 +181,9 @@ class ClipTransformTest(parameterized.TestCase):
     relation = dp_accounting.NeighboringRelation.REPLACE_ONE
     self.assertLessEqual(diff, sum_clip_mean.sensitivity(relation) + 1e-6)
 
-    is_padding_example_neighbor = jnp.zeros(data.shape[0]).at[3].set(1)
+    is_padding_example_nbr = jnp.zeros(data.shape[0], jnp.bool_).at[3].set(1)
     relation = dp_accounting.NeighboringRelation.REPLACE_SPECIAL
-    new = sum_clip_mean(data, is_padding_example=is_padding_example_neighbor)
+    new = sum_clip_mean(data, is_padding_example=is_padding_example_nbr)
     diff = jnp.linalg.norm(sum_clip_mean(data) - new)
     self.assertLessEqual(diff, sum_clip_mean.sensitivity(relation) + 1e-6)
 

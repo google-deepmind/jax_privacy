@@ -57,7 +57,7 @@ def jax_enable_x64(fn: Callable[..., Any]) -> Callable[..., Any]:
   """Decorator to enable x64 precision for a function."""
 
   def wrapped_fn(*args, **kwargs):
-    with jax.experimental.enable_x64():
+    with jax.enable_x64():
       return fn(*args, **kwargs)
 
   return wrapped_fn
