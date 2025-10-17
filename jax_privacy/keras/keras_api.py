@@ -159,7 +159,7 @@ class DPKerasConfig:
   def __post_init__(self):
     self._validate_params()
 
-  def _validate_params(self):
+  def _validate_params(self) -> None:
     """Validates the parameters for DP-SGD training."""
     if self.epsilon <= 0:
       raise ValueError(f'Epsilon {self.epsilon} must be positive.')
@@ -212,7 +212,7 @@ class DPKerasConfig:
         )
 
 
-def make_private(model: keras.Model, params: DPKerasConfig):
+def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   """Adds DP-SGD training to a Keras model without modifying its API.
 
   This function modifies `model` in-place by adding attributes and replaces
@@ -257,7 +257,7 @@ def make_private(model: keras.Model, params: DPKerasConfig):
   return model
 
 
-def _validate_model(model: keras.Model):
+def _validate_model(model: keras.Model) -> None:
   if not isinstance(model, keras.Model):
     raise ValueError(f'Model {model} is not a Keras model.')
   if not isinstance(model, backend.jax.trainer.JAXTrainer):
@@ -266,7 +266,7 @@ def _validate_model(model: keras.Model):
   # that are not compatible with DP-SGD, e.g. batch norm.
 
 
-def _validate_optimizer(model: keras.Model, params: DPKerasConfig):
+def _validate_optimizer(model: keras.Model, params: DPKerasConfig) -> None:
   optimizer_gradient_accumulation_steps = (
       model.optimizer.gradient_accumulation_steps or 1
   )
@@ -333,10 +333,14 @@ def _get_gradient_computer(
   )
 
 
+# Does not matter for us.
+_FitFnReturnType = typing.Any
+
+
 def _create_fit_fn_with_validation(
-    original_fit_fn: typing.Callable[..., typing.Any],
+    original_fit_fn: typing.Callable[..., _FitFnReturnType],
     params: DPKerasConfig,
-):
+) -> typing.Callable[..., _FitFnReturnType]:
   """Creates a fit function with validation for DP-SGD training.
 
    It validates that:
@@ -359,7 +363,7 @@ def _create_fit_fn_with_validation(
       self,
       *args,
       **kwargs,
-  ):
+  ) -> _FitFnReturnType:
     _validate_optimizer(self, self._dp_params)  # pylint: disable=protected-access
     fit_signature = inspect.signature(original_fit_fn)
 
@@ -426,7 +430,7 @@ def _create_fit_fn_with_validation(
 def _check_dp_params_aligned_with_fit_args(
     dp_params: DPKerasConfig,
     batch_size: int,
-):
+) -> None:
   """Checks that the DP parameters are aligned with the fit() arguments."""
   if dp_params.batch_size != batch_size:
     raise ValueError(
@@ -437,7 +441,9 @@ def _check_dp_params_aligned_with_fit_args(
     )
 
 
-def _dp_train_step(self, state, data):
+def _dp_train_step(
+    self: keras.Model, state: typing.Any, data: typing.Any
+) -> tuple[dict[str, typing.Any], typing.Any]:
   """Performs a single training step.
 
   This function replaces Keras model train_step (that's why it has self arg).
@@ -524,13 +530,23 @@ def _dp_train_step(self, state, data):
   return logs, state
 
 
+# unscaled_loss, y_pred, non_trainable_variables, metrics_variables
+_AuxType = tuple[jnp.ndarray, typing.Any, typing.Any, typing.Any]
+
+
 def _noised_clipped_grads(
-    compute_loss_and_updates_fn,
+    compute_loss_and_updates_fn: typing.Callable[
+        ...,
+        tuple[
+            jnp.ndarray,
+            _AuxType,
+        ],
+    ],
     dp_params: DPKerasConfig,
     gradient_computer: jp_gradients.GradientComputer,
-    state,
-    data,
-):
+    state: typing.Any,
+    data: typing.Any,
+) -> tuple[tuple[jnp.ndarray, _AuxType], jp_typing.ParamsT]:
   """Computes noised and clipped gradients.
 
   Args:
@@ -611,8 +627,14 @@ def _noised_clipped_grads(
 # This is copy-paste from
 # https://github.com/keras-team/keras/blob/6b4a4dfaa26c14d3071a489e43453917f7b42e30/keras/src/backend/jax/trainer.py#L88
 def _update_metrics_variables(  # pylint: disable=too-many-positional-arguments
-    self, metrics_variables, unscaled_loss, x, y, y_pred, sample_weight
-):
+    self: keras.Model,
+    metrics_variables: typing.Any,
+    unscaled_loss: typing.Any,
+    x: typing.Any,
+    y: typing.Any,
+    y_pred: typing.Any,
+    sample_weight: typing.Any,
+) -> tuple[dict[str, typing.Any], list[keras.Variable]]:
   """Updates the metrics variables."""
   with backend.StatelessScope(
       state_mapping=list(zip(self.metrics_variables, metrics_variables))
@@ -636,7 +658,7 @@ def _get_param(
     param_name: str,
     *args,
     **kwargs,
-):
+) -> typing.Any:
   """Returns the value of the parameter in the method call.
 
   This function is used to get the value of the parameter in the method
@@ -668,7 +690,9 @@ def _get_param(
   return parameters[param_name].default if param_name in parameters else None
 
 
-def _get_non_trainable_weight(weight_name: str, model: keras.Model):
+def _get_non_trainable_weight(
+    weight_name: str, model: keras.Model
+) -> keras.Variable:
   """Returns the non-trainable weight with the given name."""
   return next(w for w in model.non_trainable_weights if w.name == weight_name)
 
