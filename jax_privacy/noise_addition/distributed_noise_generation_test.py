@@ -87,13 +87,11 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
 
     model_params = jax.sharding.reshard(model_params, pspecs)
 
-    privatizer = (
-        additive_privatizers.matrix_factorization_privatizer(
-            noising_matrix=strategy_inverse_fn(),
-            stddev=1.0,
-            prng_key=jax.random.key(0),
-            intermediate_strategy=additive_privatizers.SupportedStrategies.ZERO,
-        )
+    privatizer = additive_privatizers.matrix_factorization_privatizer(
+        noising_matrix=strategy_inverse_fn(),
+        stddev=1.0,
+        prng_key=jax.random.key(0),
+        intermediate_strategy=additive_privatizers.SupportedStrategies.ZERO,
     )
 
     @jax.jit
@@ -122,14 +120,14 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
 
   def test_internal_shardings(self):
 
-    noising_matrix = toeplitz.inverse_as_streaming_matrix(jnp.ones(3))
-    privatizer = (
-        additive_privatizers.matrix_factorization_privatizer(
-            noising_matrix=noising_matrix,
-            stddev=1.0,
-            prng_key=jax.random.key(0),
-            intermediate_strategy=additive_privatizers.SupportedStrategies.ZERO,
-        )
+    noising_matrix = toeplitz.inverse_as_streaming_matrix(
+        jnp.ones(3, dtype=jnp.float32)
+    )
+    privatizer = additive_privatizers.matrix_factorization_privatizer(
+        noising_matrix=noising_matrix,
+        stddev=1.0,
+        prng_key=jax.random.key(0),
+        intermediate_strategy=additive_privatizers.SupportedStrategies.ZERO,
     )
 
     def foo(sum_of_clipped_grads):
@@ -140,7 +138,7 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
 
     expected = jax.sharding.PartitionSpec(None, ('x', 'y'))
     params = jax.device_put(
-        jnp.zeros((3, 4, 5)), jax.sharding.PartitionSpec()
+        jnp.zeros((3, 4, 5), dtype=jnp.float32), jax.sharding.PartitionSpec()
     )
     states = foo(params)
 

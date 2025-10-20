@@ -5,7 +5,8 @@
 
 
 absl-py
-dp_accounting
+# TODO: fetching it from GitHub is a temporary solution. We should use PyPI.
+dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting
 einshape
 grain
 hypothesis
