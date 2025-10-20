@@ -30,9 +30,6 @@ from jax_privacy.dp_sgd import grad_clipping as jp_grad_clipping
 from jax_privacy.dp_sgd import gradients as jp_gradients
 from jax_privacy.dp_sgd import typing as jp_typing
 import keras
-from keras.src import backend
-from keras.src import tree
-from keras.src.trainers.data_adapters import data_adapter_utils
 import numpy as np
 
 
@@ -260,7 +257,7 @@ def make_private(model: keras.Model, params: DPKerasConfig):
 def _validate_model(model: keras.Model):
   if not isinstance(model, keras.Model):
     raise ValueError(f'Model {model} is not a Keras model.')
-  if not isinstance(model, backend.jax.trainer.JAXTrainer):
+  if keras.config.backend() != 'jax':
     raise ValueError(f'Model {model} must use Jax backend.')
   # TODO: Add validation that the model does not contain layers
   # that are not compatible with DP-SGD, e.g. batch norm.
@@ -459,7 +456,7 @@ def _dp_train_step(self, state, data):
       optimizer_variables,
       _,
   ) = state
-  x, y, sample_weight = data_adapter_utils.unpack_x_y_sample_weight(data)
+  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
 
   dp_batch_size = self._dp_params.batch_size  # pylint: disable=protected-access
   actual_batch_size = jax.tree_util.tree_leaves(x)[0].shape[0]
@@ -553,7 +550,7 @@ def _noised_clipped_grads(
   # TODO: access it and update it by name.
   rng = non_trainable_variables[0]
   rng_grads, rng_next = jax.random.split(rng)
-  x, y, sample_weight = data_adapter_utils.unpack_x_y_sample_weight(data)
+  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
 
   inputs = {'x': x, 'y': y, 'sample_weight': sample_weight}
 
@@ -614,11 +611,11 @@ def _update_metrics_variables(  # pylint: disable=too-many-positional-arguments
     self, metrics_variables, unscaled_loss, x, y, y_pred, sample_weight
 ):
   """Updates the metrics variables."""
-  with backend.StatelessScope(
+  with keras.StatelessScope(
       state_mapping=list(zip(self.metrics_variables, metrics_variables))
   ) as scope:
     self._loss_tracker.update_state(  # pylint: disable=protected-access
-        unscaled_loss, sample_weight=tree.flatten(x)[0].shape[0]
+        unscaled_loss, sample_weight=keras.tree.flatten(x)[0].shape[0]
     )
     logs = self.compute_metrics(x, y, y_pred, sample_weight)
 
