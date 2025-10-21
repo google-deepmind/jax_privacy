@@ -364,7 +364,7 @@ class GradientClippingTest(parameterized.TestCase):
     clipped_grad_fn = gradient_clipping.clipped_grad(
         fun,
         l2_clip_norm=1.0,
-        prng_dim=2,
+        prng_argnum=2,
     )
     sum_grads = clipped_grad_fn(params, data, key)
     chex.assert_trees_all_equal_structs(sum_grads, params)

@@ -174,7 +174,7 @@ class ClipTransformTest(parameterized.TestCase):
   @parameterized.parameters(CLIP_SUM_INPUTS)
   def test_clip_sum_sensitivity(self, **kwargs):
     data = jax.random.normal(jax.random.key(0), (15, 4))
-    sum_clip_mean = clipping.clip_sum(**kwargs)
+    sum_clip_mean = clipping.clipped_fun(**kwargs)
 
     neighbor = data.at[3].set([-10, 10, 20, 20])
     diff = jnp.linalg.norm(sum_clip_mean(data) - sum_clip_mean(neighbor))
@@ -196,7 +196,7 @@ class ClipTransformTest(parameterized.TestCase):
   def test_nan_safe_by_default(self, **kwargs):
     data = jax.random.normal(jax.random.key(0), (15, 4))
     data = data.at[5].set(jnp.nan)
-    sum_clip_mean = clipping.clip_sum(**kwargs)
+    sum_clip_mean = clipping.clipped_fun(**kwargs)
 
     neighbor = data.at[3].set([-10, 10, 20, 20])
     diff = jnp.linalg.norm(sum_clip_mean(data) - sum_clip_mean(neighbor))
@@ -210,7 +210,7 @@ class ClipTransformTest(parameterized.TestCase):
   )
   def test_correct_dtype(self, arg_dtype, output_dtype, microbatch_size):
     data = jax.random.normal(jax.random.key(0), (15, 4), arg_dtype)
-    sum_clip_mean = clipping.clip_sum(
+    sum_clip_mean = clipping.clipped_fun(
         **CLIP_SUM_INPUTS[0],
         dtype=output_dtype,
         microbatch_size=microbatch_size

@@ -196,7 +196,7 @@ def _normalize_fun_to_return_aux(fun, has_aux):
     return lambda *args, **kwargs: (fun(*args, **kwargs), ())
 
 
-def clip_sum(
+def clipped_fun(
     fun: Callable,
     has_aux: bool = False,
     *,
@@ -209,14 +209,14 @@ def clip_sum(
     microbatch_size: int | None = None,
     nan_safe: bool = True,
     dtype: jax.typing.DTypeLike | None = None,
-    prng_dim: int | None = None,
+    prng_argnum: int | None = None,
     spmd_axis_name: str | None = None,
 ) -> BoundedSensitivityCallable:
   """Transforms a function to clip its output and sum across a batch.
 
   Example Usage:
     >>> data = jnp.array([0, 1, 2, 3, 4, 5])
-    >>> clipped_mean = clip_sum(jnp.mean, l2_clip_norm=1.0)
+    >>> clipped_mean = clipped_fun(jnp.mean, l2_clip_norm=1.0)
     >>> clipped_mean(data)
     Array(5., dtype=float32)
 
@@ -266,8 +266,8 @@ def clip_sum(
       will be the same as the dtypes of the function output. Can be useful to
       avoid overflow issues when using low-precision dtypes as the transformed
       function computes a sum over a potentially large batch.
-    prng_dim: If set, specifies which argumnet of `fun` is a prng key. The prng
-      will be split to have a batch dimension and vmapped over.
+    prng_argnum: If set, specifies which argument of `fun` is a prng key. The
+      prng will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap.
 
   Returns:
@@ -284,6 +284,7 @@ def clip_sum(
   """
   if isinstance(batch_argnums, int):
     batch_argnums = (batch_argnums,)
+
   fun = _normalize_fun_to_return_aux(fun, has_aux)
 
   def clipped_fn(*args, **kwargs):
@@ -308,15 +309,18 @@ def clip_sum(
     sum_ = microbatching.AccumulationType.SUM
     concat = microbatching.AccumulationType.CONCAT
     axes = [0 if i in batch_argnums else None for i in range(len(args))]
-    if prng_dim is not None:
+    if prng_argnum is not None:
       args = list(args)
-      rngs = args[prng_dim]
+      rngs = args[prng_argnum]
       split_rngs = jax.tree.map(lambda x: jax.random.split(x, batch_size), rngs)
-      args[prng_dim] = split_rngs
-      axes[prng_dim] = 0
+      args[prng_argnum] = split_rngs
+      axes[prng_argnum] = 0
+      batch_argnums_with_prng = tuple(batch_argnums) + (prng_argnum,)
+    else:
+      batch_argnums_with_prng = batch_argnums
     microbatched_vmap_fun = microbatching.microbatch(
         jax.vmap(clipped_fun_one_group, axes, spmd_axis_name=spmd_axis_name),
-        batch_argnums=batch_argnums,
+        batch_argnums=batch_argnums_with_prng,
         microbatch_size=microbatch_size,
         accumulation_type=(sum_, concat, concat),
     )
@@ -382,7 +386,7 @@ def clipped_grad(
     microbatch_size: int | None = None,
     nan_safe: bool = True,
     dtype: jax.typing.DTypeLike | None = None,
-    prng_dim: int | None = None,
+    prng_argnum: int | None = None,
     spmd_axis_name: str | None = None,
 ) -> BoundedSensitivityCallable:
   """Create a function to compute the sum of clipped gradients of fun.
@@ -499,8 +503,8 @@ def clipped_grad(
       the same as the dtypes of the gradient function. Can be useful to avoid
       overflow issues when using low-precision dtypes as the returned function
       computes a sum over a potentially large batch.
-    prng_dim: If set, specifies which argumnet of `fun` is a prng key. The prng
-      will be split to have a batch dimension and vmapped over.
+    prng_argnum: If set, specifies which argumnet of `fun` is a prng key. The
+      prng will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap. Only relevant in distributed settings.
 
   Returns:
@@ -527,7 +531,7 @@ def clipped_grad(
       return result, aux
     return result
 
-  return clip_sum(
+  return clipped_fun(
       grad_fn,
       has_aux=has_aux or return_values or return_grad_norms,
       batch_argnums=batch_argnums,
@@ -538,6 +542,6 @@ def clipped_grad(
       microbatch_size=microbatch_size,
       nan_safe=nan_safe,
       dtype=dtype,
-      prng_dim=prng_dim,
+      prng_argnum=prng_argnum,
       spmd_axis_name=spmd_axis_name,
   )
