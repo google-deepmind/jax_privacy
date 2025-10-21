@@ -21,6 +21,7 @@ import functools
 import inspect
 import types
 import typing
+import chex
 import jax
 import jax.numpy as jnp
 from jax_privacy.accounting import accountants
@@ -156,7 +157,7 @@ class DPKerasConfig:
   def __post_init__(self):
     self._validate_params()
 
-  def _validate_params(self):
+  def _validate_params(self) -> None:
     """Validates the parameters for DP-SGD training."""
     if self.epsilon <= 0:
       raise ValueError(f'Epsilon {self.epsilon} must be positive.')
@@ -209,7 +210,7 @@ class DPKerasConfig:
         )
 
 
-def make_private(model: keras.Model, params: DPKerasConfig):
+def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   """Adds DP-SGD training to a Keras model without modifying its API.
 
   This function modifies `model` in-place by adding attributes and replaces
@@ -254,7 +255,7 @@ def make_private(model: keras.Model, params: DPKerasConfig):
   return model
 
 
-def _validate_model(model: keras.Model):
+def _validate_model(model: keras.Model) -> None:
   if not isinstance(model, keras.Model):
     raise ValueError(f'Model {model} is not a Keras model.')
   if keras.config.backend() != 'jax':
@@ -263,7 +264,7 @@ def _validate_model(model: keras.Model):
   # that are not compatible with DP-SGD, e.g. batch norm.
 
 
-def _validate_optimizer(model: keras.Model, params: DPKerasConfig):
+def _validate_optimizer(model: keras.Model, params: DPKerasConfig) -> None:
   optimizer_gradient_accumulation_steps = (
       model.optimizer.gradient_accumulation_steps or 1
   )
@@ -330,10 +331,13 @@ def _get_gradient_computer(
   )
 
 
+_FitFnReturnType = keras.callbacks.History
+
+
 def _create_fit_fn_with_validation(
-    original_fit_fn: typing.Callable[..., typing.Any],
+    original_fit_fn: typing.Callable[..., _FitFnReturnType],
     params: DPKerasConfig,
-):
+) -> typing.Callable[..., _FitFnReturnType]:
   """Creates a fit function with validation for DP-SGD training.
 
    It validates that:
@@ -356,7 +360,7 @@ def _create_fit_fn_with_validation(
       self,
       *args,
       **kwargs,
-  ):
+  ) -> _FitFnReturnType:
     _validate_optimizer(self, self._dp_params)  # pylint: disable=protected-access
     fit_signature = inspect.signature(original_fit_fn)
 
@@ -423,7 +427,7 @@ def _create_fit_fn_with_validation(
 def _check_dp_params_aligned_with_fit_args(
     dp_params: DPKerasConfig,
     batch_size: int,
-):
+) -> None:
   """Checks that the DP parameters are aligned with the fit() arguments."""
   if dp_params.batch_size != batch_size:
     raise ValueError(
@@ -434,7 +438,39 @@ def _check_dp_params_aligned_with_fit_args(
     )
 
 
-def _dp_train_step(self, state, data):
+_XType = jp_typing.InputsT
+_YType = jp_typing.InputsT
+_SampleWeightType = jp_typing.InputsT
+_TrainableVariablesType = jp_typing.ParamsT
+_NonTrainableVariablesType = list[chex.Numeric]
+_OptimizerVariablesType = list[chex.Numeric]
+_MetricsVariablesType = chex.Numeric
+_UnscaledLossType = jp_typing.Loss
+_YPredType = _YType
+_KerasInputsDataType = tuple[_XType, _YType | None, _SampleWeightType | None]
+
+_StateType = tuple[
+    _TrainableVariablesType,
+    _NonTrainableVariablesType,
+    _OptimizerVariablesType,
+    _MetricsVariablesType,
+]
+
+_AuxType = tuple[
+    _UnscaledLossType,
+    _YPredType,
+    _NonTrainableVariablesType,
+    _MetricsVariablesType,
+]
+
+_LogsType = dict[str, chex.Numeric]
+
+
+def _dp_train_step(
+    self: keras.Model,
+    state: _StateType,
+    data: _KerasInputsDataType,
+) -> tuple[_LogsType, _StateType]:
   """Performs a single training step.
 
   This function replaces Keras model train_step (that's why it has self arg).
@@ -443,11 +479,14 @@ def _dp_train_step(self, state, data):
 
   Args:
     self: The Keras model.
-    state: The state of the model. As in model.train_step.
-    data: The data for the model. As in model.train_step.
+    state: The state of the model (trainable, non-trainable, optimizer, metrics
+      variables). As in model.train_step.
+    data: The data for the model (x, y, sample_weight). As in model.train_step.
+      Note that y and sample_weight can be None.
 
   Returns:
-    logs: The logs for the training step. As in model.train_step.
+    logs: The logs for the training step, dict of metrics. As in
+    model.train_step.
     state: The new state of the model. As in model.train_step.
   """
   (
@@ -522,12 +561,18 @@ def _dp_train_step(self, state, data):
 
 
 def _noised_clipped_grads(
-    compute_loss_and_updates_fn,
+    compute_loss_and_updates_fn: typing.Callable[
+        ...,
+        tuple[
+            jp_typing.Loss,
+            _AuxType,
+        ],
+    ],
     dp_params: DPKerasConfig,
     gradient_computer: jp_gradients.GradientComputer,
-    state,
-    data,
-):
+    state: _StateType,
+    data: _KerasInputsDataType,
+) -> tuple[tuple[jp_typing.Loss, _AuxType], jp_typing.ParamsT]:
   """Computes noised and clipped gradients.
 
   Args:
@@ -536,7 +581,8 @@ def _noised_clipped_grads(
     dp_params: The parameters for DP-SGD training.
     gradient_computer: The gradient computer for DP-SGD training.
     state: The state of the model.
-    data: The data for the model.
+    data: The data for the model: triple of x, y (can be None), sample_weight
+      (can be None).
 
   Returns:
     (loss, aux), grads
@@ -555,7 +601,12 @@ def _noised_clipped_grads(
   inputs = {'x': x, 'y': y, 'sample_weight': sample_weight}
 
   # TODO: use rng argument for dropout
-  def loss_fn(params, network_state, unused_rng, inputs):
+  def loss_fn(
+      params: _TrainableVariablesType,
+      network_state: jp_typing.ModelStateT,
+      unused_rng,
+      inputs: _KerasInputsDataType,
+  ) -> tuple[jp_typing.Loss, tuple[jp_typing.ModelStateT, jp_typing.Metrics]]:
     loss, aux = compute_loss_and_updates_fn(
         params,
         non_trainable_variables,
@@ -608,8 +659,14 @@ def _noised_clipped_grads(
 # This is copy-paste from
 # https://github.com/keras-team/keras/blob/6b4a4dfaa26c14d3071a489e43453917f7b42e30/keras/src/backend/jax/trainer.py#L88
 def _update_metrics_variables(  # pylint: disable=too-many-positional-arguments
-    self, metrics_variables, unscaled_loss, x, y, y_pred, sample_weight
-):
+    self: keras.Model,
+    metrics_variables: _MetricsVariablesType,
+    unscaled_loss: _UnscaledLossType,
+    x: _XType,
+    y: _YType,
+    y_pred: _YType,
+    sample_weight: _SampleWeightType,
+) -> tuple[_LogsType, _MetricsVariablesType]:
   """Updates the metrics variables."""
   with keras.StatelessScope(
       state_mapping=list(zip(self.metrics_variables, metrics_variables))
@@ -633,7 +690,7 @@ def _get_param(
     param_name: str,
     *args,
     **kwargs,
-):
+) -> typing.Any:
   """Returns the value of the parameter in the method call.
 
   This function is used to get the value of the parameter in the method
@@ -665,7 +722,9 @@ def _get_param(
   return parameters[param_name].default if param_name in parameters else None
 
 
-def _get_non_trainable_weight(weight_name: str, model: keras.Model):
+def _get_non_trainable_weight(
+    weight_name: str, model: keras.Model
+) -> keras.Variable:
   """Returns the non-trainable weight with the given name."""
   return next(w for w in model.non_trainable_weights if w.name == weight_name)
 
