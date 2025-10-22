@@ -24,8 +24,9 @@
    :maxdepth: 2
    :caption: Examples
 
-   flax_linen_example
-   gemma_dp_finetuning_example
+   _collections/examples/dp_sgd_flax_linen_mnist
+   _collections/examples/dp_sgd_keras_gemma3_lora_finetuning_samsum
+   _collections/examples/dp_sgd_keras_gemma3_synthetic_data
 
 .. toctree::
    :maxdepth: 2
