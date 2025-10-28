@@ -2,7 +2,7 @@
 
 .. currentmodule:: {{ fullname }}
 
-.. autosummary::
-   :toctree: .
+.. automodule:: {{ fullname }}
    :members:
    :imported-members:
+   :no-index:

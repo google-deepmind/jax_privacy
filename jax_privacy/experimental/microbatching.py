@@ -45,6 +45,7 @@ SUM, MEAN, and CONCAT.
 - CONCAT concatenates the results from each microbatch,
   suitable when the original function returns per_example outputs.
 """
+
 import dataclasses
 import enum
 import functools
@@ -96,7 +97,7 @@ class _Accumulator:
       case AccumulationType.CONCAT:
         return jax.tree.map(
             lambda x: jnp.broadcast_to(x, (self.num_microbatches,) + x.shape),
-            value
+            value,
         )
 
   def _update(self, kind: AccumulationType, state: Any, value: Any, index: int):
@@ -173,13 +174,15 @@ def microbatch(
 
   Conceptually, given `fun`, this function returns a new function that does
   something like the following (for the case of SUM aggregation):
-  ```
-  def microbatched_fun(full_batch):
-    accumulator = 0
-    for microbatch in full_batch:
-      accumulator += fun(microbatch)
-    return accumulator
-  ```
+
+  .. code-block:: python
+
+    def microbatched_fun(full_batch):
+      accumulator = 0
+      for microbatch in full_batch:
+        accumulator += fun(microbatch)
+      return accumulator
+
   where under the hood the `for` is implemented via a `lax.fori_loop` and hence
   forced to be sequential.
 
@@ -222,7 +225,7 @@ def microbatch(
   [0, 2, 4, 6, 8, 1, 3, 5, 7, 9] so that the microbatches would be
   [0, 1], [2, 3], [4, 5], [6, 7], [8, 9] and the last microbatch can be skipped
   if is_padding = [0, 0, 0, 0, 1, 0, 0, 0, 0, 1]. See
-  `compute_early_stopping_order` to reorder your data in a manner that allows 
+  `compute_early_stopping_order` to reorder your data in a manner that allows
   you to leverage this.
 
   Args:

@@ -75,17 +75,18 @@ class DPExecutionPlan(abc.ABC):
   In pseudo-code, the components of this dataclass should roughly be used as
   follows:
 
-  ```python
-  noise_state = noise_addition_transform.init(...)
-  for indices in batch_selection_strategy():
-    batch = data.select(indices)
-    clipped_grad = clipped_aggregation_fn(batch, ...)
-    dp_grad, noise_state = noise_addition_transform.update(
-        clipped_grad, noise_state
-    )
-    del indices, batch, clipped_grad # Sensitive, discard immediately after use.
-    # Arbitrary post-processing of dp_grad.
-  ```
+  .. code-block:: python
+
+    noise_state = noise_addition_transform.init(...)
+    for indices in batch_selection_strategy():
+      batch = data.select(indices)
+      clipped_grad = clipped_aggregation_fn(batch, ...)
+      dp_grad, noise_state = noise_addition_transform.update(
+          clipped_grad, noise_state
+      )
+      # Sensitive, discard immediately after use.
+      del indices, batch, clipped_grad
+      # Arbitrary post-processing of dp_grad.
 
   If possible, we recommend coupling the batch selection, clipped aggregation,
   and noise addition components as tightly as possible to ensure sensitive
@@ -164,15 +165,12 @@ class BandMFExecutionPlan(DPExecutionPlan):
     delta: Additional privacy parameter.
     noise_multiplier: If specified, gives the standard deviation of the
       uncorrelated gaussian noise used with the BandMF GradientPrivatizer.
-
     iterations: The number of iterations the mechanism is defined for. Tip: Set
       this to be a multiple of num_bands for the best utility.
     num_bands: The number of bands in the BandMF strategy matrix.
-
     l2_clip_norm: The maximum L2 norm of the per-example gradients.
     rescale_to_unit_norm: Divide the clipped gradient by the l2_clip_norm.
     normalize_by: Divide the sum-of-clipped gradients by this value.
-
     sampling_prob: The Poisson sampling probability for each example in a group.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to.
@@ -181,7 +179,6 @@ class BandMFExecutionPlan(DPExecutionPlan):
     use_fixed_size_groups: Whether to discard examples so that all groups have
       the same size before sampling. If sampling_prob=1, this guarantees that
       the batch selection strategy will produce fixed-size batches.
-
     accountant: A privacy accountant that is used to calibrate the noise
       multiplier. Expected to have an empty state (or calibration may fail).
       Defaults to PLDAccountant with REPLACE_SPECIAL neighboring_relation.
@@ -237,8 +234,8 @@ class BandMFExecutionPlan(DPExecutionPlan):
           'truncated_batch_size with ADD_OR_REMOVE_ONE is not supported.'
       )
     if (
-        self.num_bands != 1 and
-        self.neighboring_relation is NeighboringRelation.ADD_OR_REMOVE_ONE
+        self.num_bands != 1
+        and self.neighboring_relation is NeighboringRelation.ADD_OR_REMOVE_ONE
     ):
       # TODO: b/415360727 - This can be fixed by using different partitionings.
       raise ValueError(f'{self.neighboring_relation=} requires num_bands=1.')
@@ -285,11 +282,7 @@ class BandMFExecutionPlan(DPExecutionPlan):
     return self._get_dp_event(self.calibrated_noise_multiplier)
 
   def clipped_grad(
-      self,
-      fun,
-      argnums=0,
-      has_aux=False,
-      **kwargs
+      self, fun, argnums=0, has_aux=False, **kwargs
   ) -> clipping.BoundedSensitivityCallable:
     return clipping.clipped_grad(
         fun,
@@ -325,13 +318,12 @@ class BandMFExecutionPlan(DPExecutionPlan):
     )
 
   def batch_selection_strategy(
-      self,
-      **kwargs
+      self, **kwargs
   ) -> batch_selection.BatchSelectionStrategy:
     return batch_selection.CyclicPoissonSampling(
         sampling_prob=self.sampling_prob,
         iterations=self.iterations,
         cycle_length=self.num_bands,
         truncated_batch_size=self.truncated_batch_size,
-        **kwargs
+        **kwargs,
     )

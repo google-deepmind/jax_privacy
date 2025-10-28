@@ -44,6 +44,7 @@ extensions = [
     'sphinx.ext.viewcode',
     'sphinx_rtd_theme',
     'myst_nb',
+    'sphinxcontrib.collections',
     'sphinx.ext.doctest',
 ]
 
@@ -62,3 +63,13 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 html_theme = 'sphinx_rtd_theme'
 
 nb_execution_mode = 'off'
+suppress_warnings = ['misc.highlighting_failure']
+
+# We have to copy examples to include them in the docs. Without it won't work.
+collections = {
+    'examples': {
+        'driver': 'copy_folder',
+        'source': '../examples',  # Path from conf.py to your real examples
+        'ignore': 'BUILD',
+    }
+}

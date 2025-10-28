@@ -97,7 +97,7 @@ def pad_to_multiple_of(indices: np.ndarray, multiple: int) -> np.ndarray:
       of this value.
 
   Returns:
-    A new 1D array of inidices padded with `-1`s.
+    A new 1D array of indices padded with -1.
   """
   if indices.ndim > 1:
     raise ValueError('pad_to_multiple_of currently expects 1D indices.')
@@ -161,17 +161,17 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   [4] https://arxiv.org/abs/2411.04205
 
   Formal guarantees of the batch_iterator:
-  - All batches consist of indices in the range [0, num_examples).
-  - Each example only appears in batches with index i such that i % cycle_length
-    == j for some fixed j per example.
-  - Without truncation, every index independently appears in each batch (where
-    it is eligible to participate subject to the previous guarantee) with
-    probability sampling_prob.
-  - With truncation, if > truncated_batch_size examples appear in a batch under
-    the previous guarantee, then we select truncated_batch_size of them
-    uniformly at random and discard the rest.
-  - If even_partition = True, num_examples % cycle_length examples are
-    discarded, i.e. never sampled.
+    - All batches consist of indices in the range [0, num_examples).
+    - Each example only appears in batches with index i such that i %
+      cycle_length == j for some fixed j per example.
+    - Without truncation, every index independently appears in each batch
+      (where it is eligible to participate subject to the previous
+      guarantee) with probability sampling_prob.
+    - With truncation, if > truncated_batch_size examples appear in a batch
+      under the previous guarantee, then we select truncated_batch_size of
+      them uniformly at random and discard the rest.
+    - If even_partition = True, num_examples % cycle_length examples are
+      discarded, i.e. never sampled.
 
   Attributes:
     sampling_prob: The probability of sampling an example in rounds when it is
@@ -243,10 +243,10 @@ class BallsInBinsSampling(BatchSelectionStrategy):
   https://arxiv.org/abs/2412.16802 for more details.
 
   Formal guarantees of the batch_iterator:
-  - All batches consist of indices in the range [0, num_examples).
-  - Each example appears in all batches with index i such that i % cycle_length
-    == j, with j chosen uniformly at random independently for each example, and
-    in no other batches.
+    - All batches consist of indices in the range [0, num_examples).
+    - Each example appears in all batches with index i such that i %
+      cycle_length == j, with j chosen uniformly at random independently for
+      each example, and in no other batches.
 
   Attributes:
     iterations: The number of total iterations / batches to generate.

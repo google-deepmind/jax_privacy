@@ -75,7 +75,7 @@ simplified in the future versions of JAX Privacy.
 To make it more clear, here is the example using raw JAX that
 illustrates the aforementioned steps. There is also a Jupyter notebook
 that shows the usage of this API with Flax Linen:
-:doc:`flax_linen_example`.
+:doc:`_collections/examples/dp_sgd_flax_linen_mnist`.
 
 ***************
  Example Usage

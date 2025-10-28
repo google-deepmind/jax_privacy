@@ -55,6 +55,10 @@ cd ..
 # Build readthedocs
 cd docs
 pip install -r source/requirements.txt
+
+# -W turns all Sphinx warnings and errors into fatal errors.
+# Combined with "set -e", this will fail the build.
+export SPHINXOPTS="-W"
 make html
 cd ..
 
