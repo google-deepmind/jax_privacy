@@ -25,7 +25,6 @@ from absl.testing import parameterized
 import chex
 import jax
 import jax.numpy as jnp
-from jax_privacy.dp_sgd import grad_clipping as jp_grad_clipping
 from jax_privacy.keras import keras_api
 import keras
 import numpy as np
@@ -137,26 +136,13 @@ class KerasApiTest(parameterized.TestCase):
         train_steps=20,
         train_size=500,
         noise_multiplier=10.0,
-        clipping_method=keras_api.ClippingMethod.MEMORY_OPTIMIZED,
+        microbatch_size=1
     )
 
     keras_api._add_dp_sgd_attributes(model, params)
 
     self.assertTrue(hasattr(model, "_dp_params"))
     self.assertEqual(model._dp_params, params)
-    self.assertTrue(hasattr(model, "_gradient_computer"))
-    self.assertEqual(
-        model._gradient_computer._clipping_norm,
-        params.clipping_norm,
-    )
-    self.assertEqual(
-        model._gradient_computer._noise_multiplier,
-        params.noise_multiplier,
-    )
-    self.assertEqual(
-        model._gradient_computer._per_example_grad_method,
-        jp_grad_clipping.UNROLLED,
-    )
 
   @parameterized.named_parameters(
       ("no_rescale_no_clip", 100.0, 1, False, [-10.0, -20.0]),
@@ -186,7 +172,6 @@ class KerasApiTest(parameterized.TestCase):
     )
     # turn off noise for testing
     object.__setattr__(dp_params, "noise_multiplier", 0.0)
-    gradient_computer = keras_api._get_gradient_computer(dp_params)
 
     # The function is (a0*x0+a1*x1-4)^2, where a0, a1 = 3, -2, x0, x1 = 1, 2.
     # We compute gradient respect a0, a1, so
@@ -204,7 +189,6 @@ class KerasApiTest(parameterized.TestCase):
     (loss, _), grads = keras_api._noised_clipped_grads(
         _compute_mse_loss_and_updates_fn,
         dp_params,
-        gradient_computer,
         state,
         data,
     )
@@ -222,19 +206,18 @@ class KerasApiTest(parameterized.TestCase):
         clipping_norm=clipping_norm,
         batch_size=batch_size,
         gradient_accumulation_steps=1,
-        train_steps=20,
+        train_steps=500,
         train_size=500,
         rescale_to_unit_norm=False,
     ).update_with_calibrated_noise_multiplier()
-    gradient_computer = keras_api._get_gradient_computer(dp_params)
 
     # The function is (a0*x0+a1*x1-4)^2, where a0, a1 = 3, -2, x0, x1 = 1, 2.
     # We compute gradient respect a0, a1, so
     # grad(f) = (2*x0*(a0*x0+a1*x1-4), 2*x1*(a0*x0+a1*x1-4)) =
     # (2*(3-4-4), 4*(3-4-4)) = (-10, -20).
     trainable_variables = [jnp.array([3.0, -2.0])]
-    x = jnp.array([[1.0, 2.0]])
-    y = jnp.array([4.0])
+    x = jnp.array([[1.0, 2.0]]*batch_size)
+    y = jnp.array([4.0]*batch_size)
 
     # Generate sample.
     sample = []
@@ -247,7 +230,6 @@ class KerasApiTest(parameterized.TestCase):
       _, grads = keras_api._noised_clipped_grads(
           _compute_mse_loss_and_updates_fn,
           dp_params,
-          gradient_computer,
           state,
           data,
       )
@@ -273,29 +255,6 @@ class KerasApiTest(parameterized.TestCase):
         ValueError, "optimizer.gradient_accumulation_steps = 5 must be equal to"
     ):
       keras_api._validate_optimizer(model, dp_params)
-
-  def test_noise_multiplier_per_batch(self):
-    dp_params = keras_api.DPKerasConfig(
-        epsilon=1.1,
-        delta=1e-5,
-        clipping_norm=200,
-        batch_size=1,
-        gradient_accumulation_steps=1,
-        train_steps=20,
-        train_size=500,
-        rescale_to_unit_norm=False,
-    ).update_with_calibrated_noise_multiplier()
-    gradient_computer = keras_api._get_gradient_computer(dp_params)
-    initial_noise_multiplier = gradient_computer._noise_multiplier
-
-    dp_params = dataclasses.replace(dp_params, gradient_accumulation_steps=4)
-    gradient_computer = keras_api._get_gradient_computer(dp_params)
-    self.assertAlmostEqual(
-        gradient_computer._noise_multiplier,
-        # the noise is scaled as 1/sqrt(gradient_accumulation_steps)
-        initial_noise_multiplier / 2,
-        delta=1e-6,
-    )
 
   # TODO: Add test when input is tf batched dataset dict
   # (as in Gemma), try to make a test as similar as possible to Gemma.

@@ -16,32 +16,20 @@
 """API for adding DP-SGD to a Keras model."""
 
 import dataclasses
-import enum
 import functools
 import inspect
 import types
 import typing
+
 import chex
 import jax
 import jax.numpy as jnp
+import jax_privacy
 from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
 from jax_privacy.accounting import calibrate
-from jax_privacy.dp_sgd import grad_clipping as jp_grad_clipping
-from jax_privacy.dp_sgd import gradients as jp_gradients
-from jax_privacy.dp_sgd import typing as jp_typing
 import keras
 import numpy as np
-
-
-class ClippingMethod(enum.Enum):
-  """The type of clipping norm."""
-
-  # Individual gradients are computed in parallel with jax.vmap.
-  SPEED_OPTIMIZED = 1
-
-  # Individual gradients are computed one by one.
-  MEMORY_OPTIMIZED = 2
 
 
 @dataclasses.dataclass(frozen=True)
@@ -95,8 +83,21 @@ class DPKerasConfig:
         Simplifies learning-rate tuning, see https://arxiv.org/abs/2204.13650.
       seed: The seed for the random number generator. If None, a random seed is
         used. It must be an int64. Useful for reproducibility.
-      clipping_method: To optimize memory or speed when computing clipped
-        gradients. Defaults to SPEED_OPTIMIZED, usually no need to change it.
+      microbatch_size: The size of each microbatch. The device batch size will
+        be split up into microbatches of this size and processed sequentially
+        on the forward/backward pass. By setting microbatch_size=batch_size,
+        the forward/backward pass is performed once on the entire batch using
+        jax.vmap. By setting microbatch_size=1, the forward/backward pass is
+        performed on each batch element individually, with the gradients
+        accumulated sequentially using jax.lax.scan. Setting to batch_size
+        gives the largest degree of parllelism, while setting to 1 gives the
+        least memory consumption. Any value in between can be used to trade-off
+        memory consumption vs. parallel computation. This parameter is similar
+        to `gradient_accumulation_steps`, but it works fully inside of device
+        memory under a single jitted function, while
+        `gradient_accumulation_steps` operates outside of the jit boundary.
+        The default value is None, which means that no microbatching is used,
+        and is equivalent to microbatch_size=batch_size.
   """
 
   epsilon: float
@@ -108,7 +109,7 @@ class DPKerasConfig:
   train_size: int
   noise_multiplier: float | None = None
   rescale_to_unit_norm: bool = True
-  clipping_method: ClippingMethod = ClippingMethod.SPEED_OPTIMIZED
+  microbatch_size: int | None = None
   seed: int | None = None
 
   _accountant = analysis.DpsgdTrainingAccountant(
@@ -284,50 +285,20 @@ def _validate_optimizer(model: keras.Model, params: DPKerasConfig) -> None:
 def _add_dp_sgd_attributes(model: keras.Model, params: DPKerasConfig) -> None:
   """Adds DP-SGD training attributes to the Keras model."""
   model._dp_params = params  # pylint: disable=protected-access
-  model._gradient_computer = _get_gradient_computer(params)  # pylint: disable=protected-access
-  prng_key = _get_random_int64() if params.seed is None else params.seed
+  seed = _get_random_int64() if params.seed is None else params.seed
   model.add_weight(
       name='_rng',
       shape=(2,),
       dtype='uint32',
-      initializer=lambda shape, dtype: jax.random.PRNGKey(prng_key),
+      initializer=lambda shape, dtype: jax.random.PRNGKey(seed),
       trainable=False,
   )
   model.add_weight(
       name='_optimizer_steps',
       shape=(1,),
-      initializer=lambda shape, dtype: jnp.zeros(shape, dtype=dtype),
+      initializer=jnp.zeros,
       dtype='uint32',
       trainable=False,
-  )
-
-
-def _get_gradient_computer(
-    params: DPKerasConfig,
-) -> jp_gradients.DpsgdGradientComputer:
-  """Creates the gradient computer for DP-SGD training."""
-  match params.clipping_method:
-    case ClippingMethod.SPEED_OPTIMIZED:
-      clip_method = jp_grad_clipping.VECTORIZED
-    case ClippingMethod.MEMORY_OPTIMIZED:
-      clip_method = jp_grad_clipping.UNROLLED
-    case _:
-      raise ValueError(f'Unknown clipping method: {params.clipping_method}')
-  noise_multiplier = (
-      params.noise_multiplier
-      if params.noise_multiplier is not None
-      else params.update_with_calibrated_noise_multiplier().noise_multiplier
-  )
-  # We use the additivity of Gaussian random variables to calculate the noise
-  # multiplier per batch.
-  noise_multiplier_per_batch = noise_multiplier / np.sqrt(
-      params.gradient_accumulation_steps
-  )
-  return jp_gradients.DpsgdGradientComputer(
-      clipping_norm=params.clipping_norm,
-      noise_multiplier=noise_multiplier_per_batch,
-      rescale_to_unit_norm=params.rescale_to_unit_norm,
-      per_example_grad_method=clip_method,
   )
 
 
@@ -438,14 +409,14 @@ def _check_dp_params_aligned_with_fit_args(
     )
 
 
-_XType = jp_typing.InputsT
-_YType = jp_typing.InputsT
-_SampleWeightType = jp_typing.InputsT
-_TrainableVariablesType = jp_typing.ParamsT
+_XType = chex.ArrayTree
+_YType = chex.ArrayTree
+_SampleWeightType = chex.ArrayTree
+_TrainableVariablesType = chex.ArrayTree
 _NonTrainableVariablesType = list[chex.Numeric]
 _OptimizerVariablesType = list[chex.Numeric]
 _MetricsVariablesType = chex.Numeric
-_UnscaledLossType = jp_typing.Loss
+_UnscaledLossType = chex.Numeric
 _YPredType = _YType
 _KerasInputsDataType = tuple[_XType, _YType | None, _SampleWeightType | None]
 
@@ -515,12 +486,11 @@ def _dp_train_step(
   (_, aux), grads = _noised_clipped_grads(
       self.compute_loss_and_updates,
       self._dp_params,  # pylint: disable=protected-access
-      self._gradient_computer,  # pylint: disable=protected-access
       state,
       data,
   )
   (
-      unscaled_loss,  # unscaled means sum of losses, not divided by batch size
+      unscaled_loss,
       y_pred,
       non_trainable_variables,
       metrics_variables,
@@ -560,26 +530,21 @@ def _dp_train_step(
   return logs, state
 
 
+LossFn = typing.Callable[..., tuple[chex.Numeric, _AuxType]]
+
+
 def _noised_clipped_grads(
-    compute_loss_and_updates_fn: typing.Callable[
-        ...,
-        tuple[
-            jp_typing.Loss,
-            _AuxType,
-        ],
-    ],
+    compute_loss_and_updates_fn: LossFn,
     dp_params: DPKerasConfig,
-    gradient_computer: jp_gradients.GradientComputer,
     state: _StateType,
     data: _KerasInputsDataType,
-) -> tuple[tuple[jp_typing.Loss, _AuxType], jp_typing.ParamsT]:
+) -> tuple[tuple[chex.Numeric, _AuxType], chex.ArrayTree]:
   """Computes noised and clipped gradients.
 
   Args:
     compute_loss_and_updates_fn: The function that computes the loss and updates
       for the given state and data.
     dp_params: The parameters for DP-SGD training.
-    gradient_computer: The gradient computer for DP-SGD training.
     state: The state of the model.
     data: The data for the model: triple of x, y (can be None), sample_weight
       (can be None).
@@ -594,66 +559,54 @@ def _noised_clipped_grads(
       metrics_variables,
   ) = state
   # TODO: access it and update it by name.
-  rng = non_trainable_variables[0]
-  rng_grads, rng_next = jax.random.split(rng)
+  noise_state = non_trainable_variables[0], ()
   x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
 
-  inputs = {'x': x, 'y': y, 'sample_weight': sample_weight}
-
-  # TODO: use rng argument for dropout
-  def loss_fn(
-      params: _TrainableVariablesType,
-      network_state: jp_typing.ModelStateT,
-      unused_rng,
-      inputs: _KerasInputsDataType,
-  ) -> tuple[jp_typing.Loss, tuple[jp_typing.ModelStateT, jp_typing.Metrics]]:
-    loss, aux = compute_loss_and_updates_fn(
-        params,
-        non_trainable_variables,
-        metrics_variables,
-        inputs['x'],
-        inputs['y'],
-        inputs['sample_weight'],
-        training=True,
-        optimizer_variables=optimizer_variables,
-    )
-
-    (
-        unscaled_loss,
-        y_pred,
-        new_non_trainable_variables,
-        new_metrics_variables,
-    ) = aux
-
-    jp_metrics = jp_typing.Metrics(
-        per_example={'y_pred': y_pred},
-        scalars_avg={
-            'loss': loss,
-            'unscaled_loss': unscaled_loss,
-            'non_trainable_variables': new_non_trainable_variables,
-            'metrics_variables': new_metrics_variables,
-        },
-    )
-    return loss, (network_state, jp_metrics)
-
-  (loss, (_, jp_metrics)), grads = gradient_computer.loss_and_clipped_gradients(
-      loss_fn=loss_fn,
-      params=trainable_variables,
-      network_state={},
-      rng_per_local_microbatch=jax.random.PRNGKey(0),  # not used RNG
-      inputs=inputs,
+  clipped_grad_fn = jax_privacy.clipped_grad(
+      fun=compute_loss_and_updates_fn,
+      has_aux=True,
+      return_values=True,
+      l2_clip_norm=dp_params.clipping_norm,
+      rescale_to_unit_norm=dp_params.rescale_to_unit_norm,
+      normalize_by=dp_params.batch_size,
+      batch_argnums=(3, 4, 5),  # corresponding to (x, y, sample_weight)
+      microbatch_size=dp_params.microbatch_size,
   )
-  unscaled_loss = jp_metrics.scalars_avg['unscaled_loss']
-  y_pred = jp_metrics.per_example['y_pred']
-  non_trainable_variables = [rng_next] + non_trainable_variables[1:]
-  metrics_variables = jp_metrics.scalars_avg['metrics_variables']
 
-  grads, _, _ = gradient_computer.add_noise_to_grads(
-      grads, rng_grads, dp_params.batch_size, None  # full batch size
+  clipped_grad, per_example_aux = clipped_grad_fn(
+      trainable_variables,
+      non_trainable_variables,
+      metrics_variables,
+      x,
+      y,
+      sample_weight,
+      True,  # training=True
+      optimizer_variables,
   )
-  aux = (unscaled_loss, y_pred, non_trainable_variables, metrics_variables)
 
-  return (loss, aux), grads
+  noise_multiplier = (
+      dp_params.noise_multiplier
+      if dp_params.noise_multiplier is not None
+      else dp_params.update_with_calibrated_noise_multiplier().noise_multiplier
+  )
+  l2_sensitivity = clipped_grad_fn.l2_norm_bound
+  accumulation_factor = np.sqrt(dp_params.gradient_accumulation_steps)
+  stddev = noise_multiplier * l2_sensitivity / accumulation_factor
+  privatizer = jax_privacy.noise_addition.gaussian_privatizer(stddev=stddev)
+
+  noisy_grads, new_noise_state = privatizer.update(clipped_grad, noise_state)
+
+  # TODO: Investigate whether we should return mean or sum here.
+  loss = per_example_aux.values.mean()
+  unscaled_loss = per_example_aux.aux[0].mean()
+  y_pred = per_example_aux.aux[1]
+  non_trainable_variables = [new_noise_state[0]] + non_trainable_variables[1:]
+  # TODO: Determine the correct way to aggregate metrics.
+  new_metrics = jax.tree.map(lambda x: x.mean(axis=0), per_example_aux.aux[3])
+
+  aux = (unscaled_loss, y_pred, non_trainable_variables, new_metrics)
+
+  return (loss, aux), noisy_grads
 
 
 # This is copy-paste from

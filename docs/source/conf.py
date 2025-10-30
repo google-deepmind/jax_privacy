@@ -44,7 +44,7 @@ extensions = [
     'sphinx.ext.viewcode',
     'sphinx_rtd_theme',
     'myst_nb',
-    'sphinxcontrib.collections',
+    'sphinx_collections',
     'sphinx.ext.doctest',
 ]
 
