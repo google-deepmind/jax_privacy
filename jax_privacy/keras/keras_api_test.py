@@ -476,6 +476,37 @@ class KerasApiTest(parameterized.TestCase):
     pvalue = stats.ks_2samp(sample_expected_distribution, sample).pvalue
     self.assertGreater(pvalue, 1e-5)  # expected flakiness 1e-5
 
+  def test_get_noise_multiplier_explicit(self):
+    """Test get_noise_multiplier with explicitly set noise multiplier."""
+    model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
+    explicit_noise_mult = 2.0  # Use a higher value that satisfies the privacy budget
+    params = dataclasses.replace(
+        self._get_params(), noise_multiplier=explicit_noise_mult
+    )
+    
+    model = keras_api.make_private(model, params)
+    retrieved_noise_mult = keras_api.get_noise_multiplier(model)
+    
+    self.assertEqual(retrieved_noise_mult, explicit_noise_mult)
+
+  def test_get_noise_multiplier_auto_calculated(self):
+    """Test get_noise_multiplier with auto-calculated noise multiplier."""
+    model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
+    params = dataclasses.replace(self._get_params(), noise_multiplier=None)
+    
+    model = keras_api.make_private(model, params)
+    retrieved_noise_mult = keras_api.get_noise_multiplier(model)
+    
+    self.assertIsInstance(retrieved_noise_mult, float)
+    self.assertGreater(retrieved_noise_mult, 0.0)
+
+  def test_get_noise_multiplier_raises_on_non_dp_model(self):
+    """Test that get_noise_multiplier raises error on non-DP model."""
+    model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
+    
+    with self.assertRaisesRegex(ValueError, "Model does not appear to be wrapped with make_private"):
+      keras_api.get_noise_multiplier(model)
+
 
 def _compute_mse_loss_and_updates_fn(  # pylint: disable=too-many-positional-arguments
     params,

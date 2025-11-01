@@ -13,3 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Keras API for DP-SGD training."""
+
+from jax_privacy.keras.keras_api import DPKerasConfig
+from jax_privacy.keras.keras_api import get_noise_multiplier
+from jax_privacy.keras.keras_api import make_private
+
+__all__ = [
+    'DPKerasConfig',
+    'make_private',
+    'get_noise_multiplier',
+]
+

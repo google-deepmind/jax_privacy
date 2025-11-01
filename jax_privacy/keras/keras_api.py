@@ -240,6 +240,10 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   # 4. We replace the model._update_metrics_variables method with a new method
   #    that updates the metrics variables for DP-SGD training.
 
+  # Pre-calculate noise multiplier if not provided
+  if params.noise_multiplier is None:
+    params = params.update_with_calibrated_noise_multiplier()
+
   _add_dp_sgd_attributes(model, params)
   model.fit = types.MethodType(
       _create_fit_fn_with_validation(model.fit, params), model
@@ -700,3 +704,38 @@ def _get_random_int64() -> np.int64:
   return np.random.randint(
       low=int64_info.min, high=int64_info.max, dtype=np.int64
   )
+
+
+
+def get_noise_multiplier(model: keras.Model) -> float:
+  """Returns the noise multiplier used by a DP-wrapped Keras model.
+  
+  This function retrieves the noise multiplier that was either provided in
+  DPKerasConfig or auto-calculated during make_private().
+  
+  Args:
+    model: A Keras model that has been wrapped with make_private().
+    
+  Returns:
+    The noise multiplier value used for DP-SGD training.
+    
+  Raises:
+    ValueError: If the model was not wrapped with make_private().
+    
+
+  """
+  if not hasattr(model, '_dp_params'):
+    raise ValueError(
+        "Model does not appear to be wrapped with make_private(). "
+        "Call make_private() before get_noise_multiplier()."
+    )
+  
+  dp_params = model._dp_params  # pylint: disable=protected-access
+  
+  # If noise_multiplier was provided, return it directly
+  if dp_params.noise_multiplier is not None:
+    return dp_params.noise_multiplier
+  
+  # Otherwise, calculate it (this will use the cached value if already computed)
+  updated_params = dp_params.update_with_calibrated_noise_multiplier()
+  return updated_params.noise_multiplier
