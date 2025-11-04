@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Algorithms for Privacy-Preserving Machine Learning in JAX."""
+"""Algorithms for Privacy-Preserving Machine Learning in JAX"""
 from jax_privacy import accounting
 from jax_privacy import auditing
 from jax_privacy import dp_sgd
