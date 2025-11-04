@@ -56,7 +56,7 @@ class NoDpConfig(AlgorithmConfig):
   noise_multiplier: float = dataclasses.field(init=False, default=0.0)
 
 
-# TODO: Rename this to DpBandMfConfig
+# TODO(name): Rename this to DpBandMfConfig
 @dataclasses.dataclass(kw_only=True, slots=True)
 class DpsgdConfig(AlgorithmConfig):
   """Configuration for the DP-SGD mechanism."""
