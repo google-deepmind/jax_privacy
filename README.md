@@ -7,11 +7,11 @@
 This repository contains:
 
 *   A production-focused API for differentially-private (DP) training of ML
-    models in JAX and Keras.
+    models in JAX and Keras
 *   A library of core components for implementing differentially private machine
-    learning algorithms in JAX.
+    learning algorithms in JAX
 *   A JAX-based machine learning DP pipeline using components from the library
-    to experiment with image classification models.
+    to experiment with image classification models
 
 This code is open-sourced with the main objective of transparency and
 reproducibility for research purposes, and includes production-focused APIs for
