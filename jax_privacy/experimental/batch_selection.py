@@ -191,10 +191,6 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     even_partition: If True, we discard num_examples % cycle_length examples
       before partitioning in cyclic Poisson sampling. If False, we can have
       uneven partitions. Defaults to True for ease of analysis.
-    public_num_examples: The number of examples in the dataset, if known. Is
-      only used for validation purposes, i.e., that the value passed here (which
-      is generally used for accounting under REPLACE_SPECIAL or REPLACE_ONE
-      neighboring relations) matches the value passed to the batch_iterator.
   """
 
   sampling_prob: float
@@ -203,14 +199,10 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   cycle_length: int = 1
   shuffle: bool = False
   even_partition: bool = True
-  public_num_examples: int | None = None
 
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
-    if self.public_num_examples not in [None, num_examples]:
-      raise ValueError('num_examples must match value passed to constructor.')
-
     rng = np.random.default_rng(rng)
     dtype = np.min_scalar_type(-num_examples)
 
