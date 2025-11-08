@@ -729,3 +729,4 @@ def get_noise_multiplier(model: keras.Model) -> float:
   # make_private ensures that noise_multiplier is always set.
   assert dp_params.noise_multiplier is not None
   return dp_params.noise_multiplier
+  
