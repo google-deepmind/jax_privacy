@@ -588,11 +588,9 @@ def _noised_clipped_grads(
       optimizer_variables,
   )
 
-  noise_multiplier = (
-      dp_params.noise_multiplier
-      if dp_params.noise_multiplier is not None
-      else dp_params.update_with_calibrated_noise_multiplier().noise_multiplier
-  )
+  # `make_private` ensures that `noise_multiplier` is always set.
+  assert dp_params.noise_multiplier is not None
+  noise_multiplier = dp_params.noise_multiplier
   l2_sensitivity = clipped_grad_fn.l2_norm_bound
   accumulation_factor = np.sqrt(dp_params.gradient_accumulation_steps)
   stddev = noise_multiplier * l2_sensitivity / accumulation_factor
@@ -706,36 +704,28 @@ def _get_random_int64() -> np.int64:
   )
 
 
-
 def get_noise_multiplier(model: keras.Model) -> float:
   """Returns the noise multiplier used by a DP-wrapped Keras model.
-  
+
   This function retrieves the noise multiplier that was either provided in
   DPKerasConfig or auto-calculated during make_private().
-  
+
   Args:
     model: A Keras model that has been wrapped with make_private().
-    
+
   Returns:
     The noise multiplier value used for DP-SGD training.
-    
+
   Raises:
     ValueError: If the model was not wrapped with make_private().
-    
-
   """
   if not hasattr(model, '_dp_params'):
     raise ValueError(
-        "Model does not appear to be wrapped with make_private(). "
-        "Call make_private() before get_noise_multiplier()."
+        'Model does not appear to be wrapped with make_private(). '
+        'Call make_private() before get_noise_multiplier().'
     )
-  
+
   dp_params = model._dp_params  # pylint: disable=protected-access
-  
-  # If noise_multiplier was provided, return it directly
-  if dp_params.noise_multiplier is not None:
-    return dp_params.noise_multiplier
-  
-  # Otherwise, calculate it (this will use the cached value if already computed)
-  updated_params = dp_params.update_with_calibrated_noise_multiplier()
-  return updated_params.noise_multiplier
+  # make_private ensures that noise_multiplier is always set.
+  assert dp_params.noise_multiplier is not None
+  return dp_params.noise_multiplier

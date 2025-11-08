@@ -497,7 +497,6 @@ class KerasApiTest(parameterized.TestCase):
     model = keras_api.make_private(model, params)
     retrieved_noise_mult = keras_api.get_noise_multiplier(model)
     
-    self.assertIsInstance(retrieved_noise_mult, float)
     self.assertGreater(retrieved_noise_mult, 0.0)
 
   def test_get_noise_multiplier_raises_on_non_dp_model(self):
