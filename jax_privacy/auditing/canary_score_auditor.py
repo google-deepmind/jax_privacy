@@ -123,16 +123,12 @@ def _pareto_frontier_jax(points: jnp.ndarray) -> tuple[jnp.ndarray, jax.Array]:
     def cond_fn(n):
       return (n > 1) & (_signed_area(hull[n - 2], hull[n - 1], point) >= 0)
 
-    def body_fn(n):
-      return n - 1
-
     # Pop points from the end of the hull until the current point makes a
     # clockwise turn from the last two.
-    n = jax.lax.while_loop(cond_fn, body_fn, n)
+    n = jax.lax.while_loop(cond_fn, lambda n: n - 1, n)
 
-    # Add the current point.
-    hull = hull.at[n].set(point)
-    return (hull, n + 1), None  # We don't need the scan to output anything.
+    hull = hull.at[n].set(point)  # Add the current point.
+    return (hull, n + 1), None
 
   n = 2  # Number of points in the hull.
   hull = jnp.empty_like(points)
@@ -284,7 +280,10 @@ def _epsilon_raw_counts_helper(
   # less or equal to zero, the bound is invalid. Let it return np.nan or -np.inf
   # and we will filter it with np.nanmax.
   with np.errstate(divide='ignore', invalid='ignore'):
-    return np.nanmax(np.log(pos_rates[:, 0] - delta) - np.log(pos_rates[:, 1]))
+    return np.nanmax(
+        np.log(pos_rates[:, 0] - delta) - np.log(pos_rates[:, 1]),
+        initial=0,
+    )
 
 
 class CanaryScoreAuditor:
@@ -375,8 +374,7 @@ class CanaryScoreAuditor:
 
     n = len(self._fn_counts)
 
-    # For each threshold, we have two bounds. We use alpha / (2 * n) for each so
-    # all bounds hold simultaneously with probability at least 1 - alpha.
+    # Apply Bonferroni correction, dividing alpha by the total number of bounds.
     fnr_ubs = _clopper_pearson_upper(self._fn_counts, n_pos, alpha / (2 * n))
     tpr_lbs = 1 - fnr_ubs
     fp_counts = n_neg - self._tn_counts
@@ -386,12 +384,14 @@ class CanaryScoreAuditor:
     # or equal to zero, the bound is invalid. Let it return np.nan or -np.inf
     # and we will filter it with np.nanmax.
     with np.errstate(divide='ignore', invalid='ignore'):
-      bound = np.nanmax(np.log(tpr_lbs - delta) - np.log(fpr_ubs))
+      bound = np.nanmax(np.log(tpr_lbs - delta) - np.log(fpr_ubs), initial=0)
       if not one_sided:
         tnr_lbs = 1 - fpr_ubs
-        bound = max(bound, np.nanmax(np.log(tnr_lbs - delta) - np.log(fnr_ubs)))
+        bound = np.nanmax(
+            np.log(tnr_lbs - delta) - np.log(fnr_ubs), initial=bound
+        )
 
-    return max(bound, 0)
+    return bound
 
   def epsilon_raw_counts(
       self,
@@ -545,9 +545,12 @@ class CanaryScoreAuditor:
     n_pos = self._fn_counts[-1]
     n_neg = self._tn_counts[-1]
 
-    fnr_ubs = _clopper_pearson_upper(self._fn_counts, n_pos, alpha / 2)
+    n = len(self._fn_counts)
+
+    # Apply Bonferroni correction, dividing alpha by the total number of bounds.
+    fnr_ubs = _clopper_pearson_upper(self._fn_counts, n_pos, alpha / (2 * n))
     fp_counts = n_neg - self._tn_counts
-    fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, alpha / 2)
+    fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, alpha / (2 * n))
 
     bounds = np.stack([fpr_ubs, fnr_ubs], axis=1)
 

@@ -312,7 +312,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     else:  # min_count == 2
       expected_slopes = {0: 2, 1 / 8: 3 / 2}
     expected_slopes.update({1 / 4: 1, 3 / 8: 3 / 4, 1 / 2: 1 / 2})
-    np.testing.assert_allclose(epsilon, np.log(expected_slopes[delta]))
+    np.testing.assert_allclose(epsilon, max(np.log(expected_slopes[delta]), 0))
 
   @parameterized.product(
       one_sided=(True, False),
@@ -460,7 +460,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     # Large alpha and delta and lots of samples gets us close to the true eps.
     alpha = 0.1
     delta = 5e-2
-    in_samples = 100_000
+    in_samples = 500_000
     out_samples = int(in_samples * out_samples_ratio)
     in_canary_scores = rng.normal(mu, 1, in_samples)
     out_canary_scores = rng.normal(0, 1, out_samples)
