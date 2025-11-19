@@ -140,18 +140,18 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     >>> rng = np.random.default_rng(0)
     >>> b = CyclicPoissonSampling(sampling_prob=1, iterations=8, cycle_length=4)
     >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
-    [0 1 2] [3 4 5] [6 7 8] [ 9 10 11] [0 1 2] [3 4 5] [6 7 8] [ 9 10 11]
+    [1 2 0] [3 5 4] [6 8 7] [10  9 11] [0 1 2] [5 4 3] [8 6 7] [ 9 11 10]
 
   Example Usage (standard Poisson sampling) [2]:
     >>> b = CyclicPoissonSampling(sampling_prob=0.25, iterations=8)
     >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
-    [0 4 9 3 5] [] [5] [4 6 2 7] [ 5 11] [ 2  5  8  6  9 11] [9 1] [7 5 4 3]
+    [7 4 5] [ 9  8 10  7] [6] [3 7 4] [11  3  0  8  5] [9 6] [6 0 7 8 2] [8 9]
 
   Example Usage (BandMF-style sampling) [3]:
     >>> p = 0.5
     >>> b = CyclicPoissonSampling(sampling_prob=p, iterations=8, cycle_length=2)
     >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
-    [2 4 0] [ 9 10 11] [3 5] [9 8] [0 3 4 5] [8] [2 1 4 5] [11]
+    [4] [11  7] [2 5 0 3] [7] [3 1 5] [ 6  8  9 11  7] [5 1 4] [ 7 11 10]
 
 
   References:
@@ -220,9 +220,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       sample_size = rng.binomial(n=len(current_group), p=self.sampling_prob)
       if self.truncated_batch_size is not None:
         sample_size = min(sample_size, self.truncated_batch_size)
-      yield rng.choice(
-          current_group, size=sample_size, replace=False, shuffle=False
-      )
+      yield rng.choice(current_group, size=sample_size, replace=False)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -289,12 +287,12 @@ class UserSelectionStrategy:
     >>> user_ids = np.array([0,0,0,1,1,2])
     >>> iterator = strategy.batch_iterator(user_ids)
     >>> print(next(iterator))
-    [[0 1]
+    [[5 5]
      [3 4]
-     [5 5]]
+     [0 1]]
     >>> print(next(iterator))
-    [[2 0]
-     [3 4]
+    [[3 4]
+     [2 0]
      [5 5]]
 
   Attributes:
