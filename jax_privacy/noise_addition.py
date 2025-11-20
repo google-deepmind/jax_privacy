@@ -24,8 +24,8 @@ from jax import numpy as jnp
 import numpy as np
 import optax
 
-from ..matrix_factorization import streaming_matrix
 from . import sharding_utils
+from .matrix_factorization import streaming_matrix
 
 
 class _NoiseStructureFn(Protocol):

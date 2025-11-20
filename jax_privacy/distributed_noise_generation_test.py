@@ -18,10 +18,10 @@ from absl.testing import parameterized
 import chex
 import jax
 import jax.numpy as jnp
+from jax_privacy import noise_addition
 from jax_privacy.matrix_factorization import buffered_toeplitz
 from jax_privacy.matrix_factorization import streaming_matrix
 from jax_privacy.matrix_factorization import toeplitz
-from jax_privacy.noise_addition import additive_privatizers
 import numpy as np
 
 
@@ -87,11 +87,11 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
 
     model_params = jax.sharding.reshard(model_params, pspecs)
 
-    privatizer = additive_privatizers.matrix_factorization_privatizer(
+    privatizer = noise_addition.matrix_factorization_privatizer(
         noising_matrix=strategy_inverse_fn(),
         stddev=1.0,
         prng_key=jax.random.key(0),
-        intermediate_strategy=additive_privatizers.SupportedStrategies.ZERO,
+        intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
     )
 
     @jax.jit
@@ -123,11 +123,11 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
     noising_matrix = toeplitz.inverse_as_streaming_matrix(
         jnp.ones(3, dtype=jnp.float32)
     )
-    privatizer = additive_privatizers.matrix_factorization_privatizer(
+    privatizer = noise_addition.matrix_factorization_privatizer(
         noising_matrix=noising_matrix,
         stddev=1.0,
         prng_key=jax.random.key(0),
-        intermediate_strategy=additive_privatizers.SupportedStrategies.ZERO,
+        intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
     )
 
     def foo(sum_of_clipped_grads):
