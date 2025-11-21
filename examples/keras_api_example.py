@@ -85,6 +85,7 @@ def main(_):
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
         seed=0,
+        gradient_accumulation_steps=1,
     )
     model = keras_api.make_private(model, params)
     print(

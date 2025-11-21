@@ -28,6 +28,7 @@ pip install .
 
 # Install dev dependencies.
 pip install -r requirements-dev.txt
+pip install crc32c
 
 # Change directory to avoid importing the package from repo root.
 # Runing tests from the root can cause an ImportError for cython
