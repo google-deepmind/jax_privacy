@@ -32,7 +32,7 @@ def test_suite():
 
 setuptools.setup(
     name='jax_privacy',
-    version='1.0.0',
+    version='1.1.0',
     description='Algorithms for Privacy-Preserving Machine Learning in JAX.',
     url='https://github.com/google-deepmind/jax_privacy',
     author='Google DeepMind',

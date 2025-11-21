@@ -19,7 +19,7 @@ from absl import app
 import jax
 import jax.numpy as jnp
 import jax_privacy
-from jax_privacy.experimental import batch_selection
+from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
@@ -95,10 +95,7 @@ def main(_):
     x, y = batch
     clipped_grad = grad_fn(params, x, y, is_padding_example=is_padding_example)
 
-    noisy_grad, noise_state = privatizer.privatize(
-        sum_of_clipped_grads=clipped_grad,
-        noise_state=noise_state
-    )
+    noisy_grad, noise_state = privatizer.update(clipped_grad, noise_state)
     updates, opt_state = optimizer.update(noisy_grad, opt_state)
     params = optax.apply_updates(params, updates)
     return params, noise_state, opt_state
