@@ -20,12 +20,41 @@ from absl.testing import parameterized
 import dp_accounting
 from jax_privacy.auditing import canary_score_auditor
 import numpy as np
+import scipy.special
+import scipy.stats
 
+_binom = scipy.stats.binom
+_logistic = scipy.special.expit
 
 _signed_area = canary_score_auditor._signed_area
 
 _rotations = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
 _inversions = [[0, 2, 1], [1, 0, 2], [2, 1, 0]]
+
+
+def _get_epsilon_gaussian(mu: float, delta: float) -> float:
+  return (
+      dp_accounting.pld.PLDAccountant()
+      .compose(dp_accounting.GaussianDpEvent(1.0 / mu))
+      .get_epsilon(delta)
+  )
+
+
+def _one_shot_p_value_naive(
+    m: int, n_guess: int, n_correct: int, eps: float, delta: float
+) -> float:
+  """Naive implementation of the one-shot p-value."""
+  q = _logistic(eps)
+  beta = _binom.sf(n_correct - 1, n_guess, q)
+
+  alpha = 0
+  alpha_sum = 0
+  for i in range(1, n_correct + 1):
+    alpha_sum += _binom.pmf(n_correct - i, n_guess, q)
+    if alpha_sum > i * alpha:
+      alpha = alpha_sum / i
+
+  return min(beta + alpha * delta * 2 * m, 1)
 
 
 class CanaryScoreAuditorTest(parameterized.TestCase):
@@ -245,11 +274,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         in_canary_scores, out_canary_scores
     )
     eps_lb = auditor.epsilon_lower_bound(alpha, delta, one_sided)
-    true_eps = (
-        dp_accounting.pld.PLDAccountant()
-        .compose(dp_accounting.GaussianDpEvent(1.0 / mu))
-        .get_epsilon(delta)
-    )
+    true_eps = _get_epsilon_gaussian(mu, delta)
     np.testing.assert_array_less(eps_lb, true_eps)
     np.testing.assert_allclose(eps_lb, true_eps, rtol=0.2)
 
@@ -273,11 +298,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     eps = canary_score_auditor._epsilon_raw_counts_helper(
         tn_counts, fn_counts, min_count, delta
     )
-    true_eps = (
-        dp_accounting.pld.PLDAccountant()
-        .compose(dp_accounting.GaussianDpEvent(1.0))
-        .get_epsilon(delta)
-    )
+    true_eps = _get_epsilon_gaussian(1.0, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=1e-1)
 
   @parameterized.product(
@@ -468,11 +489,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         in_canary_scores, out_canary_scores
     )
     eps = auditor.epsilon_from_gdp(alpha, delta)
-    true_eps = (
-        dp_accounting.pld.PLDAccountant()
-        .compose(dp_accounting.GaussianDpEvent(1.0 / mu))
-        .get_epsilon(delta)
-    )
+    true_eps = _get_epsilon_gaussian(mu, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=0.05)
 
   @parameterized.named_parameters(
@@ -540,6 +557,62 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     interval = metric_fn(*args, bootstrap_params=bootstrap_params)
     self.assertLen(interval, 2)
     self.assertBetween(value, *interval)
+
+  @parameterized.named_parameters(
+      ('alpha_zero', {'alpha': 0.0}, 'alpha'),
+      ('alpha_gt_one', {'alpha': 1.1}, 'alpha'),
+      ('delta_negative', {'delta': -0.1}, 'delta'),
+      ('delta_gt_one', {'delta': 1.1}, 'delta'),
+      ('one_sided_false', {'one_sided': False}, 'one_sided must be True'),
+  )
+  def test_epsilon_one_shot_raises_invalid_args(
+      self, override_args, error_regex
+  ):
+    args = {'alpha': 0.1, 'delta': 0.1, 'one_sided': True}
+    args.update(override_args)
+    auditor = canary_score_auditor.CanaryScoreAuditor(
+        in_canary_scores=[1, 2, 3], out_canary_scores=[0, 1, 2]
+    )
+    with self.assertRaisesRegex(ValueError, error_regex):
+      auditor.epsilon_one_shot(**args)
+
+  @parameterized.product(
+      m=(10, 100, 1000),
+      n_guess=(1, 10, 100),
+      n_wrong=(0, 1, 10, 100),
+      eps=(0, 0.5, 1.0),
+      delta=(0, 1e-6, 1e-3, 1e-1, 1),
+  )
+  def test_one_shot_p_value(self, m, n_guess, n_wrong, eps, delta):
+    if not n_wrong <= n_guess <= m:
+      return
+    n_correct = n_guess - n_wrong
+    p = canary_score_auditor._one_shot_p_value(
+        m, n_guess, n_correct, eps, delta
+    )
+    naive_p = _one_shot_p_value_naive(m, n_guess, n_correct, eps, delta)
+    self.assertAlmostEqual(p, naive_p)
+
+  @parameterized.named_parameters(
+      ('zero', 0, 0),
+      ('one', 1, 1.13346),
+      ('two', 2, 2.311945),
+      ('four', 4, 4.395568),
+  )
+  def test_epsilon_one_shot_close(self, shift, expected_eps):
+    n = 10000
+    # Scores deterministically distributed like Normal(0, 1).
+    out_canary_scores = scipy.stats.norm.ppf(
+        np.linspace(0, 1, n, endpoint=False) + 1 / (2 * n)
+    )
+    in_canary_scores = out_canary_scores + shift
+    auditor = canary_score_auditor.CanaryScoreAuditor(
+        in_canary_scores, out_canary_scores
+    )
+    alpha = 0.05
+    delta = 1e-6
+    eps = auditor.epsilon_one_shot(alpha, delta)
+    np.testing.assert_allclose(eps, expected_eps, rtol=1e-5)
 
 
 if __name__ == '__main__':
