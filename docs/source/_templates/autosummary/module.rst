@@ -4,5 +4,3 @@
 
 .. automodule:: {{ fullname }}
    :members:
-   :imported-members:
-   :no-index:

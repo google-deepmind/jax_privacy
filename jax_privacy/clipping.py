@@ -96,22 +96,24 @@ def clip_pytree(
   or the clip norm is 0 or infinity.
 
   Formal Guarantees:
-    - The output PyTree will have norm at most `clip_norm` if
-      `rescale_to_unit_norm` is False, and norm at most 1.0 if it is True.
-    - The output PyTree will have the same structure+dtypes as the input PyTree.
+
+  - The output PyTree will have norm at most `clip_norm` if
+    `rescale_to_unit_norm` is False, and norm at most 1.0 if it is True.
+  - The output PyTree will have the same structure+dtypes as the input PyTree.
 
   Edge Case Handling:
-  - clip_norm = 0:
-    - rescale_to_unit_norm = False: The output PyTree is zero.
-    - rescale_to_unit_norm = True: The output PyTree is equal to the input
-      PyTree divided by its norm (the limiting behavior as clip_norm -> 0).
-  - clip_norm = inf:
-    - rescale_to_unit_norm = False: The output PyTree is unchanged.
-    - rescale_to_unit_norm = True: The output PyTree is zero.
-  - pytree_norm = 0: The output PyTree is unchanged.
-  - clip_norm < 0:
-    - If clip_norm is a static input (python float), raises a ValueError.
-    - If clip_norm is a dynamic input (jax.Array or Tracer), it is treated as 0.
+
+  ======================= ==================== =================================
+  Case                    rescale_to_unit_norm Output
+  ======================= ==================== =================================
+  clip_norm = 0           False                Zero
+  clip_norm = 0           True                 Input / norm (limit as clip_norm -> 0)  # pylint: disable=line-too-long
+  clip_norm = inf         False                Unchanged
+  clip_norm = inf         True                 Zero
+  clip_norm < 0 (static)  -                    Raises ValueError
+  clip_norm < 0 (dynamic) -                    Zero
+  pytree_norm = 0         -                    Unchanged
+  ======================= ==================== =================================
 
   Args:
     pytree: The PyTree of arrays to clip.

@@ -12,8 +12,9 @@ Public API
   :nosignatures:
 
   batch_selection
-  clipped_grad
+  clipping
   noise_addition
+  auditing
 
 
 Experimental Modules
