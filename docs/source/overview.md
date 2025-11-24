@@ -39,7 +39,7 @@ doing this, our batch selection strategies can be ignored in such cases.
 Then on top of the core library the following backend-specific public high-level
  APIs are built:
 
-*   [Keras](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/keras)
+*   [Keras](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/keras_api.py)
 
 These APIs abstract some complexity and reduce the amount of code necessary to
 implement DP training at the cost of less flexibility. Currently, the only

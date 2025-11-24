@@ -31,11 +31,11 @@ import dp_accounting
 import jax
 from jax import random
 import jax.numpy as jnp
+import jax_privacy
 from jax_privacy import noise_addition
 from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
 from jax_privacy.accounting import calibrate
-from jax_privacy.experimental import gradient_clipping
 import tensorflow as tf
 
 
@@ -112,7 +112,7 @@ def main(_):
       target_delta=1e-5,
   )
   noise_rng = random.key(42)
-  grad_and_value_fn = gradient_clipping.clipped_grad(
+  grad_and_value_fn = jax_privacy.clipped_grad(
       loss_fn,
       l2_clip_norm=clipping_norm,
       batch_argnums=(1, 2),
@@ -133,10 +133,7 @@ def main(_):
     grads, aux_outputs = grad_and_value_fn(model_params, batch_x, batch_y)
     loss = aux_outputs.values.mean()
     mean_grads = jax.tree.map(lambda x: x / batch_size, grads)
-    (noisy_grads, noise_state) = privatizer.privatize(
-        sum_of_clipped_grads=mean_grads,
-        noise_state=noise_state,
-    )
+    (noisy_grads, noise_state) = privatizer.update(mean_grads, noise_state)
     updated_params = updated_model_params(model_params, noisy_grads)
     return updated_params, loss, noise_state
 

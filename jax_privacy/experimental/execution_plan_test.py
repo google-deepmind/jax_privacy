@@ -17,8 +17,8 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
 import jax.numpy as jnp
-from jax_privacy.experimental import batch_selection
-from jax_privacy.experimental import clipping
+from jax_privacy import batch_selection
+from jax_privacy import clipping
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax

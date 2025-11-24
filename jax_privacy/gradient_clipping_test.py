@@ -18,7 +18,7 @@ from absl.testing import parameterized
 import chex
 import jax
 import jax.numpy as jnp
-from jax_privacy.experimental import clipping as gradient_clipping
+from jax_privacy import clipping as gradient_clipping
 
 
 def mean_quadratic_loss(params: jax.Array, x: jax.Array) -> jax.Array:

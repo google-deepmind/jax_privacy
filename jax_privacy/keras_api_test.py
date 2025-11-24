@@ -25,7 +25,7 @@ from absl.testing import parameterized
 import chex
 import jax
 import jax.numpy as jnp
-from jax_privacy.keras import keras_api
+from jax_privacy import keras_api
 import keras
 import numpy as np
 from scipy import stats

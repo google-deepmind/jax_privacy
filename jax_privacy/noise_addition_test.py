@@ -18,8 +18,8 @@ from absl.testing import parameterized
 import chex
 import jax
 from jax import numpy as jnp
+from jax_privacy import noise_addition
 from jax_privacy.matrix_factorization import streaming_matrix
-from jax_privacy.noise_addition import additive_privatizers
 import numpy as np
 import optax
 import scipy.stats
@@ -43,7 +43,7 @@ _PARAM_SHAPES = {
 def gaussian_privatizer_fn(prng_key: jax.Array | None = None):
   if prng_key is None:
     prng_key = jax.random.key(_SEED)
-  return additive_privatizers.gaussian_privatizer(
+  return noise_addition.gaussian_privatizer(
       prng_key=prng_key, stddev=_STDDEV
   )
 
@@ -57,7 +57,7 @@ def dense_matrix_factorization_privatizer_fn(
     prng_key = jax.random.key(_SEED)
   if noising_matrix is None:
     noising_matrix = jnp.eye(_ITERATIONS) + 0.1
-  return additive_privatizers.matrix_factorization_privatizer(
+  return noise_addition.matrix_factorization_privatizer(
       noising_matrix, prng_key=prng_key, stddev=stddev,
   )
 
@@ -70,7 +70,7 @@ def streaming_matrix_factorization_privatizer_fn(
     noising_matrix = streaming_matrix.momentum_sgd_matrix(momentum=0.95)
   if prng_key is None:
     prng_key = jax.random.key(_SEED)
-  return additive_privatizers.matrix_factorization_privatizer(
+  return noise_addition.matrix_factorization_privatizer(
       noising_matrix, prng_key=prng_key, stddev=_STDDEV,
   )
 
@@ -90,7 +90,7 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
 
   def test_mf_privatizer_raises_non_matrix_arg(self):
     with self.assertRaisesRegex(ValueError, 'Expected 2D'):
-      additive_privatizers.matrix_factorization_privatizer(
+      noise_addition.matrix_factorization_privatizer(
           jnp.ones(10),
           prng_key=jax.random.key(10),
           stddev=0.0,
@@ -236,10 +236,10 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     # Test equivalence between modifying stddev or noising_matrix.
     key = jax.random.key(_SEED)
 
-    privatizer0 = additive_privatizers.matrix_factorization_privatizer(
+    privatizer0 = noise_addition.matrix_factorization_privatizer(
         noising_matrix=noising_matrix, prng_key=key, stddev=_STDDEV
     )
-    privatizer1 = additive_privatizers.matrix_factorization_privatizer(
+    privatizer1 = noise_addition.matrix_factorization_privatizer(
         noising_matrix=noising_matrix * _STDDEV, prng_key=key, stddev=1.0
     )
 

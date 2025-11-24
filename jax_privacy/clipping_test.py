@@ -21,7 +21,7 @@ import chex
 import dp_accounting
 import jax
 import jax.numpy as jnp
-from jax_privacy.experimental import clipping
+from jax_privacy import clipping
 import optax
 
 
