@@ -54,14 +54,13 @@ pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "matrix_
 cd ..
 
 # Build readthedocs
-cd docs
-pip install -r source/requirements.txt
+cd docs/source
+pip install -r requirements.txt
 
 # -W turns all Sphinx warnings and errors into fatal errors.
 # Combined with "set -e", this will fail the build.
-export SPHINXOPTS="-W"
-make html
-cd ..
+sphinx-build -W -b html . _build/html
+cd ../..
 
 set +u
 deactivate

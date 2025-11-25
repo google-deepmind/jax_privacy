@@ -69,7 +69,7 @@ suppress_warnings = ['misc.highlighting_failure']
 collections = {
     'examples': {
         'driver': 'copy_folder',
-        'source': '../examples',  # Path from conf.py to your real examples
+        'source': '../../examples',  # Path from conf.py to your real examples
         'ignore': 'BUILD',
     }
 }
