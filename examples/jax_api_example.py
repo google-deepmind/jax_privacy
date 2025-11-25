@@ -27,15 +27,15 @@ smaller than 0.3).
 """
 
 from absl import app
+import dp_accounting
 import jax
 from jax import random
 import jax.numpy as jnp
+import jax_privacy
+from jax_privacy import noise_addition
 from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
 from jax_privacy.accounting import calibrate
-from jax_privacy.dp_sgd import grad_clipping
-from jax_privacy.dp_sgd import gradients
-from jax_privacy.dp_sgd import typing as jax_privacy_typing
 import tensorflow as tf
 
 
@@ -89,6 +89,7 @@ def main(_):
   true_b = 1.0
   num_epochs = 100
   batch_size = 256
+  clipping_norm = 1.0
   train_size = 10000
   use_dp = True
 
@@ -97,64 +98,60 @@ def main(_):
   x_train_full, y_train_full = load_data(train_size, true_w, true_b)
   model_params = init_model_params()
 
-  gradient_computer = None
-  noise_rng = None
-  if use_dp:
-    # Calculate noise_multiplier (stddev) given the privacy budget.
-    accountant = analysis.DpsgdTrainingAccountant(
-        dp_accountant_config=accountants.PldAccountantConfig()
-    )
-    noise_multiplier = calibrate.calibrate_noise_multiplier(
-        target_epsilon=1.0,
-        accountant=accountant,
-        batch_sizes=batch_size,
-        num_updates=num_epochs * train_size // batch_size,
-        num_samples=train_size,
-        target_delta=1e-5,
-    )
-    print(f"Noise multiplier {noise_multiplier}")
-    # Create gradient computer that will clip grads and add noise to them.
-    gradient_computer = gradients.DpsgdGradientComputer(
-        clipping_norm=1.0,
-        noise_multiplier=noise_multiplier,
-        rescale_to_unit_norm=True,
-        per_example_grad_method=grad_clipping.VECTORIZED,
-    )
-    noise_rng = random.key(42)
-
-  # Loss function wrapper that calculates loss per single example. Necessary
-  # because the gradients have to be calculated and clipped per single example.
-  # The signature of the loss function has to be exactly as here.
-  def single_example_loss_fn(
-      model_params, unused_network_state, unused_rng, inputs
-  ):
-    x, y = inputs
-    loss = loss_fn(model_params, x, y)
-    return loss, (unused_network_state, jax_privacy_typing.Metrics())
+  # DP only begin.
+  # Calculate noise_multiplier (stddev) given the privacy budget.
+  accountant = analysis.DpsgdTrainingAccountant(
+      dp_accountant_config=accountants.PldAccountantConfig()
+  )
+  noise_multiplier = calibrate.calibrate_noise_multiplier(
+      target_epsilon=1.0,
+      accountant=accountant,
+      batch_sizes=batch_size,
+      num_updates=num_epochs * train_size // batch_size,
+      num_samples=train_size,
+      target_delta=1e-5,
+  )
+  noise_rng = random.key(42)
+  grad_and_value_fn = jax_privacy.clipped_grad(
+      loss_fn,
+      l2_clip_norm=clipping_norm,
+      batch_argnums=(1, 2),
+      has_aux=False,
+      return_values=True,
+  )
+  sensitivity = grad_and_value_fn.sensitivity(
+      dp_accounting.NeighboringRelation.REPLACE_ONE
+  )
+  privatizer = noise_addition.gaussian_privatizer(
+      stddev=noise_multiplier * sensitivity, prng_key=noise_rng
+  )
+  noise_state = privatizer.init(model_params)
 
   @jax.jit
-  def dp_update_step(model_params, batch_x, batch_y, noise_rng):
-    (loss, _), grads = gradient_computer.loss_and_clipped_gradients(
-        loss_fn=single_example_loss_fn,
-        params=model_params,
-        network_state={},  # not used
-        rng_per_local_microbatch=random.key(0),  # not used
-        inputs=(batch_x, batch_y),
-    )
-    rng_grads, noise_rng = random.split(noise_rng)
-    noisy_grads, _, _ = gradient_computer.add_noise_to_grads(
-        grads, rng_grads, jnp.asarray(batch_size), noise_state={}
-    )
-    model_params = updated_model_params(model_params, noisy_grads)
-    return model_params, loss, noise_rng
+  def dp_update_step(model_params, batch_x, batch_y, noise_state):
+    """Updates the model parameters using DP-SGD."""
+    grads, aux_outputs = grad_and_value_fn(model_params, batch_x, batch_y)
+    loss = aux_outputs.values.mean()
+    mean_grads = jax.tree.map(lambda x: x / batch_size, grads)
+    (noisy_grads, noise_state) = privatizer.update(mean_grads, noise_state)
+    updated_params = updated_model_params(model_params, noisy_grads)
+    return updated_params, loss, noise_state
+
+  # DP only end.
 
   @jax.jit
   def update_step(model_params, batch_x, batch_y):
+    """Updates the model parameters without DP."""
     loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(
         model_params, batch_x, batch_y
     )
     model_params = updated_model_params(model_params, grads)
     return model_params, loss
+
+  if use_dp:
+    print(f"Using DP with noise multiplier {noise_multiplier}.")
+  else:
+    print("Not using DP.")
 
   print("\nStarting training...")
   for epoch in range(num_epochs):
@@ -166,8 +163,11 @@ def main(_):
       batch_y = jnp.asarray(batch_y_tf)
 
       if use_dp:
-        model_params, loss, noise_rng = dp_update_step(
-            model_params, batch_x, batch_y, noise_rng
+        model_params, loss, noise_state = dp_update_step(
+            model_params,
+            batch_x,
+            batch_y,
+            noise_state,
         )
       else:
         model_params, loss = update_step(model_params, batch_x, batch_y)
