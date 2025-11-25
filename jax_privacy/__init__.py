@@ -17,7 +17,6 @@
 from jax_privacy import accounting
 from jax_privacy import auditing
 from jax_privacy import batch_selection
-from jax_privacy import dp_sgd
 from jax_privacy import experimental
 from jax_privacy import matrix_factorization
 from jax_privacy import noise_addition
