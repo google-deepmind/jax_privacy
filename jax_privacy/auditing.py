@@ -32,6 +32,97 @@ import scipy.stats
 
 
 _norm = scipy.stats.norm
+_brentq = scipy.optimize.brentq
+
+
+def _get_log_delta(noise: float, eps: float) -> float:
+  # See https://arxiv.org/pdf/1805.06530, Eq. (6).
+  t_star = eps * noise + 1 / (2 * noise)
+  x = _norm.logcdf(1 / noise - t_star)
+  y = eps + _norm.logcdf(-t_star)
+  return x + np.log1p(-np.exp(y - x)) if y <= x else -np.inf
+
+
+def get_epsilon_gaussian(noise: float, delta: float) -> float:
+  """Compute the epsilon for the Gaussian mechanism with the given DP params.
+
+  Args:
+    noise: The standard deviation of the Gaussian noise.
+    delta: The target delta (0 < delta < 1).
+
+  Returns:
+    The epsilon for the Gaussian mechanism with the given DP params.
+  """
+  if noise < 0:
+    raise ValueError(f'noise must be non-negative, got noise={noise}.')
+  if not 0 <= delta <= 1:
+    raise ValueError(f'delta must be in [0, 1], got delta={delta}.')
+
+  if delta == 1:
+    return 0
+
+  if noise == 0:
+    return np.inf
+  elif noise == np.inf:
+    return 0
+
+  if delta == 0:
+    return np.inf
+
+  log_delta = np.log(delta)
+  if _get_log_delta(noise, 0) < log_delta:
+    # We have (0, delta)-DP.
+    return 0
+
+  eps_lo, eps_hi = 0, 1
+  while _get_log_delta(noise, eps_hi) > log_delta:
+    eps_lo, eps_hi = eps_hi, eps_hi * 2
+
+  return _brentq(
+      lambda eps: _get_log_delta(noise, eps) - log_delta,
+      eps_lo,
+      eps_hi,
+  )
+
+
+def get_noise_gaussian(epsilon: float, delta: float) -> float:
+  """Compute the noise for the Gaussian mechanism with the given DP params.
+
+  Args:
+    epsilon: The target epsilon.
+    delta: The target delta.
+
+  Returns:
+    The noise for the Gaussian mechanism with the given DP params.
+  """
+  if epsilon < 0:
+    raise ValueError(f'epsilon must be non-negative, got epsilon={epsilon}.')
+  if not 0 <= delta <= 1:
+    raise ValueError(f'delta must be in [0, 1], got delta={delta}.')
+
+  if delta == 1:
+    return 0
+
+  if epsilon == 0:
+    return np.inf
+  elif epsilon == np.inf:
+    return 0
+
+  if delta == 0:
+    return np.inf
+
+  log_delta = np.log(delta)
+  noise_lo, noise_hi = 1e-1, 1
+  while _get_log_delta(noise_lo, epsilon) < log_delta:
+    noise_hi, noise_lo = noise_lo, noise_lo / 10
+  while _get_log_delta(noise_hi, epsilon) > log_delta:
+    noise_lo, noise_hi = noise_hi, noise_hi * 10
+
+  return _brentq(
+      lambda noise: _get_log_delta(noise, epsilon) - log_delta,
+      noise_lo,
+      noise_hi,
+  )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -581,11 +672,9 @@ class CanaryScoreAuditor:
     if delta_gap(eps_ub) >= 0:
       return eps_ub
 
-    eps = scipy.optimize.root_scalar(
+    return _brentq(
         delta_gap,
-        bracket=[eps_lb, eps_ub],
-        method='brentq',
+        eps_lb,
+        eps_ub,
         xtol=eps_tol,
-    ).root
-
-    return eps
+    )
