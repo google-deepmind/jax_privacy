@@ -57,7 +57,7 @@ You can navigate the documentation in the following way:
 1.  Install the library following instructions in [Installation](installation)
     section.
 1.  If you want to use the library for your own use-case, choose the framework
-    you want to use (e.g. [Keras](keras_api.rst) or [JAX & Flax](core_library)) and
+    you want to use (e.g. [Keras](keras_api.rst) or [JAX & Flax](jax_api)) and
     study its API capabilities with the provided examples.
 1.  If you are interested in doing some specific task (e.g. LLM fine-tuning),
     navigate to the corresponding example in the "Examples" section.

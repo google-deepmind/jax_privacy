@@ -37,9 +37,12 @@ mkdir _testing && cd _testing
 
 # Main tests.
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy \
-  -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test"
+  -k "not dp_updater_test and not evaluator_test and not matrix_factorization and not grad_clipping_sharded_test and not distributed_noise_generation_test and not sharding_utils_test"
 
 # Isolate tests that use `chex.set_n_cpu_device()`.
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" ../experiments -k "dp_updater_test"
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" ../experiments -k "evaluator_test"
+pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "grad_clipping_sharded_test"
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "distributed_noise_generation_test"
 pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "sharding_utils_test"
 

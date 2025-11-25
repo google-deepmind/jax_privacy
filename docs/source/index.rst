@@ -17,6 +17,7 @@
    :caption: API Documentation
 
    core_library
+   jax_api
    keras_api
 
 .. toctree::
