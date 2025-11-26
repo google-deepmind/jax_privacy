@@ -3,3 +3,4 @@ sphinx-rtd-theme
 myst-nb
 sphinx-collections
 ipykernel
+sphinx_autodoc_typehints

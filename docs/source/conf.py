@@ -23,6 +23,24 @@ the documentation for the jax_privacy library.
 
 import os
 import sys
+from typing import Protocol
+from unittest import mock
+
+
+class MockDataclassInstance(Protocol):
+  pass
+
+
+class MockTypeshed(mock.MagicMock):
+
+  def __getattr__(self, name):
+    if name == 'DataclassInstance':
+      return MockDataclassInstance
+    return super().__getattr__(name)
+
+
+# Inject this module into sys.modules so Python finds it
+sys.modules['_typeshed'] = MockTypeshed()
 
 sys.path.insert(0, os.path.abspath('../..'))
 
@@ -46,13 +64,22 @@ extensions = [
     'myst_nb',
     'sphinx_collections',
     'sphinx.ext.doctest',
+    'sphinx_autodoc_typehints',
 ]
+
+autodoc_type_aliases = {
+    'ArrayLike': 'jax.typing.ArrayLike',
+    'ArrayTree': 'chex.ArrayTree',
+    'PydanticDataclass': 'pydantic.PydanticDataclass',
+}
 
 autosummary_generate = True
 
 # Configure autodoc settings
 autodoc_typehints = 'signature'
 autoclass_content = 'both'
+autodoc_member_order = 'bysource'
+napoleon_use_ivar = True
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']

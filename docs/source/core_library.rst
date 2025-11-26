@@ -1,6 +1,6 @@
-######################
-Core Library (New API)
-######################
+#############
+Core Library
+#############
 
 .. currentmodule:: jax_privacy
 
