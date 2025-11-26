@@ -66,8 +66,6 @@ class ExecutionPlanTest(parameterized.TestCase):
     config = execution_plan.BandMFExecutionPlanConfig(
         num_bands=10,
         iterations=iterations,
-        shuffle=False,
-        use_fixed_size_groups=False,
         **privacy_kwargs
     )
 

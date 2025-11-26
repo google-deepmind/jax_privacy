@@ -30,6 +30,7 @@ i.e., roughly that num_examples < 1e9.
 
 import abc
 import dataclasses
+import enum
 import itertools
 from typing import Iterator
 
@@ -38,6 +39,38 @@ import numpy as np
 
 
 RngType = np.random.Generator | int | None
+
+
+class PartitionType(enum.Enum):
+  """An enum specifying how examples should be assigned to groups."""
+  INDEPENDENT = enum.auto()
+  """Each example will be assigned to a group independently at random."""
+  EQUAL_SPLIT = enum.auto()
+  """Examples will be shuffled and then split into groups of equal size."""
+
+
+def independent_partition(
+    num_examples: int,
+    num_groups: int,
+    rng: np.random.Generator,
+    dtype: np.typing.DTypeLike
+) -> list[np.ndarray]:
+  sizes = rng.multinomial(num_examples, np.ones(num_groups) / num_groups)
+  boundaries = np.cumsum(sizes)[:-1]
+  indices = np.random.permutation(num_examples).astype(dtype)
+  return np.split(indices, boundaries)
+
+
+def _equal_split_partition(
+    num_examples: int,
+    num_groups: int,
+    rng: np.random.Generator,
+    dtype: np.typing.DTypeLike
+) -> list[np.ndarray]:
+  indices = rng.permutation(num_examples).astype(dtype)
+  group_size = num_examples // num_groups
+  groups = np.array_split(indices, num_groups)
+  return [g[:group_size] for g in groups]
 
 
 def split_and_pad_global_batch(
@@ -140,18 +173,18 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     >>> rng = np.random.default_rng(0)
     >>> b = CyclicPoissonSampling(sampling_prob=1, iterations=8, cycle_length=4)
     >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
-    [0 1 2] [3 4 5] [6 7 8] [ 9 10 11] [0 1 2] [3 4 5] [6 7 8] [ 9 10 11]
+    [9 2 7] [ 4  5 11] [0 3 6] [10  8  1] [9 2 7] [ 4  5 11] [0 3 6] [10  8  1]
 
   Example Usage (standard Poisson sampling) [2]:
     >>> b = CyclicPoissonSampling(sampling_prob=0.25, iterations=8)
     >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
-    [0 4 9 3 5] [] [5] [4 6 2 7] [ 5 11] [ 2  5  8  6  9 11] [9 1] [7 5 4 3]
+    [5 6 7] [5 8 3 7 2] [ 1  5 11] [0 3] [ 5  1  3  4 10] [2] [4 5 1 3] [6]
 
   Example Usage (BandMF-style sampling) [3]:
     >>> p = 0.5
-    >>> b = CyclicPoissonSampling(sampling_prob=p, iterations=8, cycle_length=2)
+    >>> b = CyclicPoissonSampling(sampling_prob=p, iterations=6, cycle_length=2)
     >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
-    [2 4 0] [ 9 10 11] [3 5] [9 8] [0 3 4 5] [8] [2 1 4 5] [11]
+    [2 4] [1 8 9] [2 7 5 4] [11  1  3] [10  2  5  0  4] [ 1 11  6]
 
 
   References:
@@ -186,19 +219,17 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       examples into cycle_length groups, and do Poisson sampling from the groups
       in a round-robin fashion. cycle_length == 1 retrieves standard Poisson
       sampling.
-    shuffle: For cyclic Poisson sampling, whether to shuffle the examples before
-      discarding (see even_partition) and partitioning.
-    even_partition: If True, we discard num_examples % cycle_length examples
-      before partitioning in cyclic Poisson sampling. If False, we can have
-      uneven partitions. Defaults to True for ease of analysis.
+    partition_type: How to partition the examples into groups for before Poisson
+      sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
+      and replace-one adjacency notions, while INDEPENDENT is compatible
+      with the add-remove adjacency notion.
   """
 
   sampling_prob: float
   iterations: int
   truncated_batch_size: int | None = None
   cycle_length: int = 1
-  shuffle: bool = False
-  even_partition: bool = True
+  partition_type: PartitionType = PartitionType.EQUAL_SPLIT
 
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
@@ -206,14 +237,14 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     rng = np.random.default_rng(rng)
     dtype = np.min_scalar_type(-num_examples)
 
-    indices = np.arange(num_examples, dtype=dtype)
-    if self.shuffle:
-      rng.shuffle(indices)
-    if self.even_partition:
-      group_size = num_examples // self.cycle_length
-      indices = indices[: group_size * self.cycle_length]
+    if self.partition_type == PartitionType.INDEPENDENT:
+      partition_fn = independent_partition
+    elif self.partition_type == PartitionType.EQUAL_SPLIT:
+      partition_fn = _equal_split_partition
+    else:
+      raise ValueError(f'Unsupported partition type: {self.partition_type}')
 
-    partition = np.array_split(indices, self.cycle_length)
+    partition = partition_fn(num_examples, self.cycle_length, rng, dtype)
 
     for i in range(self.iterations):
       current_group = partition[i % self.cycle_length]
@@ -254,20 +285,10 @@ class BallsInBinsSampling(BatchSelectionStrategy):
   ) -> Iterator[np.ndarray]:
     rng = np.random.default_rng(rng)
     dtype = np.min_scalar_type(-num_examples)
-    indices = np.arange(num_examples, dtype=dtype)
-    rng.shuffle(indices)
-
-    bin_sizes = rng.multinomial(
-        n=num_examples,
-        pvals=np.ones(self.cycle_length) / self.cycle_length,
-    )
-    # Pad bin_sizes so that cumsum's output starts with 0.
-    batch_cutoffs = np.cumsum(np.append(0, bin_sizes))
+    groups = independent_partition(num_examples, self.cycle_length, rng, dtype)
 
     for i in range(self.iterations):
-      start_index = batch_cutoffs[i % self.cycle_length]
-      end_index = batch_cutoffs[(i % self.cycle_length) + 1]
-      yield indices[start_index:end_index]
+      yield groups[i % self.cycle_length]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -284,18 +305,19 @@ class UserSelectionStrategy:
   users.
 
   Example Usage:
+    >>> rng = np.random.default_rng(0)
     >>> base_strategy = CyclicPoissonSampling(sampling_prob=1, iterations=5)
     >>> strategy = UserSelectionStrategy(base_strategy, 2)
     >>> user_ids = np.array([0,0,0,1,1,2])
-    >>> iterator = strategy.batch_iterator(user_ids)
+    >>> iterator = strategy.batch_iterator(user_ids, rng)
     >>> print(next(iterator))
-    [[0 1]
-     [3 4]
-     [5 5]]
+    [[5 5]
+     [0 1]
+     [3 4]]
     >>> print(next(iterator))
-    [[2 0]
-     [3 4]
-     [5 5]]
+    [[5 5]
+     [2 0]
+     [3 4]]
 
   Attributes:
     base_strategy: The base batch selection strategy to apply at the user level.

@@ -123,6 +123,41 @@ def _validate_epsilon_delta_noise_multiplier(
     )
 
 
+def _validate_adjacency_relation(
+    accountant: dp_accounting.PrivacyAccountant,
+    neighboring_relation: dp_accounting.NeighboringRelation,
+    truncated_batch_size: int | None,
+    partition_type: batch_selection.PartitionType,
+) -> None:
+  """Validates the adjacency relation is compatible with the config."""
+  if accountant.neighboring_relation != neighboring_relation:
+    raise ValueError(
+        f'{accountant.neighboring_relation=} is not consistent with'
+        f' {neighboring_relation=}.'
+    )
+
+  if neighboring_relation is NeighboringRelation.ADD_OR_REMOVE_ONE:
+    if partition_type != batch_selection.PartitionType.INDEPENDENT:
+      raise ValueError(
+          f'{neighboring_relation=} is only compatible with INDEPENDENT'
+          f' partition_type, found {partition_type=}.'
+      )
+    if truncated_batch_size is not None:
+      raise ValueError(
+          f'{neighboring_relation=} does not support truncated_batch_size,'
+          f' found {truncated_batch_size=}.'
+      )
+
+  else:
+    if (
+        partition_type == batch_selection.PartitionType.INDEPENDENT
+        and truncated_batch_size is not None
+    ):
+      raise ValueError(
+          f'{partition_type=} is not compatible with {truncated_batch_size=}'
+      )
+
+
 @pydantic.dataclasses.dataclass(
     frozen=True,
     kw_only=True,
@@ -160,10 +195,10 @@ class BandMFExecutionPlanConfig:
       size to truncate to.
     num_examples: The number of examples in the dataset. Unused if
       truncated_batch_size is None.
-    shuffle: Whether to shuffle the data before partitioning it.
-    use_fixed_size_groups: Whether to discard examples so that all groups have
-      the same size before sampling. If sampling_prob=1, this guarantees that
-      the batch selection strategy will produce fixed-size batches.
+    partition_type: How to partition the examples into groups for before Poisson
+      sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
+      and replace-one adjacency notions, while INDEPENDENT is compatible
+      with the add-remove adjacency notion.
     strategy_optimization_steps: The number of steps to optimize the banded
       Toeplitz strategy matrix.
     accountant: A privacy accountant that is used to calibrate the noise
@@ -183,8 +218,9 @@ class BandMFExecutionPlanConfig:
   sampling_prob: float = pydantic.Field(default=1.0, ge=0, le=1)
   truncated_batch_size: int | None = pydantic.Field(default=None, ge=0)
   num_examples: int | None = pydantic.Field(default=None, ge=0)
-  shuffle: bool = False
-  use_fixed_size_groups: bool = False
+  partition_type: batch_selection.PartitionType = pydantic.Field(
+      default=batch_selection.PartitionType.EQUAL_SPLIT
+  )
   strategy_optimization_steps: int = 500
   accountant: dp_accounting.PrivacyAccountant = pydantic.Field(
       default_factory=lambda: dp_accounting.pld.PLDAccountant(
@@ -200,34 +236,18 @@ class BandMFExecutionPlanConfig:
     _validate_epsilon_delta_noise_multiplier(
         self.epsilon, self.delta, self.noise_multiplier
     )
-    if self.accountant.neighboring_relation != self.neighboring_relation:
-      raise ValueError(
-          'neighboring_relation must match the accountant. Found '
-          f'{self.accountant.neighboring_relation, self.neighboring_relation}.'
-      )
-    if (
-        self.truncated_batch_size is not None
-        and self.neighboring_relation is NeighboringRelation.ADD_OR_REMOVE_ONE
-    ):
-      raise ValueError(
-          'truncated_batch_size with ADD_OR_REMOVE_ONE is not supported.'
-      )
-    if (
-        self.num_bands != 1
-        and self.neighboring_relation is NeighboringRelation.ADD_OR_REMOVE_ONE
-    ):
-      # TODO: b/415360727 - This can be fixed by using different partitionings.
-      raise ValueError(f'{self.neighboring_relation=} requires num_bands=1.')
+    _validate_adjacency_relation(
+        self.accountant,
+        self.neighboring_relation,
+        self.truncated_batch_size,
+        self.partition_type,
+    )
 
   def _get_dp_event(self, sigma: float) -> dp_accounting.DpEvent:
     """Returns a DpEvent for the BandMF mechanism."""
     # Theorem 5 of https://arxiv.org/pdf/2306.08153. See also Theorem 1.
     if self.truncated_batch_size:
-      group_size = (
-          self.num_examples // self.num_bands
-          if self.use_fixed_size_groups
-          else math.ceil(self.num_examples / self.num_bands)
-      )
+      group_size = self.num_examples // self.num_bands
       single_cycle_event = dp_accounting.TruncatedSubsampledGaussianDpEvent(
           dataset_size=group_size,
           sampling_probability=self.sampling_prob,
@@ -269,8 +289,7 @@ class BandMFExecutionPlanConfig:
         iterations=self.iterations,
         cycle_length=self.num_bands,
         truncated_batch_size=self.truncated_batch_size,
-        shuffle=self.shuffle,
-        even_partition=self.use_fixed_size_groups,
+        partition_type=self.partition_type,
     )
 
     # 1D vector of Toeplitz coefficients.

@@ -76,29 +76,30 @@ def _check_all_equal(x):
 class BatchSelectionTest(parameterized.TestCase):
 
   @parameterized.product(
-      shuffle=[True, False],
-      even_partition=[True, False],
+      partition_type=[
+          batch_selection.PartitionType.EQUAL_SPLIT,
+          batch_selection.PartitionType.INDEPENDENT
+      ],
       num_examples=[10],
       cycle_length=[3],
       iterations=[5],
   )
   def test_cyclic_participation(
-      self, *, shuffle, even_partition, num_examples, cycle_length, iterations
+      self, *, partition_type, num_examples, cycle_length, iterations
   ):
     """Tests the use of CyclicPoissonSampling instantiated to do shuffling."""
     strategy = batch_selection.CyclicPoissonSampling(
         sampling_prob=1.0,
         iterations=iterations,
         cycle_length=cycle_length,
-        shuffle=shuffle,
-        even_partition=even_partition,
+        partition_type=partition_type,
     )
     batches = list(strategy.batch_iterator(num_examples, rng=0))
 
     self.assertLen(batches, iterations)
-    min_batch_size = num_examples // cycle_length
-    max_batch_size = min_batch_size if even_partition else min_batch_size + 1
-    _check_batch_sizes_equal(batches, min_batch_size, max_batch_size)
+    if partition_type == batch_selection.PartitionType.EQUAL_SPLIT:
+      batch_size = num_examples // cycle_length
+      _check_batch_sizes_equal(batches, batch_size, batch_size)
     _check_no_repeated_indices(batches[:cycle_length])
     _check_cyclic_property(batches, cycle_length)
     _check_element_range(batches, num_examples)
@@ -109,8 +110,10 @@ class BatchSelectionTest(parameterized.TestCase):
       iterations=[1000],
       cycle_length=[1, 3],
       expected_batch_size=[3],
-      shuffle=[True, False],
-      even_partition=[True, False],
+      partition_type=[
+          batch_selection.PartitionType.INDEPENDENT,
+          batch_selection.PartitionType.EQUAL_SPLIT,
+      ],
       truncated_batch_size=[None, 4],
   )
   def test_poisson_sampling(
@@ -120,8 +123,7 @@ class BatchSelectionTest(parameterized.TestCase):
       iterations,
       cycle_length,
       expected_batch_size,
-      shuffle,
-      even_partition,
+      partition_type,
       truncated_batch_size,
   ):
     """Tests for Poisson sampling, potentially cyclic and truncated."""
@@ -130,8 +132,7 @@ class BatchSelectionTest(parameterized.TestCase):
         sampling_prob=sampling_prob,
         iterations=iterations,
         cycle_length=cycle_length,
-        shuffle=shuffle,
-        even_partition=even_partition,
+        partition_type=partition_type,
         truncated_batch_size=truncated_batch_size,
     )
     batches = list(strategy.batch_iterator(num_examples, rng=0))
@@ -140,10 +141,9 @@ class BatchSelectionTest(parameterized.TestCase):
     min_batch_size = 0
     if truncated_batch_size:
       max_batch_size = truncated_batch_size
-    elif even_partition:
-      max_batch_size = num_examples // cycle_length
     else:
-      max_batch_size = math.ceil(num_examples / cycle_length)
+      max_batch_size = num_examples // cycle_length
+
     _check_batch_sizes_equal(batches, min_batch_size, max_batch_size)
     for start_index in range(0, iterations, cycle_length):
       _check_no_repeated_indices(
@@ -152,7 +152,7 @@ class BatchSelectionTest(parameterized.TestCase):
     _check_element_range(batches, num_examples)
     _check_subset_of_kb_participation(batches, cycle_length)
     # Make sure elements are discarded when using even partition.
-    if even_partition:
+    if partition_type == batch_selection.PartitionType.EQUAL_SPLIT:
       distinct_elements = _get_unique_elements(batches)
       self.assertLessEqual(
           distinct_elements.size, (num_examples // cycle_length) * cycle_length
@@ -176,20 +176,14 @@ class BatchSelectionTest(parameterized.TestCase):
         sampling_prob=sampling_prob,
         iterations=iterations,
         cycle_length=cycle_length,
-        even_partition=False,
+        partition_type=batch_selection.PartitionType.EQUAL_SPLIT,
     )
     batches = list(strategy.batch_iterator(num_examples, rng=0))
 
     self.assertLen(batches, iterations)
     min_batch_size = 0
-    max_batch_size = 1
+    max_batch_size = 0
     _check_batch_sizes_equal(batches, min_batch_size, max_batch_size)
-    for start_index in range(0, iterations, cycle_length):
-      _check_no_repeated_indices(
-          batches[start_index : start_index + cycle_length]
-      )
-    _check_element_range(batches, num_examples)
-    _check_subset_of_kb_participation(batches, cycle_length)
 
   @parameterized.product(
       num_examples=[100],
