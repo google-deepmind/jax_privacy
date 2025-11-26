@@ -292,6 +292,55 @@ class BallsInBinsSampling(BatchSelectionStrategy):
 
 
 @dataclasses.dataclass(frozen=True)
+class MinimumSeparationSampling(BatchSelectionStrategy):
+  """Implements minimum separation sampling.
+
+  This batch selection strategy simulates constraints common in federated
+  learning scenarios.
+
+  Formal Guarantees of the batch_iterator:
+    - All batches consist of indices in the range [0, num_examples).
+    - The number of examples in each batch is at most max_batch_size..
+    - The separation between two appearances of any example is at least min_sep.
+    - Each example appears at most max_part times.
+
+  Attributes:
+    iterations: The number of total batches to generate.
+    max_batch_size: The maximum number of examples in each batch.
+    min_sep: The minimum separation between two appearances of any example.
+    max_part: The maximum number of times any example can appear.
+  """
+  iterations: int
+  max_batch_size: int
+  min_sep: int
+  max_part: int | None = None
+
+  def batch_iterator(
+      self, num_examples: int, rng: RngType = None
+  ) -> Iterator[np.ndarray]:
+    rng = np.random.default_rng(rng)
+    dtype = np.min_scalar_type(-num_examples)
+    dtype2 = np.min_scalar_type(-self.iterations)
+    dtype3 = np.min_scalar_type(self.max_part or self.iterations)
+
+    all_indices = np.arange(num_examples, dtype=dtype)
+    last_seen = np.full(num_examples, -self.min_sep, dtype=dtype2)
+    counts = np.zeros(num_examples, dtype=dtype3)
+
+    for step in range(self.iterations):
+      valid_mask = last_seen <= step - self.min_sep
+      if self.max_part is not None:
+        valid_mask &= (counts < self.max_part)
+
+      candidates = all_indices[valid_mask]
+      current_batch_size = min(self.max_batch_size, candidates.size)
+      batch = rng.choice(candidates, size=current_batch_size, replace=False)
+      last_seen[batch] = step
+      counts[batch] += 1
+      yield batch
+
+
+@dataclasses.dataclass(frozen=True)
 class UserSelectionStrategy:
   """Applies base_strategy at the user level, and selects multiple examples per user.
 

@@ -73,6 +73,25 @@ def _check_all_equal(x):
   assert np.all(x == x[0]), f"Elements of x are not all equal: {x}"
 
 
+def _check_minsep_maxpart(batches, min_sep, max_part):
+  last_seen = {}
+  counts = {}
+  for step, batch in enumerate(batches):
+    assert len(batch) == len(set(batch)), "Duplicate indices found in batch"
+    for idx in batch:
+      count = counts.get(idx, 0)
+      if max_part is not None:
+        assert count < max_part, f"Example {idx} does not satisfy {max_part=}"
+
+      if idx in last_seen:
+        prev_step = last_seen[idx]
+        dist = step - prev_step
+        assert dist >= min_sep, f"Example {idx} does not satisfy {min_sep=}"
+
+      last_seen[idx] = step
+      counts[idx] = count + 1
+
+
 class BatchSelectionTest(parameterized.TestCase):
 
   @parameterized.product(
@@ -225,6 +244,26 @@ class BatchSelectionTest(parameterized.TestCase):
     )
     _check_no_repeated_indices(batches[:cycle_length])
     _check_cyclic_property(batches, cycle_length)
+
+  @parameterized.product(
+      min_sep=[10],
+      max_part=[None, 2],
+      batch_size=[5],
+  )
+  def test_minsep_sampling(self, min_sep, max_part, batch_size):
+    iterations = 40
+    strategy = batch_selection.MinimumSeparationSampling(
+        iterations=iterations,
+        min_sep=min_sep,
+        max_part=max_part,
+        max_batch_size=batch_size
+    )
+    examples = batch_size * iterations * 2
+    batches = list(strategy.batch_iterator(examples, rng=0))
+    _check_minsep_maxpart(batches, min_sep, max_part)
+    _check_batch_sizes_equal(batches, batch_size, batch_size)
+    _check_element_range(batches, examples)
+    _check_signed_indices(batches)
 
   def test_user_selection_strategy(self):
     """Tests for UserSelectionStrategy."""
