@@ -28,6 +28,41 @@ _rotations = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
 _inversions = [[0, 2, 1], [1, 0, 2], [2, 1, 0]]
 
 
+class GaussianTest(parameterized.TestCase):
+
+  @parameterized.product(
+      eps=list(np.logspace(-5, 5, 11, 10)),
+      delta=[0] + list(np.logspace(-10, 0, 11, 10)),
+  )
+  def test_get_epsilon_gaussian_inverts_get_noise_gaussian(self, eps, delta):
+    noise = auditing.get_noise_gaussian(eps, delta)
+    recovered_eps = auditing.get_epsilon_gaussian(noise, delta)
+    np.testing.assert_allclose(recovered_eps, eps if (0 < delta < 1) else 0)
+
+  @parameterized.product(
+      noise=list(np.logspace(-5, 5, 11, 10)),
+      delta=[0] + list(np.logspace(-10, 0, 11, 10)),
+  )
+  def test_get_noise_gaussian_inverts_get_epsilon_gaussian(self, noise, delta):
+    eps = auditing.get_epsilon_gaussian(noise, delta)
+    recovered_noise = auditing.get_noise_gaussian(eps, delta)
+    if eps == 0:
+      self.assertEqual(recovered_noise, 0 if delta == 1 else np.inf)
+    else:
+      np.testing.assert_allclose(recovered_noise, noise if delta > 0 else 0)
+
+  @parameterized.product(noise=[0.5, 1, 3], delta=[1e-1, 1e-2, 1e-3])
+  def test_get_epsilon_gaussian_dp_accounting(self, noise, delta):
+    expected_eps = (
+        dp_accounting.pld.PLDAccountant()
+        .compose(dp_accounting.GaussianDpEvent(noise))
+        .get_epsilon(delta)
+    )
+    self.assertAlmostEqual(
+        auditing.get_epsilon_gaussian(noise, delta), expected_eps
+    )
+
+
 class CanaryScoreAuditorTest(parameterized.TestCase):
 
   def test_bootstrap_params_empty_quantiles(self):
@@ -245,11 +280,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         in_canary_scores, out_canary_scores
     )
     eps_lb = auditor.epsilon_lower_bound(alpha, delta, one_sided)
-    true_eps = (
-        dp_accounting.pld.PLDAccountant()
-        .compose(dp_accounting.GaussianDpEvent(1.0 / mu))
-        .get_epsilon(delta)
-    )
+    true_eps = auditing.get_epsilon_gaussian(1.0 / mu, delta)
     np.testing.assert_array_less(eps_lb, true_eps)
     np.testing.assert_allclose(eps_lb, true_eps, rtol=0.2)
 
@@ -273,11 +304,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     eps = auditing._epsilon_raw_counts_helper(
         tn_counts, fn_counts, min_count, delta
     )
-    true_eps = (
-        dp_accounting.pld.PLDAccountant()
-        .compose(dp_accounting.GaussianDpEvent(1.0))
-        .get_epsilon(delta)
-    )
+    true_eps = auditing.get_epsilon_gaussian(1.0, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=1e-1)
 
   @parameterized.product(
@@ -468,11 +495,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         in_canary_scores, out_canary_scores
     )
     eps = auditor.epsilon_from_gdp(alpha, delta)
-    true_eps = (
-        dp_accounting.pld.PLDAccountant()
-        .compose(dp_accounting.GaussianDpEvent(1.0 / mu))
-        .get_epsilon(delta)
-    )
+    true_eps = auditing.get_epsilon_gaussian(1.0 / mu, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=0.05)
 
   @parameterized.named_parameters(
