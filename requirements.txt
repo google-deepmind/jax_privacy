@@ -5,16 +5,10 @@
 
 
 absl-py
-dp_accounting>=0.5.1
-einshape
-grain
-hypothesis
+dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting
 jax>=0.7.0
 jaxlib>=0.7.0
-jaxtyping
 pydantic
-ml_collections
-more_itertools==10.1.0
 numpy
 optax
 scipy
