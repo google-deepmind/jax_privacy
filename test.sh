@@ -30,23 +30,21 @@ pip install .
 pip install -r requirements-dev.txt
 pip install crc32c
 
-# Change directory to avoid importing the package from repo root.
-# Runing tests from the root can cause an ImportError for cython
-# (.pyx) modules and possibly other issues.
-mkdir _testing && cd _testing
+cd tests
+num_cpus=$(grep -c ^processor /proc/cpuinfo)
 
 # Main tests.
-pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy \
+pytest -n "${num_cpus}" \
   -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test"
 
 # Isolate tests that use `chex.set_n_cpu_device()`.
-pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "distributed_noise_generation_test"
-pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "sharding_utils_test"
+pytest -n "${num_cpus}" -k "distributed_noise_generation_test"
+pytest -n "${num_cpus}" -k "sharding_utils_test"
 
 # The matrix_factorization tests are expensive, and require the correct
 # HYPOTHESIS_PROFILE to limit the number of examples tested.
 export HYPOTHESIS_PROFILE=dpftrl_default
-pytest -n "$(grep -c ^processor /proc/cpuinfo)" --pyargs jax_privacy -k "matrix_factorization"
+pytest -n "${num_cpus}" -k "matrix_factorization"
 
 cd ..
 
