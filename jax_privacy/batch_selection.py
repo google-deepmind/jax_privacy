@@ -49,7 +49,7 @@ class PartitionType(enum.Enum):
   """Examples will be shuffled and then split into groups of equal size."""
 
 
-def independent_partition(
+def _independent_partition(
     num_examples: int,
     num_groups: int,
     rng: np.random.Generator,
@@ -238,7 +238,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     dtype = np.min_scalar_type(-num_examples)
 
     if self.partition_type == PartitionType.INDEPENDENT:
-      partition_fn = independent_partition
+      partition_fn = _independent_partition
     elif self.partition_type == PartitionType.EQUAL_SPLIT:
       partition_fn = _equal_split_partition
     else:
@@ -285,7 +285,7 @@ class BallsInBinsSampling(BatchSelectionStrategy):
   ) -> Iterator[np.ndarray]:
     rng = np.random.default_rng(rng)
     dtype = np.min_scalar_type(-num_examples)
-    groups = independent_partition(num_examples, self.cycle_length, rng, dtype)
+    groups = _independent_partition(num_examples, self.cycle_length, rng, dtype)
 
     for i in range(self.iterations):
       yield groups[i % self.cycle_length]
