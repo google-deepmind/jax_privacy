@@ -24,10 +24,8 @@ from typing import Any, TypeAlias, TypeVar
 import chex
 import jax
 from jax import numpy as jnp
-import jaxtyping
 
 
-MatrixArray = jaxtyping.Num[jaxtyping.Array, 'dim1 dim2']
 State = TypeVar('State', bound=chex.ArrayTree)
 Shape: TypeAlias = tuple[int, ...]
 ShapePyTree = Any
@@ -119,7 +117,7 @@ class StreamingMatrix:
 
     return cls(lifted_init, lifted_next)
 
-  def materialize(self, n: int) -> MatrixArray:
+  def materialize(self, n: int) -> jax.Array:
     """A utility method to materialize this matrix as an n x n ndarray.
 
     Note `n` needs to be a parameter, because a general `StreamingMatrix`

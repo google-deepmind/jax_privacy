@@ -13,4 +13,3 @@ numpy
 optax
 scipy
 chex
-jaxtyping
