@@ -4,3 +4,5 @@ myst-nb
 sphinx-collections
 ipykernel
 sphinx_autodoc_typehints
+tensorflow
+keras
