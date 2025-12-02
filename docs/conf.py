@@ -42,7 +42,7 @@ class MockTypeshed(mock.MagicMock):
 # Inject this module into sys.modules so Python finds it
 sys.modules['_typeshed'] = MockTypeshed()
 
-sys.path.insert(0, os.path.abspath('../..'))
+sys.path.insert(0, os.path.abspath('..'))
 
 # -- Project information -----------------------------------------------------
 
@@ -96,7 +96,7 @@ suppress_warnings = ['misc.highlighting_failure']
 collections = {
     'examples': {
         'driver': 'copy_folder',
-        'source': '../../examples',  # Path from conf.py to your real examples
+        'source': '../examples',  # Path from conf.py to your real examples
         'ignore': 'BUILD',
     }
 }

@@ -23,7 +23,7 @@ example below shows that.
 This section demonstrates how to integrate the Keras API into a typical
 Keras training workflow.
 
-.. literalinclude:: ../../examples/keras_api_example.py
+.. literalinclude:: ../examples/keras_api_example.py
    :language: python
    :linenos:
    :caption: examples/keras_api_example.py

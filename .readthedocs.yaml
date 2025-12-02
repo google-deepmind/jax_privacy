@@ -10,10 +10,10 @@ build:
     python: "3.11"
 
 sphinx:
-  configuration: docs/source/conf.py
+  configuration: docs/conf.py
 
 python:
   install:
-    - requirements: docs/source/requirements.txt
+    - requirements: docs/requirements.txt
     - method: pip
       path: .

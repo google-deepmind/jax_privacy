@@ -49,13 +49,13 @@ pytest -n "${num_cpus}" -k "matrix_factorization"
 cd ..
 
 # Build readthedocs
-cd docs/source
+cd docs
 pip install -r requirements.txt
 
 # -W turns all Sphinx warnings and errors into fatal errors.
 # Combined with "set -e", this will fail the build.
 sphinx-build -W -b html . _build/html
-cd ../..
+cd ..
 
 set +u
 deactivate
