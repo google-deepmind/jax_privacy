@@ -28,10 +28,79 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import scipy.optimize
+import scipy.special
 import scipy.stats
 
 
 _norm = scipy.stats.norm
+_binom = scipy.stats.binom
+_logistic = scipy.special.expit
+_brentq = scipy.optimize.brentq
+
+
+def _one_shot_p_value(
+    m: int, n_guess: int, n_correct: int, eps: float, delta: float
+) -> float:
+  """Computes p-value for one-shot audit.
+
+  See https://arxiv.org/pdf/2305.08846 for details.
+
+  Args:
+    m: The number of canaries.
+    n_guess: The number of guesses.
+    n_correct: The number of correct guesses.
+    eps: The epsilon value to compute the p-value for.
+    delta: The delta value to compute the p-value for.
+
+  Returns:
+    The p-value for the one-shot audit.
+  """
+  q = _logistic(eps)
+  beta = _binom.sf(n_correct - 1, n_guess, q)
+  if delta == 0:
+    return beta
+
+  i_vals = np.arange(1, n_correct + 1)
+  cum_sums = _binom.sf(n_correct - i_vals - 1, n_guess, q) - beta
+  alpha = np.max(cum_sums / i_vals, initial=0)
+
+  return min(beta + alpha * delta * 2 * m, 1)
+
+
+def _epsilon_one_shot(
+    m: int, n_guess: int, n_correct: int, delta: float, p: float
+) -> float:
+  """Computes epsilon bound for one-shot audit for a given n_guess/n_correct.
+
+  See https://arxiv.org/pdf/2305.08846 for details.
+
+  Args:
+    m: The number of canaries.
+    n_guess: The number of guesses.
+    n_correct: The number of correct guesses.
+    delta: The delta value to compute the p-value for.
+    p: The allowed probability of failure (one minus confidence).
+
+  Returns:
+    The optimal epsilon for one-shot audit.
+  """
+  eps_min = 0
+  if _one_shot_p_value(m, n_guess, n_correct, eps_min, delta) > p:
+    return 0
+
+  if n_guess == n_correct:
+    eps_max = 1
+    while _one_shot_p_value(m, n_guess, n_correct, eps_max, delta) < p:
+      eps_min, eps_max = eps_max, eps_max + 1
+  else:
+    # Epsilon lower bound can be at most the empirical log-odds.
+    eps_max = np.log(n_correct / (n_guess - n_correct))
+
+  return _brentq(
+      lambda eps: _one_shot_p_value(m, n_guess, n_correct, eps, delta) - p,
+      eps_min,
+      eps_max,
+  )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -581,11 +650,68 @@ class CanaryScoreAuditor:
     if delta_gap(eps_ub) >= 0:
       return eps_ub
 
-    eps = scipy.optimize.root_scalar(
-        delta_gap,
-        bracket=[eps_lb, eps_ub],
-        method='brentq',
-        xtol=eps_tol,
-    ).root
+    return _brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
 
-    return eps
+  def epsilon_one_shot(
+      self, significance: float, delta: float, one_sided: bool = True
+  ) -> float:
+    r"""Computes lower bound on epsilon for a single round of auditing.
+
+    This is an implementation of the method from Steinke et al. 2024, "Privacy
+    Auditing in One (1) Training Run": https://arxiv.org/abs/2305.08846.
+
+    Currently only one-sided hypotheses are supported ($k_- = 0$).
+
+    Args:
+      significance: Allowed probability of failure (one minus confidence).
+      delta: Approximate DP delta.
+      one_sided: Whether to consider only hypotheses with ($k_- = 0$). Must be
+        True.
+
+    Returns:
+      The estimated epsilon lower bound.
+    """
+    if not 0 < significance < 1.0:
+      raise ValueError(f'significance must be in (0, 1.0), got {significance}.')
+    if not 0 < delta <= 1:
+      raise ValueError(f'delta must be in (0, 1], got {delta}.')
+    if not one_sided:
+      raise ValueError('one_sided must be True.')
+
+    n_pos = self._fn_counts[-1]
+    n_neg = self._tn_counts[-1]
+    m = n_pos + n_neg
+
+    # Reverse the order because low TP/FP thresholds are more likely to be
+    # optimal.
+    tp_counts = (n_pos - self._fn_counts)[::-1]
+    fp_counts = (n_neg - self._tn_counts)[::-1]
+
+    # Bonferroni correction on p, since we will maximize over thresholds.
+    p = significance / len(self._fn_counts)
+
+    best_eps = 0
+    for tp, fp in zip(tp_counts, fp_counts):
+      n_guess = tp + fp
+      n_correct = tp
+
+      if n_guess == 0:
+        continue
+
+      required_q = _logistic(best_eps)
+      if n_correct / n_guess <= required_q:
+        # Precision is monotonically decreasing because we have filtered tp/fp
+        # to contain only the pareto frontier. If the mean is worse than the
+        # best epsilon we've seen so far, we can stop.
+        break
+
+      optimistic_p = _binom.sf(n_correct - 1, n_guess, required_q)
+      if optimistic_p > p:
+        # If even with delta=0 we can't reject the null at max_epsilon, we
+        # certainly can't reject it with delta > 0.
+        continue
+
+      eps = _epsilon_one_shot(m, n_guess, n_correct, delta, p)
+      best_eps = max(best_eps, eps)
+
+    return best_eps
