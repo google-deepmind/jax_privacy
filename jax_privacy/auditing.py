@@ -18,6 +18,7 @@
 This library provides functions for estimating the privacy of a model,
 based on attack scores of held-in and held-out canaries.
 """
+from __future__ import annotations
 
 from collections.abc import Sequence
 from concurrent import futures
@@ -107,8 +108,16 @@ def _epsilon_one_shot(
 class BootstrapParams:
   """Parameters for bootstrapping.
 
+  Several methods in this library that compute a privacy metric (e.g., AUROC,
+  epsilon) optionally perform bootstrapping to estimate quantiles of the metric.
+  The held-in and held-out canary scores are resampled with replacement, and
+  metric is estimated from the resampled data. Repeating this sampling procedure
+  many times produces an empirical distribution of the metric, from which we can
+  estimate quantiles. This class configures the number of resamples, the
+  quantiles to report, and the seed for the random number generator.
+
   Attributes:
-    num_samples: The number of times to resample the dataset.
+    num_samples: The number of times to resample the canary scores.
     quantiles: An array-like of quantiles to report. E.g., for a 95% confidence
       interval, use (0.025, 0.975).
     seed: The seed for the random number generator.
@@ -131,16 +140,16 @@ class BootstrapParams:
       num_samples: int = 1000,
       confidence: float = 0.95,
       seed: int | None = None,
-  ) -> 'BootstrapParams':
+  ) -> BootstrapParams:
     """Creates a BootstrapParams object for a confidence interval.
 
     Args:
-      num_samples: The number of times to resample the dataset.
+      num_samples: The number of times to resample the canary scores.
       confidence: The desired confidence level.
       seed: The seed for the random number generator.
 
     Returns:
-      A BootstrapParams object.
+      A BootstrapParams object for computing a confidence interval.
     """
     if not 0 < confidence < 1:
       raise ValueError(f'confidence must be in (0, 1), got {confidence}.')
