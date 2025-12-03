@@ -365,7 +365,27 @@ def _epsilon_raw_counts_helper(
 
 
 class CanaryScoreAuditor:
-  """Class for auditing privacy based on attack scores."""
+  """Class for auditing privacy based on attack scores.
+
+  To use this library, create a CanaryScoreAuditor providing the attack scores
+  of held-in and held-out canaries. Attack scores can be any value such that
+  that held-in canaries are expected to have higher scores, for example the
+  log-likelihood or the likelihood ratio to the pretrained model. Then the
+  auditor can be used to compute privacy metrics, including various epsilon
+  lower bounds from the literature, the maximum TPR at a given FPR, and the area
+  under the receiver operating characteristic (ROC) curve.
+
+  Example Usage:
+    >>> out_canary_scores = np.arange(100)
+    >>> in_canary_scores = np.arange(100) + 9.5
+    >>> auditor = CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    >>> tpr_at_low_fpr = auditor.tpr_at_given_fpr(0.01)
+    >>> float(round(tpr_at_low_fpr, 2))
+    0.11
+    >>> auroc = auditor.attack_auroc()
+    >>> float(auroc)
+    0.595
+  """
 
   def __init__(
       self,
@@ -433,6 +453,8 @@ class CanaryScoreAuditor:
       one_sided: bool = True,
   ) -> float:
     """Finds epsilon lower bound from scores of held-in/held-out canaries.
+
+    Described in https://arxiv.org/pdf/2101.04535.
 
     Args:
       alpha: Allowed probability of failure (one minus confidence).
