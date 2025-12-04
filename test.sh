@@ -44,7 +44,10 @@ pytest -n "${num_cpus}" -k "sharding_utils_test"
 # The matrix_factorization tests are expensive, and require the correct
 # HYPOTHESIS_PROFILE to limit the number of examples tested.
 export HYPOTHESIS_PROFILE=dpftrl_default
-pytest -n "${num_cpus}" -k "matrix_factorization"
+
+# TODO: b/466169833 - Re-enable this test once the timeout issue is fixed.
+pytest -n "${num_cpus}" -k "matrix_factorization" \
+  --ignore=matrix_factorization/buffered_toeplitz_test.py
 
 cd ..
 
