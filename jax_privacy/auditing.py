@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from concurrent import futures
 import dataclasses
+import functools
 from typing import Callable
 
 import numpy as np
@@ -35,6 +36,40 @@ _norm = scipy.stats.norm
 _binom = scipy.stats.binom
 _logistic = scipy.special.expit
 _brentq = scipy.optimize.brentq
+
+
+class ThresholdStrategy:
+  """Base class for threshold selection strategies."""
+
+
+class Bonferroni(ThresholdStrategy):
+  """Use Bonferroni correction across all possible thresholds."""
+
+
+@dataclasses.dataclass(frozen=True)
+class Explicit(ThresholdStrategy):
+  """Use a specific threshold value.
+
+  Attributes:
+    threshold: The threshold value to use.
+  """
+
+  threshold: float
+
+
+@dataclasses.dataclass(frozen=True)
+class Split(ThresholdStrategy):
+  """Split data to choose threshold and then compute the bound.
+
+  Attributes:
+    threshold_estimation_frac: The fraction of data to use for computing the
+      threshold. The rest will be used for computing the bound.
+    seed: The seed for the random number generator. If None, a seed will be
+      chosen non-deterministically.
+  """
+
+  threshold_estimation_frac: float = 0.5
+  seed: int | None = None
 
 
 def _one_shot_p_value(
@@ -166,7 +201,7 @@ def _log_sub(x, y):
 
 def _clopper_pearson_upper(
     k: int | np.ndarray, n: int, alpha: float
-) -> float | np.ndarray:
+) -> np.ndarray:
   """Computes Clopper-Pearson one-sided upper binomial confidence interval.
 
   Args:
@@ -176,9 +211,9 @@ def _clopper_pearson_upper(
 
   Returns:
     A value p such that the probability of observing k or fewer successes out of
-    n Bernoilli(p) trials is approximately alpha.
+    n Bernoulli(p) trials is approximately alpha.
   """
-  return scipy.stats.beta.ppf(1 - alpha, k + 1, n - k)
+  return np.where(k < n, scipy.stats.beta.ppf(1 - alpha, k + 1, n - k), 1.0)
 
 
 def _pareto_frontier(points: np.ndarray) -> np.ndarray:
@@ -343,6 +378,68 @@ def _epsilon_raw_counts_helper(
     )
 
 
+def _epsilon_lower_bound_helper(
+    tn_counts: np.typing.ArrayLike,
+    fn_counts: np.typing.ArrayLike,
+    alpha: float,
+    delta: float,
+    one_sided: bool,
+    *,
+    n_pos: int | None = None,
+    n_neg: int | None = None,
+) -> tuple[int, float]:
+  """Estimates epsilon given true and false counts at each threshold."""
+  fn_counts = np.atleast_1d(fn_counts)
+  tn_counts = np.atleast_1d(tn_counts)
+  if n_pos is None:
+    n_pos = fn_counts[-1]
+  if n_neg is None:
+    n_neg = tn_counts[-1]
+
+  fnr_ubs = _clopper_pearson_upper(fn_counts, n_pos, alpha / 2)
+  tpr_lbs = 1 - fnr_ubs
+  fp_counts = n_neg - tn_counts
+  fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, alpha / 2)
+
+  best_idx = -1
+  best_val = 0.0
+
+  # We want to ignore invalid values in the log here. If (tpr - delta) is less
+  # or equal to zero, the bound is invalid. Let it return np.nan or -np.inf
+  # and we will filter it with np.nanmax.
+  with np.errstate(divide='ignore', invalid='ignore'):
+    # tpr_lbs are descending, so if any bounds are valid, the first one is.
+    if tpr_lbs[0] > delta:
+      vals = np.log(tpr_lbs - delta) - np.log(fpr_ubs)
+      best_idx = np.nanargmax(vals)
+      best_val = vals[best_idx]
+    if not one_sided:
+      tnr_lbs = 1 - fpr_ubs
+      # tnr_lbs are descending, so if any bounds are valid, the first one is.
+      if tnr_lbs[0] > delta:
+        vals = np.log(tnr_lbs - delta) - np.log(fnr_ubs)
+        alt_best_idx = np.nanargmax(vals)
+        if vals[alt_best_idx] > best_val:
+          best_idx = alt_best_idx
+          best_val = vals[alt_best_idx]
+
+  return best_idx, best_val
+
+
+def _random_partition(
+    scores: np.ndarray,
+    rng: np.random.Generator,
+    p: float,
+) -> tuple[np.ndarray, np.ndarray]:
+  """Randomly splits a score array into two parts."""
+  if not 0 < p < 1:
+    raise ValueError(f'p must be in (0, 1), got {p}.')
+
+  perm = rng.permutation(len(scores))
+  split_idx = int(len(scores) * p)
+  return scores[perm[:split_idx]], scores[perm[split_idx:]]
+
+
 class CanaryScoreAuditor:
   """Class for auditing privacy based on attack scores.
 
@@ -430,6 +527,8 @@ class CanaryScoreAuditor:
       alpha: float,
       delta: float = 0,
       one_sided: bool = True,
+      *,
+      threshold_strategy: ThresholdStrategy = Bonferroni(),
   ) -> float:
     """Finds epsilon lower bound from scores of held-in/held-out canaries.
 
@@ -439,6 +538,8 @@ class CanaryScoreAuditor:
       alpha: Allowed probability of failure (one minus confidence).
       delta: Approximate DP delta.
       one_sided: Whether to use only TPR/FPR (vs. max of TPR/FPR and TNR/FNR).
+      threshold_strategy: How to select the threshold to use for the epsilon
+        estimate.
 
     Returns:
       Optimal epsilon lower bound.
@@ -451,26 +552,45 @@ class CanaryScoreAuditor:
     n_pos = self._fn_counts[-1]
     n_neg = self._tn_counts[-1]
 
-    n = len(self._fn_counts)
+    helper = functools.partial(
+        _epsilon_lower_bound_helper,
+        delta=delta,
+        one_sided=one_sided,
+    )
 
-    # Apply Bonferroni correction, dividing alpha by the total number of bounds.
-    fnr_ubs = _clopper_pearson_upper(self._fn_counts, n_pos, alpha / (2 * n))
-    tpr_lbs = 1 - fnr_ubs
-    fp_counts = n_neg - self._tn_counts
-    fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, alpha / (2 * n))
-
-    # We want to ignore invalid values in the log here. If (tpr - delta) is less
-    # or equal to zero, the bound is invalid. Let it return np.nan or -np.inf
-    # and we will filter it with np.nanmax.
-    with np.errstate(divide='ignore', invalid='ignore'):
-      bound = np.nanmax(np.log(tpr_lbs - delta) - np.log(fpr_ubs), initial=0)
-      if not one_sided:
-        tnr_lbs = 1 - fpr_ubs
-        bound = np.nanmax(
-            np.log(tnr_lbs - delta) - np.log(fnr_ubs), initial=bound
+    match threshold_strategy:
+      case Explicit(threshold):
+        tn_count = np.sum(self._out_canary_scores < threshold)
+        fn_count = np.sum(self._in_canary_scores < threshold)
+        _, best_val = helper(
+            tn_count, fn_count, alpha, n_pos=n_pos, n_neg=n_neg
         )
-
-    return bound
+        return best_val
+      case Split(threshold_estimation_frac=p, seed=seed):
+        rng = np.random.default_rng(seed)
+        in_scores_1, in_scores_2 = _random_partition(
+            self._in_canary_scores, rng, p
+        )
+        out_scores_1, out_scores_2 = _random_partition(
+            self._out_canary_scores, rng, p
+        )
+        auditor_1 = CanaryScoreAuditor(in_scores_1, out_scores_1)
+        # pylint: disable=protected-access
+        best_idx, _ = helper(auditor_1._tn_counts, auditor_1._fn_counts, alpha)
+        threshold = auditor_1._thresholds[best_idx]
+        # pylint: enable=protected-access
+        auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
+        return auditor_2.epsilon_lower_bound(
+            alpha, delta, one_sided, threshold_strategy=Explicit(threshold)
+        )
+      case Bonferroni():
+        alpha_bonferroni = alpha / len(self._fn_counts)
+        _, best_val = helper(self._tn_counts, self._fn_counts, alpha_bonferroni)
+        return best_val
+      case _:
+        raise ValueError(
+            f'Unsupported threshold strategy: {threshold_strategy}.'
+        )
 
   def epsilon_raw_counts(
       self,

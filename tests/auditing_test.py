@@ -259,11 +259,37 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     np.testing.assert_equal(fn_counts, [0, 4])
 
   @parameterized.product(
+      n_in=(10, 100, 1000),
+      out_samples_ratio=(0.5, 1.0, 1.5),
+      thresh=(0, 0.5, 1.0),
+  )
+  def test_epsilon_lower_bound_explicit(self, n_in, out_samples_ratio, thresh):
+    rng = np.random.default_rng(seed=0xBAD5EED)
+    in_canary_scores = rng.normal(1, 1, n_in)
+    n_out = int(n_in * out_samples_ratio)
+    out_canary_scores = rng.normal(0, 1, n_out)
+    alpha = 0.1
+
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    strategy = auditing.Explicit(thresh)
+    eps = auditor.epsilon_lower_bound(alpha, threshold_strategy=strategy)
+
+    fn = np.sum(in_canary_scores < thresh)
+    fp = np.sum(out_canary_scores > thresh)
+    tpr_lb = 1 - auditing._clopper_pearson_upper(fn, n_in, alpha / 2)
+    fpr_ub = auditing._clopper_pearson_upper(fp, n_out, alpha / 2)
+    expected_eps = np.log(tpr_lb / fpr_ub)
+    np.testing.assert_allclose(eps, expected_eps)
+
+  @parameterized.product(
       one_sided=(True, False),
       mu=(0.3, 1.0, 1.5),
       out_samples_ratio=(0.5, 1.0, 1.5),
+      threshold_strategy=(auditing.Bonferroni(), auditing.Split(seed=0)),
   )
-  def test_epsilon_lower_bound_tight(self, one_sided, mu, out_samples_ratio):
+  def test_epsilon_lower_bound_tight(
+      self, one_sided, mu, out_samples_ratio, threshold_strategy
+  ):
     rng = np.random.default_rng(seed=0xBAD5EED)
 
     # Large alpha and delta and lots of samples gets us close to the true eps.
@@ -274,7 +300,9 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     in_canary_scores = rng.normal(mu, 1, in_samples)
     out_canary_scores = rng.normal(0, 1, out_samples)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
-    eps_lb = auditor.epsilon_lower_bound(alpha, delta, one_sided)
+    eps_lb = auditor.epsilon_lower_bound(
+        alpha, delta, one_sided, threshold_strategy=threshold_strategy
+    )
     true_eps = dp_accounting.get_epsilon_gaussian(1 / mu, delta)
     np.testing.assert_array_less(eps_lb, true_eps)
     np.testing.assert_allclose(eps_lb, true_eps, rtol=0.2)
