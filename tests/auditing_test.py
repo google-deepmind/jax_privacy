@@ -26,7 +26,11 @@ import scipy.stats
 _binom = scipy.stats.binom
 _logistic = scipy.special.expit
 
-_signed_area = auditing._signed_area
+
+def _signed_area(a, b, c):
+  """Computes (twice) the signed area of the triangle formed by three points."""
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
 
 _rotations = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
 _inversions = [[0, 2, 1], [1, 0, 2], [2, 1, 0]]
@@ -136,36 +140,36 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_pareto_frontier_two_points(self):
     points = np.array([[0, 0], [1, 1]])
     frontier = auditing._pareto_frontier(points)
-    np.testing.assert_equal(frontier, points)
+    np.testing.assert_equal(frontier, [0, 1])
 
   def test_pareto_frontier_linear(self):
     n = 100
     points = np.stack([range(n), range(n)], axis=1)
     frontier = auditing._pareto_frontier(points)
-    np.testing.assert_equal(frontier, points[[0, -1]])
+    np.testing.assert_equal(frontier, [0, n - 1])
 
   def test_pareto_frontier_simple_1(self):
     points = np.array([[0, 0], [0, 2], [3, 2], [3, 5], [5, 5]])
     frontier = auditing._pareto_frontier(points)
-    np.testing.assert_equal(frontier, points[[0, 1, 3, 4]])
+    np.testing.assert_equal(frontier, [0, 1, 3, 4])
 
   def test_pareto_frontier_simple_2(self):
     points = np.array([[0, 0], [0, 2], [2, 2], [2, 3], [3, 3], [3, 5], [5, 5]])
     frontier = auditing._pareto_frontier(points)
     # Should not contain [3, 3], which is dominated by [0, 2] and [3, 5].
-    np.testing.assert_equal(frontier, points[[0, 1, 5, 6]])
+    np.testing.assert_equal(frontier, [0, 1, 5, 6])
 
   def test_pareto_frontier_simple_3(self):
     points = np.array([[0, 0], [0, 2], [1, 2], [1, 4], [3, 4], [3, 5], [5, 5]])
     frontier = auditing._pareto_frontier(points)
     # Should contain [1, 4], which is not dominated by [0, 2] and [3, 5].
-    np.testing.assert_equal(frontier, points[[0, 1, 3, 5, 6]])
+    np.testing.assert_equal(frontier, [0, 1, 3, 5, 6])
 
   def test_pareto_frontier_simple_4(self):
     points = np.array([[0, 0], [0, 2], [1, 2], [1, 3], [2, 3], [2, 4], [4, 4]])
     frontier = auditing._pareto_frontier(points)
     # Should not contain [1, 3], which is a combination of [0, 2] and [2, 4].
-    np.testing.assert_equal(frontier, points[[0, 1, 5, 6]])
+    np.testing.assert_equal(frontier, [0, 1, 5, 6])
 
   @parameterized.named_parameters(
       ('increasing', np.sin, np.pi / 2),
@@ -173,11 +177,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       ('increasing_and_decreasing', np.sin, np.pi),
   )
   def test_pareto_frontier_convex(self, fn, bound):
-    xs = np.linspace(0, bound, 100)
+    n = 100
+    xs = np.linspace(0, bound, n)
     points = np.stack([xs, fn(xs)], axis=1)
     frontier = auditing._pareto_frontier(points)
     # On a convex function, the frontier should be the same as the points.
-    np.testing.assert_almost_equal(frontier, points)
+    np.testing.assert_almost_equal(frontier, np.arange(n))
 
   @parameterized.named_parameters(
       ('increasing', lambda x: -np.cos(x), np.pi / 2),
@@ -185,11 +190,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       ('decreasing_and_increasing', lambda x: -np.sin(x), np.pi),
   )
   def test_pareto_frontier_concave(self, fn, bound):
-    xs = np.linspace(0, bound, 100)
+    n = 100
+    xs = np.linspace(0, bound, n)
     points = np.stack([xs, fn(xs)], axis=1)
     frontier = auditing._pareto_frontier(points)
     # On a concave function, the frontier should be the first and last points.
-    np.testing.assert_almost_equal(frontier, points[[0, -1]])
+    np.testing.assert_almost_equal(frontier, [0, n - 1])
 
   @parameterized.parameters(range(10))
   def test_pareto_frontier_random(self, seed):
@@ -201,11 +207,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     frontier = auditing._pareto_frontier(points)
 
     # Compare to simple cubic time algorithm.
-    is_frontier = [True] * n
-    for i, j, k in itertools.combinations(range(n), 3):
-      if _signed_area(points[i], points[j], points[k]) >= 0:
-        is_frontier[j] = False
-    expected_frontier = points[is_frontier]
+    dominated_indices = {
+        j
+        for i, j, k in itertools.combinations(range(n), 3)
+        if _signed_area(points[i], points[j], points[k]) >= 0
+    }
+    expected_frontier = sorted(set(range(n)) - dominated_indices)
 
     np.testing.assert_almost_equal(frontier, expected_frontier)
 
@@ -214,36 +221,40 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     np.random.shuffle(in_canary_scores)
     out_canary_scores = np.arange(4)
     np.random.shuffle(out_canary_scores)
-    tn_counts, fn_counts = auditing._get_tn_fn_counts(
+    thresholds, tn_counts, fn_counts = auditing._get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
+    np.testing.assert_equal(thresholds, [0, 0.5, 3.5, np.inf])
     np.testing.assert_equal(tn_counts, [0, 1, 4, 4])
     np.testing.assert_equal(fn_counts, [0, 0, 3, 4])
 
   def test_get_tn_fn_counts_ties_convex(self):
     in_canary_scores = [0, 1, 1, 2]
     out_canary_scores = [0, 0, 1, 1]
-    tn_counts, fn_counts = auditing._get_tn_fn_counts(
+    thresholds, tn_counts, fn_counts = auditing._get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
+    np.testing.assert_equal(thresholds, [0, 1, 2, np.inf])
     np.testing.assert_equal(tn_counts, [0, 2, 4, 4])
     np.testing.assert_equal(fn_counts, [0, 1, 3, 4])
 
   def test_get_tn_fn_counts_ties_nonconvex(self):
     in_canary_scores = [0, 0, 1, 2]
     out_canary_scores = [0, 1, 1, 1]
-    tn_counts, fn_counts = auditing._get_tn_fn_counts(
+    thresholds, tn_counts, fn_counts = auditing._get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
+    np.testing.assert_equal(thresholds, [0, 2, np.inf])
     np.testing.assert_equal(tn_counts, [0, 4, 4])
     np.testing.assert_equal(fn_counts, [0, 3, 4])
 
   def test_get_tn_fn_counts_zeros(self):
     in_canary_scores = np.zeros(4)
     out_canary_scores = np.zeros(4)
-    tn_counts, fn_counts = auditing._get_tn_fn_counts(
+    thresholds, tn_counts, fn_counts = auditing._get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
+    np.testing.assert_equal(thresholds, [0, np.inf])
     np.testing.assert_equal(tn_counts, [0, 4])
     np.testing.assert_equal(fn_counts, [0, 4])
 
@@ -282,7 +293,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     out_samples = int(in_samples * out_samples_ratio)
     in_canary_scores = rng.normal(1, 1, in_samples)
     out_canary_scores = rng.normal(0, 1, out_samples)
-    tn_counts, fn_counts = auditing._get_tn_fn_counts(
+    _, tn_counts, fn_counts = auditing._get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
     eps = auditing._epsilon_raw_counts_helper(

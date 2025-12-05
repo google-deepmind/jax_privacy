@@ -25,8 +25,6 @@ from concurrent import futures
 import dataclasses
 from typing import Callable
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 import scipy.optimize
 import scipy.special
@@ -183,41 +181,8 @@ def _clopper_pearson_upper(
   return scipy.stats.beta.ppf(1 - alpha, k + 1, n - k)
 
 
-@jax.jit
-def _signed_area(a, b, c):
-  """Computes (twice) the signed area of the triangle formed by three points."""
-  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-
-
-@jax.jit
-def _pareto_frontier_jax(points: jnp.ndarray) -> tuple[jnp.ndarray, jax.Array]:
-  """JAX implementation of _pareto_frontier."""
-
-  # Use the simple linear-time algorithm of Graham & Yao (1983).
-
-  def scan_fn(carry, point):
-    hull, n = carry
-
-    def cond_fn(n):
-      return (n > 1) & (_signed_area(hull[n - 2], hull[n - 1], point) >= 0)
-
-    # Pop points from the end of the hull until the current point makes a
-    # clockwise turn from the last two.
-    n = jax.lax.while_loop(cond_fn, lambda n: n - 1, n)
-
-    hull = hull.at[n].set(point)  # Add the current point.
-    return (hull, n + 1), None
-
-  n = 2  # Number of points in the hull.
-  hull = jnp.empty_like(points)
-  hull = hull.at[:n].set(points[:n])
-
-  (hull, n), _ = jax.lax.scan(scan_fn, (hull, n), points[n:])
-  return hull, n  # pytype: disable=bad-return-type  # lax-types
-
-
 def _pareto_frontier(points: np.ndarray) -> np.ndarray:
-  """Computes the pareto frontier of a piecewise linear function.
+  """Computes the indices of the pareto frontier of a piecewise linear function.
 
   Given a piecewise linear function defined by a sequence of points, computes
   the set of points that are not weakly linearly dominated by any pair of outer
@@ -231,8 +196,8 @@ def _pareto_frontier(points: np.ndarray) -> np.ndarray:
       coordinate.
 
   Returns:
-    A numpy array of shape (M, 2) with 2 <= M <= N, containing the subset of
-    vertices_np on the pareto frontier.
+    A numpy array of length M with 2 <= M <= N, containing the indices of the
+    vertices on the pareto frontier.
   """
   if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 2:
     raise ValueError(f'Expected at least two 2D points, got {points.shape}.')
@@ -240,14 +205,29 @@ def _pareto_frontier(points: np.ndarray) -> np.ndarray:
   if not np.all(points[:-1, 0] <= points[1:, 0]):
     raise ValueError('Expected points to be sorted by x-coordinate.')
 
-  hull, n = _pareto_frontier_jax(jnp.array(points))
-  return np.array(hull[:n])
+  indices = np.arange(points.shape[0])
+  while True:
+    if len(indices) <= 2:
+      break
+
+    diff = np.diff(points[indices], axis=0)
+    cross_product = diff[:-1, 1] * diff[1:, 0] - diff[1:, 1] * diff[:-1, 0]
+    dominated_mask = cross_product <= 0
+
+    # If no points are dominated in this pass, the hull is stable.
+    if not np.any(dominated_mask):
+      break
+
+    keep_mask = np.r_[True, ~dominated_mask, True]
+    indices = indices[keep_mask]
+
+  return indices
 
 
 def _get_tn_fn_counts(
     in_canary_scores: Sequence[float],
     out_canary_scores: Sequence[float],
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
   """Computes true negative and false negative counts at each threshold.
 
   Args:
@@ -255,7 +235,8 @@ def _get_tn_fn_counts(
     out_canary_scores: Attack scores of held-out canaries.
 
   Returns:
-    A tuple (true negative counts, false negative counts) for each threshold.
+    A tuple (thresholds, true negative counts, false negative counts) for each
+    threshold.
   """
   in_scores = np.asarray(in_canary_scores)
   out_scores = np.asarray(out_canary_scores)
@@ -282,10 +263,8 @@ def _get_tn_fn_counts(
   tn_counts = np.searchsorted(out_sorted, thresholds, side='left')
 
   counts = np.stack([fn_counts, tn_counts], axis=1)
-  counts = _pareto_frontier(counts)
-  fn_counts, tn_counts = np.unstack(counts, axis=1)
-
-  return tn_counts, fn_counts
+  indices = _pareto_frontier(counts)
+  return thresholds[indices], tn_counts[indices], fn_counts[indices]
 
 
 def _tpr_at_given_fpr(
@@ -410,7 +389,7 @@ class CanaryScoreAuditor:
     if self._out_canary_scores.size == 0:
       raise ValueError('out_canary_scores must be non-empty.')
 
-    self._tn_counts, self._fn_counts = _get_tn_fn_counts(
+    self._thresholds, self._tn_counts, self._fn_counts = _get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
 
