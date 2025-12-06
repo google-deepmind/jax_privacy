@@ -225,6 +225,13 @@ def _pareto_frontier(points: np.ndarray) -> np.ndarray:
   points (x_i, y_i) for which there do not exist j < i and k > i and number a
   with 0 <= a <= 1 such that x_i = (1-a)x_j + ax_k and y_i <= (1-a)y_j + ay_k.
 
+  The algorithm iteratively discards points that are dominated by their
+  neighbors. Each iteration uses fast vectorized operations. It could be O(N^2)
+  in pathological cases, but in practice it is very fast. If it needs to be
+  optimized, Gemini suggests using a block-based divide and conquer approach:
+  run the algorithm on blocks of about 1000 points and then run it again on the
+  merged results.
+
   Args:
     points: An array of shape (N, 2) with N >= 2 containing the vertices
       defining the segments of the piecewise linear function, sorted by x
