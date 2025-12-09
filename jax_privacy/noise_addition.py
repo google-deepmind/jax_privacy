@@ -125,6 +125,7 @@ def matrix_factorization_privatizer(
     *,
     stddev: float,
     prng_key: jax.Array | int | None = None,
+    dtype: jax.typing.DTypeLike | None = None,
     intermediate_strategy: SupportedStrategies = SupportedStrategies.DEFAULT,
 ) -> optax.GradientTransformation:
   """Creates a gradient privatizer that adds correlated noise to gradients.
@@ -146,6 +147,9 @@ def matrix_factorization_privatizer(
       matrix `noising_matrix.T @ noising_matrix`.
     stddev: Standard deviation to use for the noise of this privatizer.
     prng_key: An optional PRNGKey array representing the source of randomness.
+    dtype: The dtype to use for intermediate noise. If specified, noise will be
+      generated with this dtype, added to the input gradient according to normal
+      jax type promotion rules, and then cast back to the gradient dtype.
     intermediate_strategy: Strategy to use for generating intermediate noise.
 
   Returns:
@@ -165,8 +169,13 @@ def matrix_factorization_privatizer(
   else:
     raise NotImplementedError('Unsupported noising_matrix: ', noising_matrix)
 
-  strat: _IntermediateStrategy = intermediate_strategy.value
-  return impl(noising_matrix, prng_key=prng_key, stddev=stddev, strategy=strat)
+  return impl(
+      noising_matrix,
+      prng_key=prng_key,
+      stddev=stddev,
+      strategy=intermediate_strategy.value,
+      dtype=dtype
+  )
 
 
 gaussian_privatizer = functools.partial(
@@ -216,6 +225,7 @@ def _dense_matrix_factorization_privatizer(
     stddev: float,
     prng_key: jax.Array,
     strategy: _IntermediateStrategy,
+    dtype: jax.typing.DTypeLike | None = None,
 ) -> optax.GradientTransformation:
   """Creates a gradient privatizer from a dense matrix C^{-1}."""
   # See Section 4.4.5 of https://arxiv.org/pdf/2506.08201 (Approach 2)
@@ -233,6 +243,7 @@ def _dense_matrix_factorization_privatizer(
         rng_key=prng_key,
         target_tree=target,
         sampler=functools.partial(_gaussian_linear_combination, matrix_row),
+        dtype=dtype
     )
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, noise)
     return noisy_grads, index + 1
@@ -241,11 +252,12 @@ def _dense_matrix_factorization_privatizer(
   return optax.GradientTransformation(init, privatize)
 
 
-def _iid_normal_noise(prng_key, target_tree, stddev):
+def _iid_normal_noise(prng_key, target_tree, stddev, dtype=None):
   standard_normal = optax.tree.random_like(
       rng_key=prng_key,
       target_tree=target_tree,
       sampler=jax.random.normal,
+      dtype=dtype
   )
   return optax.tree.scale(stddev, standard_normal)
 
@@ -256,6 +268,7 @@ def _streaming_matrix_factorization_privatizer(
     stddev: float,
     prng_key: jax.Array,
     strategy: _IntermediateStrategy,
+    dtype: jax.typing.DTypeLike | None = None,
 ) -> optax.GradientTransformation:
   """Creates a a gradient privatizer from a StreamingMatrix C^{-1}."""
 
@@ -268,7 +281,7 @@ def _streaming_matrix_factorization_privatizer(
     new_key, sub_key = jax.random.split(prng_key)
 
     target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
-    iid_noise = _iid_normal_noise(sub_key, target, stddev)
+    iid_noise = _iid_normal_noise(sub_key, target, stddev, dtype)
     corr_noise, new_state = noising_matrix.multiply_next(iid_noise, inner_state)
 
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, corr_noise)
