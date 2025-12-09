@@ -19,7 +19,9 @@ import chex
 import jax
 from jax import numpy as jnp
 from jax_privacy import noise_addition
+from jax_privacy.matrix_factorization import buffered_toeplitz
 from jax_privacy.matrix_factorization import streaming_matrix
+from jax_privacy.matrix_factorization import toeplitz
 import numpy as np
 import optax
 import scipy.stats
@@ -251,6 +253,31 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
       noise0, state0 = privatizer0.update(params, state0)
       noise1, state1 = privatizer1.update(params, state1)
       chex.assert_trees_all_close(noise0, noise1, atol=1e-5)
+
+  @parameterized.parameters(['banded', 'blt'])
+  def test_identity_banded_blt_exact_match(self, name):
+    identity = streaming_matrix.identity()
+    if name == 'banded':
+      noising_matrix = toeplitz.inverse_as_streaming_matrix(jnp.array([1]))
+    else:
+      noising_matrix = (
+          buffered_toeplitz.BufferedToeplitz.build([], [], dtype=jnp.float32)
+          .inverse_as_streaming_matrix()
+      )
+
+    def get_noise_sample(noising_matrix):
+      privatizer = noise_addition.matrix_factorization_privatizer(
+          noising_matrix=noising_matrix, prng_key=0, stddev=1.0
+      )
+      params = jnp.zeros(10)
+      state = privatizer.init(params)
+      noise, _ = privatizer.update(params, state)
+      return noise
+
+    # We expect the noise to be the same, not just statistically similar.
+    chex.assert_trees_all_close(
+        get_noise_sample(identity), get_noise_sample(noising_matrix),
+    )
 
 
 if __name__ == '__main__':
