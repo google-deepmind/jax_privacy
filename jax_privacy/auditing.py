@@ -26,6 +26,7 @@ import dataclasses
 import functools
 from typing import Callable
 
+import dp_accounting
 import numpy as np
 import scipy.optimize
 import scipy.special
@@ -135,6 +136,69 @@ def _epsilon_one_shot(
       eps_min,
       eps_max,
   )
+
+
+@functools.lru_cache(maxsize=1000)
+def _gaussian_dp_blow_up_inverse(
+    eps: float, delta: float
+) -> Callable[[float], float]:
+  """Computes the inverse of the Gaussian differential privacy blow-up."""
+  sigma = dp_accounting.get_sigma_gaussian(eps, delta)
+  if sigma == 0:
+    return lambda x: float(x == 1.0)
+  else:
+    return lambda x: _norm.cdf(_norm.ppf(x) - 1 / sigma)
+
+
+def _get_eps_bound(
+    eps_lo: float, m: int, tp: int, fp: int, significance: float, delta: float
+) -> float:
+  """Computes the epsilon bound for a given number of true and false positives.
+
+  See https://arxiv.org/pdf/2410.22235 for details.
+
+  Args:
+    eps_lo: Smallest epsilon value to consider.
+    m: The number of canaries.
+    tp: The number of true positives.
+    fp: The number of false positives.
+    significance: The significance level.
+    delta: DP delta parameter.
+
+  Returns:
+    The highest epsilon for which the (epsilon, delta) claim is falsified, or
+    eps_lo if the claim is not falsified for any eps >= eps_lo.
+  """
+
+  c = tp
+  c_cap = tp + fp
+
+  def audit_objective(eps):
+    # Returns a positive value if attack scores falsify the f-DP claim.
+    # See 'audit_rh_with_cap' in https://arxiv.org/pdf/2410.22235.
+    blow_up_inv_fn = _gaussian_dp_blow_up_inverse(eps, delta)
+
+    r = significance * c / m
+    h = significance * (c_cap - c) / m
+
+    for i in range(c - 1, -1, -1):
+      h_new = max(h, blow_up_inv_fn(r))
+      if h == h_new:
+        # If h is unchanged, then neither h nor r can ever change afterward.
+        break
+      r_new = min(r + (i / (c_cap - i)) * (h_new - h), 1.0)
+      h, r = h_new, r_new
+
+    return r + h - c_cap / m
+
+  if audit_objective(eps_lo) <= 0:
+    return eps_lo
+
+  eps_hi = max(1.0, 2 * eps_lo)
+  while audit_objective(eps_hi) > 0:
+    eps_lo, eps_hi = eps_hi, eps_hi * 2
+
+  return _brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -852,3 +916,118 @@ class CanaryScoreAuditor:
       best_eps = max(best_eps, eps)
 
     return best_eps
+
+  def _search_all_thresholds(
+      self, significance: float, delta: float
+  ) -> tuple[float, float]:
+    """Finds the threshold that gives the best epsilon lower bound.
+
+    Args:
+      significance: Allowed probability of failure (one minus confidence).
+      delta: Approximate DP delta.
+
+    Returns:
+      The threshold that gives the best epsilon lower bound, and the best
+      epsilon lower bound.
+    """
+    best_eps = 0.0
+    best_idx = -1
+
+    n_pos = self._fn_counts[-1]
+    n_neg = self._tn_counts[-1]
+    m = n_pos + n_neg
+
+    tp_counts = n_pos - self._fn_counts
+    fp_counts = n_neg - self._tn_counts
+
+    # As a heuristic, search in order of decreasing precision bound, so later
+    # thresholds are likely to be ruled out without a full search over eps.
+    total_counts = tp_counts + fp_counts
+    prec_lbs = 1.0 - _clopper_pearson_upper(
+        fp_counts, total_counts, significance
+    )
+    sorted_indices = np.argsort(-prec_lbs)
+
+    for idx in sorted_indices:
+      if total_counts[idx] == 0:
+        continue
+
+      new_eps = _get_eps_bound(
+          best_eps, m, tp_counts[idx], fp_counts[idx], significance, delta
+      )
+
+      if new_eps > best_eps:
+        best_eps = new_eps
+        best_idx = idx
+
+    return self._thresholds[best_idx], best_eps
+
+  def epsilon_one_shot_fdp(
+      self,
+      significance: float,
+      delta: float,
+      one_sided: bool = True,
+      *,
+      threshold_strategy: ThresholdStrategy = Bonferroni(),
+  ) -> float:
+    """Computes lower bound on epsilon for a single round of auditing.
+
+    This is an implementation of the method from Mahloujifar et al. 2024,
+    "Auditing f-Differential Privacy in One Run":
+    https://arxiv.org/pdf/2410.22235.
+
+    Currently only one-sided hypotheses are supported ($k_- = 0$).
+
+    Args:
+      significance: Allowed probability of failure (one minus confidence).
+      delta: Approximate DP delta.
+      one_sided: Whether to consider only hypotheses with ($k_- = 0$). Must be
+        True.
+      threshold_strategy: How to select the threshold to use for the epsilon
+        estimate.
+
+    Returns:
+      The estimated epsilon lower bound.
+    """
+    if not 0 < significance < 1.0:
+      raise ValueError(f'significance must be in (0, 1.0), got {significance}.')
+    if not 0 < delta <= 1:
+      raise ValueError(f'delta must be in (0, 1], got {delta}.')
+    if not one_sided:
+      raise ValueError('one_sided must be True.')
+
+    match threshold_strategy:
+      case Explicit(threshold):
+        tp_count = np.sum(self._in_canary_scores >= threshold)
+        fp_count = np.sum(self._out_canary_scores >= threshold)
+        m = self._fn_counts[-1] + self._tn_counts[-1]
+        return _get_eps_bound(0, m, tp_count, fp_count, significance, delta)
+      case Split(threshold_estimation_frac=p, seed=seed):
+        rng = np.random.default_rng(seed)
+        in_scores_1, in_scores_2 = _random_partition(
+            self._in_canary_scores, rng, p
+        )
+        out_scores_1, out_scores_2 = _random_partition(
+            self._out_canary_scores, rng, p
+        )
+        auditor_1 = CanaryScoreAuditor(in_scores_1, out_scores_1)
+        # pylint: disable=protected-access
+        threshold, _ = auditor_1._search_all_thresholds(significance, delta)
+        # pylint: enable=protected-access
+        auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
+        return auditor_2.epsilon_one_shot_fdp(
+            significance,
+            delta,
+            one_sided,
+            threshold_strategy=Explicit(threshold),
+        )
+      case Bonferroni():
+        significance_bonferroni = significance / len(self._fn_counts)
+        _, best_val = self._search_all_thresholds(
+            significance_bonferroni, delta
+        )
+        return best_val
+      case _:
+        raise ValueError(
+            f'Unsupported threshold strategy: {threshold_strategy}.'
+        )

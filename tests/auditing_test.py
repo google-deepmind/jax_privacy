@@ -599,13 +599,18 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     self.assertAlmostEqual(p, naive_p)
 
   @parameterized.named_parameters(
-      ('zero', 0, 0),
-      ('one', 1, 1.13346),
-      ('two', 2, 2.311945),
-      ('four', 4, 4.395568),
+      ('zero', False, 0, 0),
+      ('zero_fdp', True, 0, 0),
+      ('one', False, 1, 1.13346),
+      ('one_fdp', True, 1, 2.164749),
+      ('two', False, 2, 2.311945),
+      ('two_fdp', True, 2, 4.7218075),
+      ('four', False, 4, 4.395568),
+      ('four_fdp', True, 4, 9.133752),
   )
-  def test_epsilon_one_shot_close(self, shift, expected_eps):
-    n = 10000
+  def test_epsilon_one_shot_close(self, use_fdp, shift, expected_eps):
+    method = 'epsilon_one_shot_fdp' if use_fdp else 'epsilon_one_shot'
+    n = 10_000
     # Scores deterministically distributed like Normal(0, 1).
     out_canary_scores = scipy.stats.norm.ppf(
         np.linspace(0, 1, n, endpoint=False) + 1 / (2 * n)
@@ -614,7 +619,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     significance = 0.05
     delta = 1e-6
-    eps = auditor.epsilon_one_shot(significance, delta)
+    eps = getattr(auditor, method)(significance, delta)
     np.testing.assert_allclose(eps, expected_eps, rtol=1e-5)
 
 
