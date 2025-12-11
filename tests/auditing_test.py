@@ -36,7 +36,7 @@ _rotations = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
 _inversions = [[0, 2, 1], [1, 0, 2], [2, 1, 0]]
 
 
-def _one_shot_p_value_naive(
+def _one_run_p_value_naive(
     m: int, n_guess: int, n_correct: int, eps: float, delta: float
 ) -> float:
   """Naive implementation of the one-shot p-value."""
@@ -88,16 +88,16 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   @parameterized.product(
       n=[10, 100, 1000],
       k_frac=[0.3, 0.4, 0.5, 0.8, 0.9],
-      alpha=[0.1, 0.03, 0.01],
+      significance=[0.1, 0.03, 0.01],
   )
-  def test_clopper_pearson_upper(self, n, k_frac, alpha):
+  def test_clopper_pearson_upper(self, n, k_frac, significance):
     trials = 1_000_000
     k = k_frac * n
-    p = auditing._clopper_pearson_upper(k, n, alpha)
+    p = auditing._clopper_pearson_upper(k, n, significance)
     rng = np.random.default_rng(seed=0xBAD5EED)
     np.testing.assert_allclose(
         np.mean(rng.binomial(n, p, size=trials) <= k),
-        alpha,
+        significance,
         rtol=0.05,
     )
 
@@ -263,21 +263,25 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       out_samples_ratio=(0.5, 1.0, 1.5),
       thresh=(0, 0.5, 1.0),
   )
-  def test_epsilon_lower_bound_explicit(self, n_in, out_samples_ratio, thresh):
+  def test_epsilon_clopper_pearson_explicit(
+      self, n_in, out_samples_ratio, thresh
+  ):
     rng = np.random.default_rng(seed=0xBAD5EED)
     in_canary_scores = rng.normal(1, 1, n_in)
     n_out = int(n_in * out_samples_ratio)
     out_canary_scores = rng.normal(0, 1, n_out)
-    alpha = 0.1
+    significance = 0.1
 
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     strategy = auditing.Explicit(thresh)
-    eps = auditor.epsilon_lower_bound(alpha, threshold_strategy=strategy)
+    eps = auditor.epsilon_clopper_pearson(
+        significance, threshold_strategy=strategy
+    )
 
     fn = np.sum(in_canary_scores < thresh)
     fp = np.sum(out_canary_scores > thresh)
-    tpr_lb = 1 - auditing._clopper_pearson_upper(fn, n_in, alpha / 2)
-    fpr_ub = auditing._clopper_pearson_upper(fp, n_out, alpha / 2)
+    tpr_lb = 1 - auditing._clopper_pearson_upper(fn, n_in, significance / 2)
+    fpr_ub = auditing._clopper_pearson_upper(fp, n_out, significance / 2)
     expected_eps = np.log(tpr_lb / fpr_ub)
     np.testing.assert_allclose(eps, expected_eps)
 
@@ -287,21 +291,19 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       out_samples_ratio=(0.5, 1.0, 1.5),
       threshold_strategy=(auditing.Bonferroni(), auditing.Split(seed=0)),
   )
-  def test_epsilon_lower_bound_tight(
+  def test_epsilon_clopper_pearson_tight(
       self, one_sided, mu, out_samples_ratio, threshold_strategy
   ):
     rng = np.random.default_rng(seed=0xBAD5EED)
-
-    # Large alpha and delta and lots of samples gets us close to the true eps.
-    alpha = 0.2
+    significance = 0.2
     delta = 0.1
     in_samples = 2_000_000
     out_samples = int(in_samples * out_samples_ratio)
     in_canary_scores = rng.normal(mu, 1, in_samples)
     out_canary_scores = rng.normal(0, 1, out_samples)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
-    eps_lb = auditor.epsilon_lower_bound(
-        alpha, delta, one_sided, threshold_strategy=threshold_strategy
+    eps_lb = auditor.epsilon_clopper_pearson(
+        significance, delta, one_sided, threshold_strategy=threshold_strategy
     )
     true_eps = dp_accounting.get_epsilon_gaussian(1 / mu, delta)
     np.testing.assert_array_less(eps_lb, true_eps)
@@ -490,16 +492,14 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   )
   def test_epsilon_from_gdp_tight(self, mu, out_samples_ratio):
     rng = np.random.default_rng(seed=0xBAD5EED)
-
-    # Large alpha and delta and lots of samples gets us close to the true eps.
-    alpha = 0.1
+    significance = 0.1
     delta = 5e-2
     in_samples = 500_000
     out_samples = int(in_samples * out_samples_ratio)
     in_canary_scores = rng.normal(mu, 1, in_samples)
     out_canary_scores = rng.normal(0, 1, out_samples)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
-    eps = auditor.epsilon_from_gdp(alpha, delta)
+    eps = auditor.epsilon_from_gdp(significance, delta)
     true_eps = dp_accounting.get_epsilon_gaussian(1 / mu, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=0.05)
 
@@ -572,7 +572,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       ('delta_gt_one', {'delta': 1.1}, 'delta'),
       ('one_sided_false', {'one_sided': False}, 'one_sided must be True'),
   )
-  def test_epsilon_one_shot_raises_invalid_args(
+  def test_epsilon_one_run_raises_invalid_args(
       self, override_args, error_regex
   ):
     args = {'significance': 0.1, 'delta': 0.1, 'one_sided': True}
@@ -581,7 +581,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         in_canary_scores=[1, 2, 3], out_canary_scores=[0, 1, 2]
     )
     with self.assertRaisesRegex(ValueError, error_regex):
-      auditor.epsilon_one_shot(**args)
+      auditor.epsilon_one_run(**args)
 
   @parameterized.product(
       m=(10, 100, 1000),
@@ -590,12 +590,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       eps=(0, 0.5, 1.0),
       delta=(0, 1e-6, 1e-3, 1e-1, 1),
   )
-  def test_one_shot_p_value(self, m, n_guess, n_wrong, eps, delta):
+  def test_one_run_p_value(self, m, n_guess, n_wrong, eps, delta):
     if not n_wrong <= n_guess <= m:
       return
     n_correct = n_guess - n_wrong
-    p = auditing._one_shot_p_value(m, n_guess, n_correct, eps, delta)
-    naive_p = _one_shot_p_value_naive(m, n_guess, n_correct, eps, delta)
+    p = auditing._one_run_p_value(m, n_guess, n_correct, eps, delta)
+    naive_p = _one_run_p_value_naive(m, n_guess, n_correct, eps, delta)
     self.assertAlmostEqual(p, naive_p)
 
   @parameterized.named_parameters(
@@ -608,8 +608,8 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       ('four', False, 4, 4.395568),
       ('four_fdp', True, 4, 9.133752),
   )
-  def test_epsilon_one_shot_close(self, use_fdp, shift, expected_eps):
-    method = 'epsilon_one_shot_fdp' if use_fdp else 'epsilon_one_shot'
+  def test_epsilon_one_run_close(self, use_fdp, shift, expected_eps):
+    method = 'epsilon_one_run_fdp' if use_fdp else 'epsilon_one_run'
     n = 10_000
     # Scores deterministically distributed like Normal(0, 1).
     out_canary_scores = scipy.stats.norm.ppf(

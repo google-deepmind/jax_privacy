@@ -58,18 +58,6 @@ class Explicit(ThresholdStrategy):
   threshold: float
 
 
-AuditAllThresholdsMethod: TypeAlias = Callable[
-    [
-        'CanaryScoreAuditor',  # self
-        float,  # significance
-        float,  # delta
-        bool,  # one_sided
-        float | None,  # threshold or None for all thresholds
-    ],
-    tuple[float, float] | float,
-]
-
-
 @dataclasses.dataclass(frozen=True)
 class Split(ThresholdStrategy):
   """Split data to choose threshold and then compute the bound.
@@ -85,7 +73,19 @@ class Split(ThresholdStrategy):
   seed: int | None = None
 
 
-def _one_shot_p_value(
+AuditAllThresholdsMethod: TypeAlias = Callable[
+    [
+        'CanaryScoreAuditor',  # self
+        float,  # significance
+        float,  # delta
+        bool,  # one_sided
+        float | None,  # threshold or None for all thresholds
+    ],
+    tuple[float, float] | float,
+]
+
+
+def _one_run_p_value(
     m: int, n_guess: int, n_correct: int, eps: float, delta: float
 ) -> float:
   """Computes p-value for one-shot audit.
@@ -114,7 +114,7 @@ def _one_shot_p_value(
   return min(beta + alpha * delta * 2 * m, 1)
 
 
-def _epsilon_one_shot(
+def _epsilon_one_run(
     eps_lo: float,
     m: int,
     n_guess: int,
@@ -138,14 +138,14 @@ def _epsilon_one_shot(
     The highest epsilon for which the (epsilon, delta) claim is falsified, or
     eps_lo if the claim is not falsified for any eps >= eps_lo.
   """
-  if _one_shot_p_value(m, n_guess, n_correct, eps_lo, 0) > significance:
+  if _one_run_p_value(m, n_guess, n_correct, eps_lo, 0) > significance:
     # Cheap fail fast: If even with delta=0 we can't reject the null at eps_lo,
     # we certainly can't reject it with delta > 0.
     return eps_lo
 
   def audit_objective(eps):
     # Returns a positive value if the (epsilon, delta) claim is falsified.
-    return significance - _one_shot_p_value(m, n_guess, n_correct, eps, delta)
+    return significance - _one_run_p_value(m, n_guess, n_correct, eps, delta)
 
   if audit_objective(eps_lo) <= 0:
     return eps_lo
@@ -169,7 +169,7 @@ def _gaussian_dp_blow_up_inverse(
     return lambda x: _norm.cdf(_norm.ppf(x) - 1 / sigma)
 
 
-def _epsilon_one_shot_fdp(
+def _epsilon_one_run_fdp(
     eps_lo: float,
     m: int,
     n_guess: int,
@@ -271,8 +271,8 @@ class BootstrapParams:
     """
     if not 0 < confidence < 1:
       raise ValueError(f'confidence must be in (0, 1), got {confidence}.')
-    alpha = 1 - confidence
-    quantiles = (alpha / 2, 1 - alpha / 2)
+    significance = 1 - confidence
+    quantiles = (significance / 2, 1 - significance / 2)
     return cls(num_samples=num_samples, quantiles=quantiles, seed=seed)
 
 
@@ -285,20 +285,22 @@ def _log_sub(x, y):
 
 
 def _clopper_pearson_upper(
-    k: int | np.ndarray, n: int, alpha: float
+    k: int | np.ndarray, n: int, significance: float
 ) -> np.ndarray:
   """Computes Clopper-Pearson one-sided upper binomial confidence interval.
 
   Args:
     k: The number of successes.
     n: The number of trials.
-    alpha: Allowed probability of failure (one minus confidence).
+    significance: Allowed probability of failure (one minus confidence).
 
   Returns:
     A value p such that the probability of observing k or fewer successes out of
-    n Bernoulli(p) trials is approximately alpha.
+    n Bernoulli(p) trials is approximately significance.
   """
-  return np.where(k < n, scipy.stats.beta.ppf(1 - alpha, k + 1, n - k), 1.0)
+  return np.where(
+      k < n, scipy.stats.beta.ppf(1 - significance, k + 1, n - k), 1.0
+  )
 
 
 def _pareto_frontier(points: np.ndarray) -> np.ndarray:
@@ -566,7 +568,7 @@ class CanaryScoreAuditor:
 
     return np.quantile(values, params.quantiles)
 
-  def _epsilon_lower_bound_all_thresholds(
+  def _epsilon_clopper_pearson_all_thresholds(
       self,
       significance: float,
       delta: float,
@@ -616,9 +618,9 @@ class CanaryScoreAuditor:
     else:
       return eps
 
-  def epsilon_lower_bound(
+  def epsilon_clopper_pearson(
       self,
-      alpha: float,
+      significance: float,
       delta: float = 0,
       one_sided: bool = True,
       *,
@@ -629,7 +631,7 @@ class CanaryScoreAuditor:
     Described in https://arxiv.org/pdf/2101.04535.
 
     Args:
-      alpha: Allowed probability of failure (one minus confidence).
+      significance: Allowed probability of failure (one minus confidence).
       delta: Approximate DP delta.
       one_sided: Whether to use only TPR/FPR (vs. max of TPR/FPR and TNR/FNR).
       threshold_strategy: How to select the threshold to use for the epsilon
@@ -638,15 +640,15 @@ class CanaryScoreAuditor:
     Returns:
       Optimal epsilon lower bound.
     """
-    if not 0 < alpha < 0.5:
-      raise ValueError(f'alpha must be in (0, 0.5), got {alpha}.')
+    if not 0 < significance < 0.5:
+      raise ValueError(f'significance must be in (0, 0.5), got {significance}.')
     if not 0 <= delta <= 1:
       raise ValueError(f'delta must be in [0, 1], got {delta}.')
 
     return self._audit_with_threshold_strategy(
         threshold_strategy,
-        CanaryScoreAuditor._epsilon_lower_bound_all_thresholds,
-        alpha,
+        CanaryScoreAuditor._epsilon_clopper_pearson_all_thresholds,
+        significance,
         delta,
         one_sided,
     )
@@ -775,7 +777,7 @@ class CanaryScoreAuditor:
 
   def epsilon_from_gdp(
       self,
-      alpha: float,
+      significance: float,
       delta: float,
       eps_tol: float = 1e-6,
   ) -> float:
@@ -785,7 +787,7 @@ class CanaryScoreAuditor:
     https://arxiv.org/pdf/2406.04827.
 
     Args:
-      alpha: Allowed probability of failure (one minus confidence).
+      significance: Allowed probability of failure (one minus confidence).
       delta: Approximate DP delta. Must be in (0, 1].
       eps_tol: The tolerance for epsilon (the privacy parameter). Defaults to
         1e-6.
@@ -793,8 +795,8 @@ class CanaryScoreAuditor:
     Returns:
         The estimated epsilon.
     """
-    if not 0 < alpha < 0.5:
-      raise ValueError(f'alpha must be in (0, 0.5), got {alpha}.')
+    if not 0 < significance < 0.5:
+      raise ValueError(f'significance must be in (0, 0.5), got {significance}.')
     if not 0 < delta <= 1:
       raise ValueError(f'delta must be in (0, 1], got {delta}.')
     if eps_tol <= 0:
@@ -805,10 +807,12 @@ class CanaryScoreAuditor:
 
     n = len(self._fn_counts)
 
-    # Apply Bonferroni correction, dividing alpha by the total number of bounds.
-    fnr_ubs = _clopper_pearson_upper(self._fn_counts, n_pos, alpha / (2 * n))
+    # Apply Bonferroni correction over 2 * n hypotheses.
+    fnr_ubs = _clopper_pearson_upper(
+        self._fn_counts, n_pos, significance / (2 * n)
+    )
     fp_counts = n_neg - self._tn_counts
-    fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, alpha / (2 * n))
+    fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, significance / (2 * n))
 
     bounds = np.stack([fpr_ubs, fnr_ubs], axis=1)
 
@@ -841,7 +845,7 @@ class CanaryScoreAuditor:
 
     return _brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
 
-  def _epsilon_one_shot_all_thresholds(
+  def _epsilon_one_run_all_thresholds(
       self,
       significance: float,
       delta: float,
@@ -854,9 +858,9 @@ class CanaryScoreAuditor:
       raise ValueError('one_sided must be True.')
 
     if use_fdp:
-      audit_fn = _epsilon_one_shot_fdp
+      audit_fn = _epsilon_one_run_fdp
     else:
-      audit_fn = _epsilon_one_shot
+      audit_fn = _epsilon_one_run
 
     n_pos = self._fn_counts[-1]
     n_neg = self._tn_counts[-1]
@@ -902,7 +906,7 @@ class CanaryScoreAuditor:
 
     return best_eps, self._thresholds[best_idx]
 
-  def epsilon_one_shot(
+  def epsilon_one_run(
       self,
       significance: float,
       delta: float,
@@ -937,13 +941,13 @@ class CanaryScoreAuditor:
 
     return self._audit_with_threshold_strategy(
         threshold_strategy,
-        CanaryScoreAuditor._epsilon_one_shot_all_thresholds,
+        CanaryScoreAuditor._epsilon_one_run_all_thresholds,
         significance,
         delta,
         one_sided,
     )
 
-  def epsilon_one_shot_fdp(
+  def epsilon_one_run_fdp(
       self,
       significance: float,
       delta: float,
@@ -980,7 +984,7 @@ class CanaryScoreAuditor:
     return self._audit_with_threshold_strategy(
         threshold_strategy,
         functools.partial(
-            CanaryScoreAuditor._epsilon_one_shot_all_thresholds,
+            CanaryScoreAuditor._epsilon_one_run_all_thresholds,
             use_fdp=True,
         ),
         significance,
