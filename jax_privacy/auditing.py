@@ -115,39 +115,46 @@ def _one_shot_p_value(
 
 
 def _epsilon_one_shot(
-    m: int, n_guess: int, n_correct: int, delta: float, p: float
+    eps_lo: float,
+    m: int,
+    n_guess: int,
+    n_correct: int,
+    significance: float,
+    delta: float,
 ) -> float:
   """Computes epsilon bound for one-shot audit for a given n_guess/n_correct.
 
   See https://arxiv.org/pdf/2305.08846 for details.
 
   Args:
+    eps_lo: Smallest epsilon value to consider.
     m: The number of canaries.
     n_guess: The number of guesses.
     n_correct: The number of correct guesses.
-    delta: The delta value to compute the p-value for.
-    p: The allowed probability of failure (one minus confidence).
+    significance: The significance level.
+    delta: DP delta parameter.
 
   Returns:
-    The optimal epsilon for one-shot audit.
+    The highest epsilon for which the (epsilon, delta) claim is falsified, or
+    eps_lo if the claim is not falsified for any eps >= eps_lo.
   """
-  eps_min = 0
-  if _one_shot_p_value(m, n_guess, n_correct, eps_min, delta) > p:
-    return 0
+  if _one_shot_p_value(m, n_guess, n_correct, eps_lo, 0) > significance:
+    # Cheap fail fast: If even with delta=0 we can't reject the null at eps_lo,
+    # we certainly can't reject it with delta > 0.
+    return eps_lo
 
-  if n_guess == n_correct:
-    eps_max = 1
-    while _one_shot_p_value(m, n_guess, n_correct, eps_max, delta) < p:
-      eps_min, eps_max = eps_max, eps_max + 1
-  else:
-    # Epsilon lower bound can be at most the empirical log-odds.
-    eps_max = np.log(n_correct / (n_guess - n_correct))
+  def audit_objective(eps):
+    # Returns a positive value if the (epsilon, delta) claim is falsified.
+    return significance - _one_shot_p_value(m, n_guess, n_correct, eps, delta)
 
-  return _brentq(
-      lambda eps: _one_shot_p_value(m, n_guess, n_correct, eps, delta) - p,
-      eps_min,
-      eps_max,
-  )
+  if audit_objective(eps_lo) <= 0:
+    return eps_lo
+
+  eps_hi = max(1.0, 2 * eps_lo)
+  while audit_objective(eps_hi) > 0:
+    eps_lo, eps_hi = eps_hi, eps_hi * 2
+
+  return _brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
 
 
 @functools.lru_cache(maxsize=1000)
@@ -162,8 +169,13 @@ def _gaussian_dp_blow_up_inverse(
     return lambda x: _norm.cdf(_norm.ppf(x) - 1 / sigma)
 
 
-def _get_eps_bound(
-    eps_lo: float, m: int, tp: int, fp: int, significance: float, delta: float
+def _epsilon_one_shot_fdp(
+    eps_lo: float,
+    m: int,
+    n_guess: int,
+    n_correct: int,
+    significance: float,
+    delta: float,
 ) -> float:
   """Computes the epsilon bound for a given number of true and false positives.
 
@@ -172,8 +184,8 @@ def _get_eps_bound(
   Args:
     eps_lo: Smallest epsilon value to consider.
     m: The number of canaries.
-    tp: The number of true positives.
-    fp: The number of false positives.
+    n_guess: The number of guesses.
+    n_correct: The number of correct guesses.
     significance: The significance level.
     delta: DP delta parameter.
 
@@ -182,26 +194,23 @@ def _get_eps_bound(
     eps_lo if the claim is not falsified for any eps >= eps_lo.
   """
 
-  c = tp
-  c_cap = tp + fp
-
   def audit_objective(eps):
     # Returns a positive value if attack scores falsify the f-DP claim.
     # See 'audit_rh_with_cap' in https://arxiv.org/pdf/2410.22235.
     blow_up_inv_fn = _gaussian_dp_blow_up_inverse(eps, delta)
 
-    r = significance * c / m
-    h = significance * (c_cap - c) / m
+    r = significance * n_correct / m
+    h = significance * (n_guess - n_correct) / m
 
-    for i in range(c - 1, -1, -1):
+    for i in range(n_correct - 1, -1, -1):
       h_new = max(h, blow_up_inv_fn(r))
       if h == h_new:
         # If h is unchanged, then neither h nor r can ever change afterward.
         break
-      r_new = min(r + (i / (c_cap - i)) * (h_new - h), 1.0)
+      r_new = min(r + (i / (n_guess - i)) * (h_new - h), 1.0)
       h, r = h_new, r_new
 
-    return r + h - c_cap / m
+    return r + h - n_guess / m
 
   if audit_objective(eps_lo) <= 0:
     return eps_lo
@@ -832,8 +841,74 @@ class CanaryScoreAuditor:
 
     return _brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
 
+  def _epsilon_one_shot_all_thresholds(
+      self,
+      significance: float,
+      delta: float,
+      one_sided: bool,
+      threshold: float | None = None,
+      use_fdp: bool = False,
+  ) -> float | tuple[float, float]:
+    """Computes the epsilon bound at one or all thresholds."""
+    if not one_sided:
+      raise ValueError('one_sided must be True.')
+
+    if use_fdp:
+      audit_fn = _epsilon_one_shot_fdp
+    else:
+      audit_fn = _epsilon_one_shot
+
+    n_pos = self._fn_counts[-1]
+    n_neg = self._tn_counts[-1]
+    m = n_pos + n_neg
+
+    if threshold is not None:
+      tp = np.sum(self._in_canary_scores >= threshold)
+      fp = np.sum(self._out_canary_scores >= threshold)
+      return audit_fn(0, m, tp + fp, tp, significance, delta)
+
+    tp_counts = n_pos - self._fn_counts
+    fp_counts = n_neg - self._tn_counts
+
+    # As a heuristic, search in order of decreasing precision bound, so later
+    # thresholds are likely to be ruled out without a full search over eps.
+    total_counts = tp_counts + fp_counts
+    prec_lbs = 1.0 - _clopper_pearson_upper(
+        fp_counts, total_counts, significance
+    )
+    sorted_indices = np.argsort(-prec_lbs)
+
+    best_eps = 0
+    best_idx = -1
+
+    for idx in sorted_indices:
+      n_guess = total_counts[idx]
+      n_correct = tp_counts[idx]
+
+      if n_guess == 0:
+        continue
+
+      required_q = _logistic(best_eps)
+      if n_correct / n_guess <= required_q:
+        # Precision is monotonically decreasing because we have filtered tp/fp
+        # to contain only the pareto frontier. If the mean is worse than the
+        # best epsilon we've seen so far, we can stop.
+        break
+
+      new_eps = audit_fn(best_eps, m, n_guess, n_correct, significance, delta)
+      if new_eps > best_eps:
+        best_eps = new_eps
+        best_idx = idx
+
+    return best_eps, self._thresholds[best_idx]
+
   def epsilon_one_shot(
-      self, significance: float, delta: float, one_sided: bool = True
+      self,
+      significance: float,
+      delta: float,
+      one_sided: bool = True,
+      *,
+      threshold_strategy: ThresholdStrategy = Bonferroni(),
   ) -> float:
     r"""Computes lower bound on epsilon for a single round of auditing.
 
@@ -847,6 +922,8 @@ class CanaryScoreAuditor:
       delta: Approximate DP delta.
       one_sided: Whether to consider only hypotheses with ($k_- = 0$). Must be
         True.
+      threshold_strategy: How to select the threshold to use for the epsilon
+        estimate.
 
     Returns:
       The estimated epsilon lower bound.
@@ -858,88 +935,13 @@ class CanaryScoreAuditor:
     if not one_sided:
       raise ValueError('one_sided must be True.')
 
-    n_pos = self._fn_counts[-1]
-    n_neg = self._tn_counts[-1]
-    m = n_pos + n_neg
-
-    # Reverse the order because low TP/FP thresholds are more likely to be
-    # optimal.
-    tp_counts = (n_pos - self._fn_counts)[::-1]
-    fp_counts = (n_neg - self._tn_counts)[::-1]
-
-    # Bonferroni correction on p, since we will maximize over thresholds.
-    p = significance / len(self._fn_counts)
-
-    best_eps = 0
-    for tp, fp in zip(tp_counts, fp_counts):
-      n_guess = tp + fp
-      n_correct = tp
-
-      if n_guess == 0:
-        continue
-
-      required_q = _logistic(best_eps)
-      if n_correct / n_guess <= required_q:
-        # Precision is monotonically decreasing because we have filtered tp/fp
-        # to contain only the pareto frontier. If the mean is worse than the
-        # best epsilon we've seen so far, we can stop.
-        break
-
-      optimistic_p = _binom.sf(n_correct - 1, n_guess, required_q)
-      if optimistic_p > p:
-        # If even with delta=0 we can't reject the null at max_epsilon, we
-        # certainly can't reject it with delta > 0.
-        continue
-
-      eps = _epsilon_one_shot(m, n_guess, n_correct, delta, p)
-      best_eps = max(best_eps, eps)
-
-    return best_eps
-
-  def _search_all_thresholds(
-      self, significance: float, delta: float
-  ) -> tuple[float, float]:
-    """Finds the threshold that gives the best epsilon lower bound.
-
-    Args:
-      significance: Allowed probability of failure (one minus confidence).
-      delta: Approximate DP delta.
-
-    Returns:
-      The threshold that gives the best epsilon lower bound, and the best
-      epsilon lower bound.
-    """
-    best_eps = 0.0
-    best_idx = -1
-
-    n_pos = self._fn_counts[-1]
-    n_neg = self._tn_counts[-1]
-    m = n_pos + n_neg
-
-    tp_counts = n_pos - self._fn_counts
-    fp_counts = n_neg - self._tn_counts
-
-    # As a heuristic, search in order of decreasing precision bound, so later
-    # thresholds are likely to be ruled out without a full search over eps.
-    total_counts = tp_counts + fp_counts
-    prec_lbs = 1.0 - _clopper_pearson_upper(
-        fp_counts, total_counts, significance
+    return self._audit_with_threshold_strategy(
+        threshold_strategy,
+        CanaryScoreAuditor._epsilon_one_shot_all_thresholds,
+        significance,
+        delta,
+        one_sided,
     )
-    sorted_indices = np.argsort(-prec_lbs)
-
-    for idx in sorted_indices:
-      if total_counts[idx] == 0:
-        continue
-
-      new_eps = _get_eps_bound(
-          best_eps, m, tp_counts[idx], fp_counts[idx], significance, delta
-      )
-
-      if new_eps > best_eps:
-        best_eps = new_eps
-        best_idx = idx
-
-    return self._thresholds[best_idx], best_eps
 
   def epsilon_one_shot_fdp(
       self,
@@ -975,41 +977,16 @@ class CanaryScoreAuditor:
     if not one_sided:
       raise ValueError('one_sided must be True.')
 
-    match threshold_strategy:
-      case Explicit(threshold):
-        tp_count = np.sum(self._in_canary_scores >= threshold)
-        fp_count = np.sum(self._out_canary_scores >= threshold)
-        m = self._fn_counts[-1] + self._tn_counts[-1]
-        return _get_eps_bound(0, m, tp_count, fp_count, significance, delta)
-      case Split(threshold_estimation_frac=p, seed=seed):
-        rng = np.random.default_rng(seed)
-        in_scores_1, in_scores_2 = _random_partition(
-            self._in_canary_scores, rng, p
-        )
-        out_scores_1, out_scores_2 = _random_partition(
-            self._out_canary_scores, rng, p
-        )
-        auditor_1 = CanaryScoreAuditor(in_scores_1, out_scores_1)
-        # pylint: disable=protected-access
-        threshold, _ = auditor_1._search_all_thresholds(significance, delta)
-        # pylint: enable=protected-access
-        auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
-        return auditor_2.epsilon_one_shot_fdp(
-            significance,
-            delta,
-            one_sided,
-            threshold_strategy=Explicit(threshold),
-        )
-      case Bonferroni():
-        significance_bonferroni = significance / len(self._fn_counts)
-        _, best_val = self._search_all_thresholds(
-            significance_bonferroni, delta
-        )
-        return best_val
-      case _:
-        raise ValueError(
-            f'Unsupported threshold strategy: {threshold_strategy}.'
-        )
+    return self._audit_with_threshold_strategy(
+        threshold_strategy,
+        functools.partial(
+            CanaryScoreAuditor._epsilon_one_shot_all_thresholds,
+            use_fdp=True,
+        ),
+        significance,
+        delta,
+        one_sided,
+    )
 
   def _audit_with_threshold_strategy(
       self,
