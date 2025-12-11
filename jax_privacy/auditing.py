@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from concurrent import futures
 import dataclasses
 import functools
-from typing import Callable
+from typing import Callable, TypeAlias
 
 import dp_accounting
 import numpy as np
@@ -56,6 +56,18 @@ class Explicit(ThresholdStrategy):
   """
 
   threshold: float
+
+
+AuditAllThresholdsMethod: TypeAlias = Callable[
+    [
+        'CanaryScoreAuditor',  # self
+        float,  # significance
+        float,  # delta
+        bool,  # one_sided
+        float | None,  # threshold or None for all thresholds
+    ],
+    tuple[float, float] | float,
+]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -449,54 +461,6 @@ def _epsilon_raw_counts_helper(
     )
 
 
-def _epsilon_lower_bound_helper(
-    tn_counts: np.typing.ArrayLike,
-    fn_counts: np.typing.ArrayLike,
-    alpha: float,
-    delta: float,
-    one_sided: bool,
-    *,
-    n_pos: int | None = None,
-    n_neg: int | None = None,
-) -> tuple[int, float]:
-  """Estimates epsilon given true and false counts at each threshold."""
-  fn_counts = np.atleast_1d(fn_counts)
-  tn_counts = np.atleast_1d(tn_counts)
-  if n_pos is None:
-    n_pos = fn_counts[-1]
-  if n_neg is None:
-    n_neg = tn_counts[-1]
-
-  fnr_ubs = _clopper_pearson_upper(fn_counts, n_pos, alpha / 2)
-  tpr_lbs = 1 - fnr_ubs
-  fp_counts = n_neg - tn_counts
-  fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, alpha / 2)
-
-  best_idx = -1
-  best_val = 0.0
-
-  # We want to ignore invalid values in the log here. If (tpr - delta) is less
-  # or equal to zero, the bound is invalid. Let it return np.nan or -np.inf
-  # and we will filter it with np.nanmax.
-  with np.errstate(divide='ignore', invalid='ignore'):
-    # tpr_lbs are descending, so if any bounds are valid, the first one is.
-    if tpr_lbs[0] > delta:
-      vals = np.log(tpr_lbs - delta) - np.log(fpr_ubs)
-      best_idx = np.nanargmax(vals)
-      best_val = vals[best_idx]
-    if not one_sided:
-      tnr_lbs = 1 - fpr_ubs
-      # tnr_lbs are descending, so if any bounds are valid, the first one is.
-      if tnr_lbs[0] > delta:
-        vals = np.log(tnr_lbs - delta) - np.log(fnr_ubs)
-        alt_best_idx = np.nanargmax(vals)
-        if vals[alt_best_idx] > best_val:
-          best_idx = alt_best_idx
-          best_val = vals[alt_best_idx]
-
-  return best_idx, best_val
-
-
 def _random_partition(
     scores: np.ndarray,
     rng: np.random.Generator,
@@ -593,6 +557,56 @@ class CanaryScoreAuditor:
 
     return np.quantile(values, params.quantiles)
 
+  def _epsilon_lower_bound_all_thresholds(
+      self,
+      significance: float,
+      delta: float,
+      one_sided: bool,
+      threshold: float | None = None,
+  ) -> tuple[float, float] | float:
+    """Estimates epsilon with C-P bound at one or all thresholds."""
+    if threshold is None:
+      fn_counts = self._fn_counts
+      tn_counts = self._tn_counts
+    else:
+      fn_counts = np.array([np.sum(self._in_canary_scores < threshold)])
+      tn_counts = np.array([np.sum(self._out_canary_scores < threshold)])
+
+    n_pos = self._fn_counts[-1]
+    n_neg = self._tn_counts[-1]
+
+    fnr_ubs = _clopper_pearson_upper(fn_counts, n_pos, significance / 2)
+    tpr_lbs = 1 - fnr_ubs
+    fp_counts = n_neg - tn_counts
+    fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, significance / 2)
+
+    idx = -1
+    eps = 0.0
+
+    # We want to ignore invalid values in the log here. If (tpr - delta) is less
+    # or equal to zero, the bound is invalid. Let it return np.nan or -np.inf
+    # and we will filter it with np.nanmax.
+    with np.errstate(divide='ignore', invalid='ignore'):
+      # tpr_lbs are descending, so if any bounds are valid, the first one is.
+      if tpr_lbs[0] > delta:
+        eps_vals = np.log(tpr_lbs - delta) - np.log(fpr_ubs)
+        idx = np.nanargmax(eps_vals)
+        eps = eps_vals[idx]
+      if not one_sided:
+        tnr_lbs = 1 - fpr_ubs
+        # tnr_lbs are descending, so if any bounds are valid, the first one is.
+        if tnr_lbs[0] > delta:
+          eps_vals = np.log(tnr_lbs - delta) - np.log(fnr_ubs)
+          new_idx = np.nanargmax(eps_vals)
+          if eps_vals[new_idx] > eps:
+            idx = new_idx
+            eps = eps_vals[new_idx]
+
+    if threshold is None:
+      return eps, self._thresholds[idx]
+    else:
+      return eps
+
   def epsilon_lower_bound(
       self,
       alpha: float,
@@ -620,48 +634,13 @@ class CanaryScoreAuditor:
     if not 0 <= delta <= 1:
       raise ValueError(f'delta must be in [0, 1], got {delta}.')
 
-    n_pos = self._fn_counts[-1]
-    n_neg = self._tn_counts[-1]
-
-    helper = functools.partial(
-        _epsilon_lower_bound_helper,
-        delta=delta,
-        one_sided=one_sided,
+    return self._audit_with_threshold_strategy(
+        threshold_strategy,
+        CanaryScoreAuditor._epsilon_lower_bound_all_thresholds,
+        alpha,
+        delta,
+        one_sided,
     )
-
-    match threshold_strategy:
-      case Explicit(threshold):
-        tn_count = np.sum(self._out_canary_scores < threshold)
-        fn_count = np.sum(self._in_canary_scores < threshold)
-        _, best_val = helper(
-            tn_count, fn_count, alpha, n_pos=n_pos, n_neg=n_neg
-        )
-        return best_val
-      case Split(threshold_estimation_frac=p, seed=seed):
-        rng = np.random.default_rng(seed)
-        in_scores_1, in_scores_2 = _random_partition(
-            self._in_canary_scores, rng, p
-        )
-        out_scores_1, out_scores_2 = _random_partition(
-            self._out_canary_scores, rng, p
-        )
-        auditor_1 = CanaryScoreAuditor(in_scores_1, out_scores_1)
-        # pylint: disable=protected-access
-        best_idx, _ = helper(auditor_1._tn_counts, auditor_1._fn_counts, alpha)
-        threshold = auditor_1._thresholds[best_idx]
-        # pylint: enable=protected-access
-        auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
-        return auditor_2.epsilon_lower_bound(
-            alpha, delta, one_sided, threshold_strategy=Explicit(threshold)
-        )
-      case Bonferroni():
-        alpha_bonferroni = alpha / len(self._fn_counts)
-        _, best_val = helper(self._tn_counts, self._fn_counts, alpha_bonferroni)
-        return best_val
-      case _:
-        raise ValueError(
-            f'Unsupported threshold strategy: {threshold_strategy}.'
-        )
 
   def epsilon_raw_counts(
       self,
@@ -1031,3 +1010,45 @@ class CanaryScoreAuditor:
         raise ValueError(
             f'Unsupported threshold strategy: {threshold_strategy}.'
         )
+
+  def _audit_with_threshold_strategy(
+      self,
+      threshold_strategy: ThresholdStrategy,
+      audit_all_thresholds_method: AuditAllThresholdsMethod,
+      significance: float,
+      delta: float,
+      one_sided: bool = True,
+  ) -> float:
+    """Computes the epsilon bound for a given threshold strategy."""
+    match threshold_strategy:
+      case Explicit(threshold):
+        eps = audit_all_thresholds_method(
+            self, significance, delta, one_sided, threshold
+        )
+      case Split(threshold_estimation_frac=p, seed=seed):
+        rng = np.random.default_rng(seed)
+        in_scores_1, in_scores_2 = _random_partition(
+            self._in_canary_scores, rng, p
+        )
+        out_scores_1, out_scores_2 = _random_partition(
+            self._out_canary_scores, rng, p
+        )
+        auditor_1 = CanaryScoreAuditor(in_scores_1, out_scores_1)
+        _, threshold = audit_all_thresholds_method(
+            auditor_1, significance, delta, one_sided, None
+        )
+        auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
+        eps = audit_all_thresholds_method(
+            auditor_2, significance, delta, one_sided, threshold
+        )
+      case Bonferroni():
+        significance_bonferroni = significance / len(self._fn_counts)
+        eps, _ = audit_all_thresholds_method(
+            self, significance_bonferroni, delta, one_sided, None
+        )
+      case _:
+        raise ValueError(
+            f'Unsupported threshold strategy: {threshold_strategy}.'
+        )
+
+    return eps
