@@ -53,6 +53,12 @@ def _one_run_p_value_naive(
   return min(beta + alpha * delta * 2 * m, 1)
 
 
+def _deterministic_normal(mu, sigma, n):
+  """Generates array of scores deterministically normally distributed."""
+  cdf_vals = np.linspace(0, 1, n, endpoint=False) + 1 / (2 * n)
+  return scipy.stats.norm.ppf(cdf_vals) * sigma + mu
+
+
 class CanaryScoreAuditorTest(parameterized.TestCase):
 
   def test_bootstrap_params_empty_quantiles(self):
@@ -217,10 +223,8 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     np.testing.assert_almost_equal(frontier, expected_frontier)
 
   def test_get_tn_fn_counts(self):
-    in_canary_scores = np.arange(4) + 0.5
-    np.random.shuffle(in_canary_scores)
-    out_canary_scores = np.arange(4)
-    np.random.shuffle(out_canary_scores)
+    in_canary_scores = [1.5, 2.5, 0.5, 3.5]
+    out_canary_scores = [0, 3, 2, 1]
     thresholds, tn_counts, fn_counts = auditing._get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
@@ -266,10 +270,9 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_epsilon_clopper_pearson_explicit(
       self, n_in, out_samples_ratio, thresh
   ):
-    rng = np.random.default_rng(seed=0xBAD5EED)
-    in_canary_scores = rng.normal(1, 1, n_in)
+    in_canary_scores = _deterministic_normal(1, 1, n_in)
     n_out = int(n_in * out_samples_ratio)
-    out_canary_scores = rng.normal(0, 1, n_out)
+    out_canary_scores = _deterministic_normal(0, 1, n_out)
     significance = 0.1
 
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
@@ -279,7 +282,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     )
 
     fn = np.sum(in_canary_scores < thresh)
-    fp = np.sum(out_canary_scores > thresh)
+    fp = np.sum(out_canary_scores >= thresh)
     tpr_lb = 1 - auditing._clopper_pearson_upper(fn, n_in, significance / 2)
     fpr_ub = auditing._clopper_pearson_upper(fp, n_out, significance / 2)
     expected_eps = np.log(tpr_lb / fpr_ub)
@@ -294,13 +297,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_epsilon_clopper_pearson_tight(
       self, one_sided, mu, out_samples_ratio, threshold_strategy
   ):
-    rng = np.random.default_rng(seed=0xBAD5EED)
     significance = 0.2
     delta = 0.1
     in_samples = 2_000_000
     out_samples = int(in_samples * out_samples_ratio)
-    in_canary_scores = rng.normal(mu, 1, in_samples)
-    out_canary_scores = rng.normal(0, 1, out_samples)
+    in_canary_scores = _deterministic_normal(mu, 1, in_samples)
+    out_canary_scores = _deterministic_normal(0, 1, out_samples)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     eps_lb = auditor.epsilon_clopper_pearson(
         significance, delta, one_sided, threshold_strategy=threshold_strategy
@@ -316,13 +318,11 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_epsilon_raw_counts_helper_accurate_large_delta(
       self, min_count, out_samples_ratio
   ):
-    rng = np.random.default_rng(seed=0xBAD5EED)
-
     delta = 1e-2
     in_samples = 200_000
     out_samples = int(in_samples * out_samples_ratio)
-    in_canary_scores = rng.normal(1, 1, in_samples)
-    out_canary_scores = rng.normal(0, 1, out_samples)
+    in_canary_scores = _deterministic_normal(1, 1, in_samples)
+    out_canary_scores = _deterministic_normal(0, 1, out_samples)
     _, tn_counts, fn_counts = auditing._get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
@@ -510,13 +510,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       ('two_sided_with_median', (0.025, 0.5, 0.975)),
   )
   def test_bootstrap(self, quantiles):
-    rng = np.random.default_rng(seed=0xBAD5EED)
     n = 5000
 
     # Compute interval for mean of scores, which we can also get exactly with
     # the central limit theorem. Use any crazy distribution for the data.
-    in_canary_scores = rng.normal(np.e, np.pi, n // 2)
-    out_canary_scores = rng.uniform(0, 1, n // 2)
+    in_canary_scores = _deterministic_normal(np.e, np.pi, n // 2)
+    out_canary_scores = np.linspace(0, 1, n // 2)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
 
     def mean_score(a: auditing.CanaryScoreAuditor):
@@ -611,11 +610,8 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_epsilon_one_run_close(self, use_fdp, shift, expected_eps):
     method = 'epsilon_one_run_fdp' if use_fdp else 'epsilon_one_run'
     n = 10_000
-    # Scores deterministically distributed like Normal(0, 1).
-    out_canary_scores = scipy.stats.norm.ppf(
-        np.linspace(0, 1, n, endpoint=False) + 1 / (2 * n)
-    )
-    in_canary_scores = out_canary_scores + shift
+    out_canary_scores = _deterministic_normal(0, 1, n)
+    in_canary_scores = _deterministic_normal(shift, 1, n)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     significance = 0.05
     delta = 1e-6
