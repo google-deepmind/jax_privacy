@@ -587,31 +587,25 @@ class CanaryScoreAuditor:
     n_neg = self._tn_counts[-1]
 
     fnr_ubs = _clopper_pearson_upper(fn_counts, n_pos, significance / 2)
-    tpr_lbs = 1 - fnr_ubs
     fp_counts = n_neg - tn_counts
     fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, significance / 2)
 
-    idx = -1
-    eps = 0.0
+    def eps_and_idx(fnr_ubs, fpr_ubs):
+      tpr_lbs = 1 - fnr_ubs
+      valid = np.flatnonzero(tpr_lbs > delta)
+      if valid.size == 0:
+        return 0.0, -1
+      eps_vals = np.log(tpr_lbs[valid] - delta) - np.log(fpr_ubs[valid])
+      subidx = np.argmax(eps_vals)
+      return eps_vals[subidx], valid[subidx]
 
-    # We want to ignore invalid values in the log here. If (tpr - delta) is less
-    # or equal to zero, the bound is invalid. Let it return np.nan or -np.inf
-    # and we will filter it with np.nanmax.
-    with np.errstate(divide='ignore', invalid='ignore'):
-      # tpr_lbs are descending, so if any bounds are valid, the first one is.
-      if tpr_lbs[0] > delta:
-        eps_vals = np.log(tpr_lbs - delta) - np.log(fpr_ubs)
-        idx = np.nanargmax(eps_vals)
-        eps = eps_vals[idx]
-      if not one_sided:
-        tnr_lbs = 1 - fpr_ubs
-        # tnr_lbs are descending, so if any bounds are valid, the first one is.
-        if tnr_lbs[0] > delta:
-          eps_vals = np.log(tnr_lbs - delta) - np.log(fnr_ubs)
-          new_idx = np.nanargmax(eps_vals)
-          if eps_vals[new_idx] > eps:
-            idx = new_idx
-            eps = eps_vals[new_idx]
+    eps, idx = eps_and_idx(fnr_ubs, fpr_ubs)
+
+    if not one_sided:
+      new_eps, new_idx = eps_and_idx(fpr_ubs, fnr_ubs)
+      if new_eps > eps:
+        idx = new_idx
+        eps = new_eps
 
     if threshold is None:
       return eps, self._thresholds[idx]
@@ -884,25 +878,21 @@ class CanaryScoreAuditor:
 
     best_eps = 0
     best_idx = -1
+    best_q = 0.5
 
     for idx in sorted_indices:
       n_guess = total_counts[idx]
       n_correct = tp_counts[idx]
 
-      if n_guess == 0:
+      if n_guess == 0 or n_correct / n_guess <= best_q:
+        # Raw precision at this threshold is already less than the best so far.
         continue
-
-      required_q = _logistic(best_eps)
-      if n_correct / n_guess <= required_q:
-        # Precision is monotonically decreasing because we have filtered tp/fp
-        # to contain only the pareto frontier. If the mean is worse than the
-        # best epsilon we've seen so far, we can stop.
-        break
 
       new_eps = audit_fn(best_eps, m, n_guess, n_correct, significance, delta)
       if new_eps > best_eps:
         best_eps = new_eps
         best_idx = idx
+        best_q = _logistic(best_eps)
 
     return best_eps, self._thresholds[best_idx]
 
