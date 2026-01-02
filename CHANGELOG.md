@@ -39,6 +39,5 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Stability and packaging improvements to support publication on PyPI as version **1.0.0**.
 
-### Notes
-
-- Experimental components (e.g., advanced DP-FTRL, Poisson sampling support, and future API extensions) are planned for later releases.
+[unreleased]: https://github.com/google-deepmind/jax_privacy/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/google-deepmind/jax_privacy/compare/v0.2...v1.0.0.
