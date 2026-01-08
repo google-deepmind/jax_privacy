@@ -99,9 +99,6 @@ class DPKerasConfig:
         `gradient_accumulation_steps` operates outside of the jit boundary.
         The default value is None, which means that no microbatching is used,
         and is equivalent to microbatch_size=batch_size.
-      sampling_prob: The probability of sampling an example in each iteration.
-        If set, uses Poisson sampling instead of deterministic batching. The
-        dataset must support random access (e.g., in-memory arrays).
       padding_multiple: The multiple to pad batches to when using Poisson
         sampling, to reduce JIT recompilation.
   """
@@ -117,7 +114,6 @@ class DPKerasConfig:
   rescale_to_unit_norm: bool = True
   microbatch_size: int | None = None
   seed: int | None = None
-  sampling_prob: float | None = None
   padding_multiple: int = 32
 
   _accountant = analysis.DpsgdTrainingAccountant(
@@ -361,18 +357,43 @@ def _create_fit_fn_with_validation(
         raise ValueError(
             'DP training requires x to be a JAX or NumPy array for efficient random access during Poisson sampling.'
         )
-      # Use provided sampling_prob or default to batch_size / train_size for expected batch size
-      sampling_probability = (
-          self._dp_params.sampling_prob or (self._dp_params.batch_size / self._dp_params.train_size)
+
+      clipped_grad_fn = jax_privacy.clipped_grad(
+          fun=self.compute_loss_and_updates,
+          has_aux=True,
+          return_values=True,
+          l2_clip_norm=self._dp_params.clipping_norm,
+          rescale_to_unit_norm=self._dp_params.rescale_to_unit_norm,
+          normalize_by=self._dp_params.batch_size,
+          batch_argnums=(3, 4, 5),  # corresponding to (x, y, sample_weight)
+          microbatch_size=self._dp_params.microbatch_size,
       )
-      plan = batch_selection.CyclicPoissonSampling(
+
+      privatizer = strategy.noise_addition_transform
+
+      # Append a dummy example for padding
+      dummy_x = jnp.zeros_like(x[:1])
+      x = jnp.concatenate([x, dummy_x], axis=0)
+      if y is not None:
+        dummy_y = jnp.zeros_like(y[:1])
+        y = jnp.concatenate([y, dummy_y], axis=0)
+
+      clipped_grad = clipped_grad_fn(x, y, is_padding_example=is_padding_example)
+
+      step_logs, updated_model_state = privatizer.update(clipped_grad)
+
+      sampling_probability = self._dp_params.batch_size / self._dp_params.train_size
+
+      strategy = batch_selection.CyclicPoissonSampling(
           sampling_prob=sampling_probability,
           iterations=remaining_steps
       )
-      for batch_idx in plan.batch_iterator(self._dp_params.train_size):
+
+      for batch_idx in strategy.batch_iterator(self._dp_params.train_size):
 
         # Pad indices to reduce JIT recompilations
         idx = batch_selection.pad_to_multiple_of(batch_idx, self._dp_params.padding_multiple)
+        is_padding_example = idx == -1
         batch_x = x[idx]
         batch_y = y[idx] if y is not None else None
         batch_data = (batch_x, batch_y, None)
@@ -382,8 +403,6 @@ def _create_fit_fn_with_validation(
         optimizer_variables = self.optimizer.variables
         metrics_variables = self.metrics_variables
         model_state = (trainable_variables, non_trainable_variables, optimizer_variables, metrics_variables)
-
-        step_logs, updated_model_state = self.train_step(model_state, batch_data)
 
         self.trainable_variables = updated_model_state[0]
         self.non_trainable_variables = updated_model_state[1]
