@@ -478,7 +478,7 @@ def _dp_train_step(
 
   dp_batch_size = self._dp_params.batch_size  # pylint: disable=protected-access
   actual_batch_size = jax.tree_util.tree_leaves(x)[0].shape[0]
-  if actual_batch_size < dp_batch_size:
+  if dp_batch_size != actual_batch_size:
     # it is ok to throw an exception even though we are in a jit function
     # because the check is based on the static values, i.e. they won't
     # change between invocations, and if the condition is violated, it will
