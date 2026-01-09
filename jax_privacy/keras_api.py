@@ -317,6 +317,7 @@ _FitFnReturnType = keras.callbacks.History
 
 
 def _create_fit_fn_with_validation(
+    original_fit_fn: typing.Callable[..., _FitFnReturnType],
     params: DPKerasConfig,
 ) -> typing.Callable[..., _FitFnReturnType]:
   """Creates a fit function with validation for DP-SGD training.
@@ -335,58 +336,106 @@ def _create_fit_fn_with_validation(
     The fit function with same signature as original_fit_fn but with validation
     for DP-SGD training.
   """
-
+  @functools.wraps(original_fit_fn)
   def fit_fn_with_validation(
       self,
       *args,
       **kwargs,
   ) -> _FitFnReturnType:
     _validate_optimizer(self, self._dp_params)  # pylint: disable=protected-access
+    fit_signature = inspect.signature(original_fit_fn)
 
-    performed_optimizer_steps = _get_non_trainable_weight('_optimizer_steps', self)[0]
-    if performed_optimizer_steps >= self._dp_params.train_steps:  
-        raise RuntimeError('DP training exceeds privacy budget.')
-  
-    # For DP training with Poisson sampling, we don't use the standard batching.
-    # We require x, y to be arrays for random access.
-
-    def fit_with_dp_poisson_sampling(x=None, y=None, epochs=1, verbose='auto', callbacks=None, **kwargs):
-      if x is None or not hasattr(x, 'shape'):
-        raise ValueError(
-            'DP training requires x to be a JAX or NumPy array for efficient random access during Poisson sampling.'
-        )
-
-      clipped_grad_fn = jax_privacy.clipped_grad(
-          fun=self.compute_loss_and_updates,
-          has_aux=True,
-          return_values=True,
-          l2_clip_norm=self._dp_params.clipping_norm,
-          rescale_to_unit_norm=self._dp_params.rescale_to_unit_norm,
-          normalize_by=self._dp_params.batch_size,
-          batch_argnums=(3, 4, 5),  # corresponding to (x, y, sample_weight)
-          microbatch_size=self._dp_params.microbatch_size,
+      # batch_size is not set explicitely in the fit() call if the input dataset
+      # is already batched. In this case, we assume that the batch sizes are
+      # aligned and use the batch size from the DP parameters. We will check that
+      # the batch sizes are aligned in the train_step function.
+    batch_size = (
+          _get_param(fit_signature, 'batch_size', *args, **kwargs)
+          or params.batch_size
+      )
+      # Default values are set according to the Keras documentation.
+    epochs = _get_param(fit_signature, 'epochs', *args, **kwargs) or 1
+    initial_epoch = (
+          _get_param(fit_signature, 'initial_epoch', *args, **kwargs) or 0
+      )
+    steps_per_epoch = _get_param(
+          fit_signature, 'steps_per_epoch', *args, **kwargs
       )
 
+      # Note accessing self._dp_params is safe because it's added in
+      # _add_dp_sgd_attributes, but requires disabling pylint because this
+      # function is not a method within a class.
+    _check_dp_params_aligned_with_fit_args(
+          self._dp_params,  # pylint: disable=protected-access
+          batch_size,
+      )
+
+    performed_optimizer_steps = (
+          _get_non_trainable_weight('_optimizer_steps', self).numpy().item()
+      )
+    optimizer_steps_to_perform = _calculate_optimizer_steps_to_perform_in_fit(
+          self._dp_params.train_size,  # pylint: disable=protected-access
+          batch_size,
+          epochs,
+          initial_epoch,
+          steps_per_epoch,
+      )
+    if (
+          performed_optimizer_steps + optimizer_steps_to_perform
+          > self._dp_params.train_steps  # pylint: disable=protected-access
+        ):
+        raise RuntimeError(
+            'fit() cannot be performed because you will run out of privacy'
+            ' budget. Currently, you have already performed'
+            f' {performed_optimizer_steps} optimizer training steps and you are'
+            f' trying to perform {optimizer_steps_to_perform} more. However, you'
+            f' can perform in total only {self._dp_params.train_steps} training'  # pylint: disable=protected-access
+            ' steps (optimizer updates). If you fit() the model with current'
+            ' parameters, training steps will exceed the maximum number of'
+            f' training steps: {performed_optimizer_steps=} +'
+            f' {optimizer_steps_to_perform=} ='
+            f' {performed_optimizer_steps + optimizer_steps_to_perform} >'
+            f' total_train_steps={self._dp_params.train_steps}.'  # pylint: disable=protected-access
+          )
+
+    clipped_grad_fn = jax_privacy.clipped_grad(
+            fun=self.compute_loss_and_updates,
+            has_aux=True,
+            return_values=True,
+            l2_clip_norm=self._dp_params.clipping_norm,
+            rescale_to_unit_norm=self._dp_params.rescale_to_unit_norm,
+            normalize_by=self._dp_params.batch_size,
+            batch_argnums=(3, 4, 5),  # corresponding to (x, y, sample_weight)
+            microbatch_size=self._dp_params.microbatch_size,
+        )
+    sampling_probability = self._dp_params.batch_size / self._dp_params.train_size # pylint: disable=protected-access
+
+    strategy = batch_selection.CyclicPoissonSampling( # pylint: disable=protected-access
+            sampling_prob=sampling_probability,
+            iterations=self._dp_params.train_steps - performed_optimizer_steps,
+        )
+  
+    def fit_with_dp_poisson_sampling(*args, x=None, y=None, is_padding_example):
+      if not args:
+        raise ValueError("Missing training data.")
+
+      x = args[0]
+
+      # TO-DO add cllipped_grad_fn usage here
+
+      if not hasattr(x, "shape"):
+        raise ValueError(
+          "DP Poisson sampling requires x to be a JAX or NumPy array "
+          "for efficient random access."
+      )
       # Append a dummy example for padding
       dummy_x = jnp.zeros_like(x[:1])
       x = jnp.concatenate([x, dummy_x], axis=0)
       if y is not None:
-        dummy_y = jnp.zeros_like(y[:1])
-        y = jnp.concatenate([y, dummy_y], axis=0)
+         dummy_y = jnp.zeros_like(y[:1])
+      y = jnp.concatenate([y, dummy_y], axis=0)
 
-      if self._dp_params.sampling_prob is None:
-        raise ValueError(
-            'Poisson sampling requires `sampling_prob`. '
-            '`batch_size`-based batching is not supported here.'
-      )
-      sampling_probability = self._dp_params.batch_size / self._dp_params.train_size
-
-      strategy = batch_selection.CyclicPoissonSampling(
-          sampling_prob=sampling_probability,
-          iterations=self._dp_params.train_steps - performed_optimizer_steps,
-      )
-
-      for batch_idx in strategy.batch_iterator(self._dp_params.train_size):
+      for batch_idx in strategy.batch_iterator(self._dp_params.train_size): # pylint: disable=protected-access
 
         # Pad indices to reduce JIT recompilations
         idx = batch_selection.pad_to_multiple_of(batch_idx, self._dp_params.padding_multiple)
@@ -397,30 +446,47 @@ def _create_fit_fn_with_validation(
 
         trainable_variables = self.trainable_variables
         non_trainable_variables = self.non_trainable_variables
-        optimizer_variables = self.optimizer.variables
+        optimizer_variables = self.optimizer_variables
         metrics_variables = self.metrics_variables
         model_state = (trainable_variables, non_trainable_variables, optimizer_variables, metrics_variables)
 
-      step_logs, updated_model_state = self._dp_train_step(
-        self,
-        model_state,
-        batch_data,
-        clipped_grad_fn=clipped_grad_fn,
-        is_padding_example=is_padding_example,
-      )
-      (
-        self.trainable_variables,
-        self.non_trainable_variables,
-        self.optimizer.variables,
-        self.metrics_variables,
-      ) = updated_model_state
-
-      training_history = keras.callbacks.History()
-      training_history.history = {}
-      return training_history
-    return fit_with_dp_poisson_sampling
+        updated_model_state = _dp_train_step(
+          self,
+          model_state,
+          batch_data,
+        )
+        (
+          self.trainable_variables,
+          self.non_trainable_variables,
+          self.optimizer_variables,
+          self.metrics_variables,
+        ) = updated_model_state 
+  
+        training_history = keras.callbacks.History()
+        training_history.history = {}
+        return fit_with_dp_poisson_sampling
+    
+    return original_fit_fn(
+          self,
+          *args,
+        **kwargs,
+    )
 
   return fit_fn_with_validation
+
+
+def _check_dp_params_aligned_with_fit_args(
+    dp_params: DPKerasConfig,
+    batch_size: int,
+) -> None:
+  """Checks that the DP parameters are aligned with the fit() arguments."""
+  if dp_params.batch_size != batch_size:
+    raise ValueError(
+        'The batch size in the DP parameters is not equal to the batch size'
+        f' passed to fit(): {dp_params.batch_size=} != {batch_size=}. Please'
+        ' make sure that the batch size in the DP parameters is equal to the'
+        ' batch size passed to fit().'
+    )
 
 
 _XType = chex.ArrayTree
@@ -694,6 +760,19 @@ def _get_non_trainable_weight(
 ) -> keras.Variable:
   """Returns the non-trainable weight with the given name."""
   return next(w for w in model.non_trainable_weights if w.name == weight_name)
+
+
+def _calculate_optimizer_steps_to_perform_in_fit(
+    train_size: int,
+    batch_size: int,
+    epochs: int,
+    initial_epoch: int,
+    steps_per_epoch: int,
+) -> int:
+  """Returns the number of optimizer steps that will be performed by fit."""
+  epochs_to_perform = epochs - initial_epoch
+  steps_per_epoch = steps_per_epoch or (train_size // batch_size)
+  return steps_per_epoch * epochs_to_perform
 
 
 def _get_random_int64() -> np.int64:
