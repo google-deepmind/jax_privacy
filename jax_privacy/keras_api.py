@@ -100,7 +100,9 @@ class DPKerasConfig:
         The default value is None, which means that no microbatching is used,
         and is equivalent to microbatch_size=batch_size.
       padding_multiple: The multiple to pad batches to when using Poisson
-        sampling, to reduce JIT recompilation.
+        sampling, to reduce JIT recompilation. Note: If microbatch_size is 
+        specified, then padding_multiple % microbatch_size == 0 should be true
+        for optimal performance.
   """
 
   epsilon: float
@@ -180,6 +182,11 @@ class DPKerasConfig:
       raise ValueError(
           f'Gradient accumulation steps {self.gradient_accumulation_steps} must'
           ' be positive.'
+      )
+    if self.microbatch_size is not None and self.padding_multiple % self.microbatch_size != 0:
+      raise ValueError(
+          f'padding_multiple ({self.padding_multiple}) must be divisible by '
+          f'microbatch_size ({self.microbatch_size}) when microbatch_size is specified.'
       )
     if self.noise_multiplier is not None:
       if self.noise_multiplier <= 0:
@@ -310,7 +317,6 @@ _FitFnReturnType = keras.callbacks.History
 
 
 def _create_fit_fn_with_validation(
-    original_fit_fn: typing.Callable[..., _FitFnReturnType],
     params: DPKerasConfig,
 ) -> typing.Callable[..., _FitFnReturnType]:
   """Creates a fit function with validation for DP-SGD training.
@@ -330,27 +336,19 @@ def _create_fit_fn_with_validation(
     for DP-SGD training.
   """
 
-  @functools.wraps(original_fit_fn)
   def fit_fn_with_validation(
       self,
       *args,
       **kwargs,
   ) -> _FitFnReturnType:
     _validate_optimizer(self, self._dp_params)  # pylint: disable=protected-access
-    fit_signature = inspect.signature(original_fit_fn)
 
+    performed_optimizer_steps = _get_non_trainable_weight('_optimizer_steps', self)[0]
+    if performed_optimizer_steps >= self._dp_params.train_steps:  
+        raise RuntimeError('DP training exceeds privacy budget.')
+  
     # For DP training with Poisson sampling, we don't use the standard batching.
     # We require x, y to be arrays for random access.
-
-    performed_optimizer_steps = (
-        _get_non_trainable_weight('_optimizer_steps', self).numpy().item()
-    )
-    remaining_steps = self._dp_params.train_steps - performed_optimizer_steps  # pylint: disable=protected-access
-    if remaining_steps <= 0:
-      raise RuntimeError(
-          'No more training steps allowed. The privacy budget has been exhausted.'
-          f' Performed: {performed_optimizer_steps}, Total allowed: {self._dp_params.train_steps}.'  # pylint: disable=protected-access
-      )
 
     def fit_with_dp_poisson_sampling(x=None, y=None, epochs=1, verbose='auto', callbacks=None, **kwargs):
       if x is None or not hasattr(x, 'shape'):
@@ -369,8 +367,6 @@ def _create_fit_fn_with_validation(
           microbatch_size=self._dp_params.microbatch_size,
       )
 
-      privatizer = strategy.noise_addition_transform
-
       # Append a dummy example for padding
       dummy_x = jnp.zeros_like(x[:1])
       x = jnp.concatenate([x, dummy_x], axis=0)
@@ -378,15 +374,16 @@ def _create_fit_fn_with_validation(
         dummy_y = jnp.zeros_like(y[:1])
         y = jnp.concatenate([y, dummy_y], axis=0)
 
-      clipped_grad = clipped_grad_fn(x, y, is_padding_example=is_padding_example)
-
-      step_logs, updated_model_state = privatizer.update(clipped_grad)
-
+      if self._dp_params.sampling_prob is None:
+        raise ValueError(
+            'Poisson sampling requires `sampling_prob`. '
+            '`batch_size`-based batching is not supported here.'
+      )
       sampling_probability = self._dp_params.batch_size / self._dp_params.train_size
 
       strategy = batch_selection.CyclicPoissonSampling(
           sampling_prob=sampling_probability,
-          iterations=remaining_steps
+          iterations=self._dp_params.train_steps - performed_optimizer_steps,
       )
 
       for batch_idx in strategy.batch_iterator(self._dp_params.train_size):
@@ -404,10 +401,19 @@ def _create_fit_fn_with_validation(
         metrics_variables = self.metrics_variables
         model_state = (trainable_variables, non_trainable_variables, optimizer_variables, metrics_variables)
 
-        self.trainable_variables = updated_model_state[0]
-        self.non_trainable_variables = updated_model_state[1]
-        self.optimizer.variables = updated_model_state[2]
-        self.metrics_variables = updated_model_state[3]
+      step_logs, updated_model_state = self._dp_train_step(
+        self,
+        model_state,
+        batch_data,
+        clipped_grad_fn=clipped_grad_fn,
+        is_padding_example=is_padding_example,
+      )
+      (
+        self.trainable_variables,
+        self.non_trainable_variables,
+        self.optimizer.variables,
+        self.metrics_variables,
+      ) = updated_model_state
 
       training_history = keras.callbacks.History()
       training_history.history = {}
