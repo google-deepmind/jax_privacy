@@ -759,15 +759,10 @@ class CanaryScoreAuditor:
 
     # Calculate AUROC using the trapezoidal rule. Since we have TN counts and FN
     # counts handy, we're actually computing the area under the curve of the TNR
-    # as a function of FNR, which is equivalent. Cast to float64 to prevent
-    # overflow.
-    tn_counts_float = self._tn_counts.astype(np.float64)
-    fn_counts_float = self._fn_counts.astype(np.float64)
-    unnorm = np.dot(
-        tn_counts_float[:-1] + tn_counts_float[1:],
-        fn_counts_float[1:] - fn_counts_float[:-1],
-    )
-    return 0.5 * unnorm / (fn_counts_float[-1] * tn_counts_float[-1])
+    # as a function of FNR, which is equivalent.
+    tnr = self._tn_counts / self._tn_counts[-1]
+    fnr = self._fn_counts / self._fn_counts[-1]
+    return 0.5 * np.dot(tnr[:-1] + tnr[1:], fnr[1:] - fnr[:-1])
 
   def epsilon_from_gdp(
       self,
