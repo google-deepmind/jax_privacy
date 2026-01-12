@@ -17,7 +17,7 @@
 
 This example demonstrates how to train a simple Transformer decoder
 on character-level language modeling using differentially private stochastic
-gradient descent (DP-SGD) with the JAX Privacy core library components. It shows how to:
+gradient descent (DP-SGD) with the JAX Privacy core library components.
 """
 
 from absl import app
@@ -26,6 +26,8 @@ import jax
 from jax import random
 import jax.numpy as jnp
 import jax_privacy
+from jax_privacy import batch_selection
+from jax_privacy.experimental import execution_plan
 from jax_privacy import noise_addition
 from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
@@ -133,8 +135,10 @@ def loss_fn(model_params, batch_x, batch_y):
 
 def load_text_data(max_len=128):
   """Loads and preprocesses text data."""
-  # Use a small text dataset
-  text = "Hello world! This is a simple example of text for training a transformer with differential privacy. " * 1000
+  # Use tiny Shakespeare dataset
+  ds = tfds.load('tiny_shakespeare', split='train')
+  text = ''.join([example['text'].numpy().decode('utf-8') for example in ds.take(100)])
+
   chars = sorted(list(set(text)))
   vocab_size = len(chars)
   char_to_idx = {ch: i for i, ch in enumerate(chars)}
@@ -161,10 +165,9 @@ def batch_dataset(data, batch_size, shuffle=True):
   return dataset
 
 
-def update_model_params(model_params, noisy_grads):
-  """Updates parameters using gradients."""
-  lr=0.001
-  return jax.tree.map(lambda p, g: p - lr * g, model_params, noisy_grads)
+def update_model_params(model_params, updates):
+  """Applies Optax updates."""
+  return optax.apply_updates(model_params, updates)
 
 
 def generate_text(model_params, seed_text, length=50, char_to_idx=None, idx_to_char=None):
@@ -197,6 +200,9 @@ def main(_):
   epsilon = 1.0
   delta = 1e-5
   max_len = 128
+  iterations = 500
+  expected_batch_size = 1000
+  padding_multiple = 32
 
   # Load data
   data, vocab_size, char_to_idx, idx_to_char = load_text_data(max_len)
@@ -227,7 +233,18 @@ def main(_):
         batch_argnums=(1, 2),
         has_aux=False,
         return_values=True,
+        normalize_by=batch_size,
     )
+    config = execution_plan.BandMFExecutionPlanConfig(
+        iterations=iterations,
+        num_bands=1,
+        epsilon=epsilon,
+        delta=delta,
+        sampling_prob=expected_batch_size / train_size,
+    )
+    plan = config.make(grad_fn)
+    privatizer = plan.noise_addition_transform
+
     sensitivity = grad_fn.sensitivity(
         dp_accounting.NeighboringRelation.REPLACE_ONE
     )
@@ -236,55 +253,46 @@ def main(_):
     )
     noise_state = privatizer.init(model_params)
 
+    optimizer = optax.sgd(learning_rate)
+    opt_state = optimizer.init(model_params)
+
     @jax.jit
-    def dp_train_step(model_params, batch_data, noise_state):
+    def dp_train_step(model_params, opt_state, batch_data, noise_state):
       batch_x = batch_data[:, :-1]
       batch_y = batch_data[:, 1:]
       grads, aux = grad_fn(model_params, batch_x, batch_y)
       loss = aux.values.mean()
-      mean_grads = jax.tree.map(lambda g: g / batch_size, grads)
-      noisy_grads, noise_state = privatizer.update(mean_grads, noise_state)
-      model_params = update_model_params(model_params, noisy_grads, learning_rate)
-      return model_params, loss, noise_state
-
-  else:
-    @jax.jit
-    def train_step(model_params, batch_data):
-      batch_x = batch_data[:, :-1]
-      batch_y = batch_data[:, 1:]
-      loss, grads = jax.value_and_grad(loss_fn)(model_params, batch_x, batch_y)
-      model_params = update_model_params(model_params, grads, learning_rate)
-      return model_params, loss
+      noisy_grads, noise_state = privatizer.update(grads, noise_state)
+      updates, opt_state = optimizer.update(noisy_grads, opt_state)
+      model_params = optax.apply_updates(model_params, updates)
+      return model_params, opt_state, loss, noise_state
 
   print(f"Training Transformer with {'DP' if use_dp else 'no DP'}...")
-  for epoch in range(num_epochs):
-    train_ds = batch_dataset(data, batch_size, shuffle=True)
+  for step, batch_idx in enumerate(
+    plan.batch_selection_strategy.batch_iterator(train_size)
+):
+    idx = batch_selection.pad_to_multiple_of(batch_idx, padding_multiple)
+    is_padding_example = idx == -1
+    idx = jnp.where(idx == -1, 0, idx)
 
-    epoch_loss = 0.0
-    num_batches = 0
-    for batch_data in train_ds:
-      batch_data = jnp.asarray(batch_data)
+    batch_data = data[idx]
+    batch_x = batch_data[:, :-1]
+    batch_y = batch_data[:, 1:]
 
-      if use_dp:
-        model_params, loss, noise_state = dp_train_step(
-          model_params,
-          batch_data,
-          noise_state
-        )
-      else:
-        model_params, loss = train_step(
-          model_params,
-          batch_data
-        )
+    model_params, noise_state, opt_state = dp_train_step(
+    model_params,
+    (batch_x, batch_y),
+    is_padding_example,
+    noise_state,
+    opt_state,
+)
 
-      epoch_loss += loss
-      num_batches += 1
+    if step % 100 == 0:
+        print(f"Step {step}")
 
-    avg_loss = epoch_loss / num_batches
-
-    print(f"Epoch {epoch+1:2d}, Loss: {avg_loss:.4f}")
-
-  generated = generate_text(model_params, "Hello", 50, char_to_idx, idx_to_char)
+  # Generate sample text with a seed from Shakespeare
+  seed_text = "ROMEO:"
+  generated = generate_text(model_params, seed_text, 100, char_to_idx, idx_to_char)
   print(f"\nGenerated text: {generated}")
   print("\nTraining complete!")
 
