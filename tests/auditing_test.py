@@ -59,6 +59,15 @@ def _deterministic_normal(mu, sigma, n):
   return scipy.stats.norm.ppf(cdf_vals) * sigma + mu
 
 
+def _scores_with_circular_roc(
+    n_in: int, n_out: int
+) -> tuple[np.ndarray, np.ndarray]:
+  """Generates scores such that the ROC curve is a circular arc."""
+  out_canary_scores = np.linspace(0, 1, n_out)
+  in_canary_scores = np.sqrt(1 - np.linspace(0, 1, n_in) ** 2)
+  return in_canary_scores, out_canary_scores
+
+
 class CanaryScoreAuditorTest(parameterized.TestCase):
 
   def test_bootstrap_params_empty_quantiles(self):
@@ -402,6 +411,23 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       out_samples_ratio=(0.5, 1.0, 1.5),
       vectorized=(True, False),
   )
+  def test_tpr_at_given_fpr_circular_roc(self, out_samples_ratio, vectorized):
+    n_in = 10_000
+    n_out = int(n_in * out_samples_ratio)
+    in_canary_scores, out_canary_scores = _scores_with_circular_roc(n_in, n_out)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    fprs = np.linspace(0, 1, 10)
+    if vectorized:
+      tprs = auditor.tpr_at_given_fpr(fprs)
+    else:
+      tprs = [auditor.tpr_at_given_fpr(fpr) for fpr in fprs]
+    expected_tprs = np.sqrt(fprs * (2 - fprs))
+    np.testing.assert_allclose(tprs, expected_tprs, rtol=1e-3)
+
+  @parameterized.product(
+      out_samples_ratio=(0.5, 1.0, 1.5),
+      vectorized=(True, False),
+  )
   def test_tpr_at_given_fpr_best_case(self, out_samples_ratio, vectorized):
     """Test that TPR at FPR is 1.0 for a best-case dataset."""
     in_samples = 30
@@ -485,6 +511,70 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     out_canary_scores = rng.uniform(0, 1, out_samples)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     np.testing.assert_allclose(auditor.attack_auroc(), 0.5, rtol=0.05)
+
+  @parameterized.product(
+      out_samples_ratio=(0.5, 1.0, 1.5),
+  )
+  def test_attack_auroc_circular_roc(self, out_samples_ratio):
+    n_in = 10_000
+    n_out = int(n_in * out_samples_ratio)
+    in_canary_scores, out_canary_scores = _scores_with_circular_roc(n_in, n_out)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    auroc = auditor.attack_auroc()
+    self.assertAlmostEqual(auroc, np.pi / 4, places=3)
+
+  @parameterized.product(
+      prevalence=(None, 0.0, 0.1, 0.5, 0.7, 1.0),
+      out_samples_ratio=(0.5, 1.0, 1.5),
+      significance=(None, 0.05),
+  )
+  def test_max_accuracy_simple(
+      self, prevalence, out_samples_ratio, significance
+  ):
+    # Use many canaries with the same score so the upper bound is tight.
+    n_in = 1000
+    n_out = int(n_in * out_samples_ratio)
+    in_canary_scores = [1] * (n_in // 2) + [3] * (n_in // 2)
+    out_canary_scores = [0] * (n_out // 2) + [2] * (n_out // 2)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    max_accuracy = auditor.max_accuracy(
+        prevalence=prevalence, significance=significance
+    )
+    if prevalence is None:
+      prevalence = n_in / (n_in + n_out)
+    # Accuracy for a threshold between 0 and 1 (TPR=1, TNR=0.5)
+    acc1 = prevalence + 0.5 * (1 - prevalence)
+    # Accuracy for a threshold between 2 and 3 (TPR=0.5, TNR=1)
+    acc2 = 0.5 * prevalence + (1 - prevalence)
+    expected_max_accuracy = max(acc1, acc2)
+    if significance is None:
+      self.assertAlmostEqual(max_accuracy, expected_max_accuracy)
+    else:
+      np.testing.assert_allclose(max_accuracy, expected_max_accuracy, rtol=0.05)
+      self.assertGreaterEqual(max_accuracy, expected_max_accuracy)
+
+  @parameterized.product(
+      prevalence=(0.0, 0.1, 0.5, 0.7, 1.0),
+      significance=(None, 0.05),
+      out_samples_ratio=(0.5, 1.0, 1.5),
+  )
+  def test_max_accuracy_circular_roc(
+      self, prevalence, significance, out_samples_ratio
+  ):
+    n_in = 10_000
+    n_out = int(n_in * out_samples_ratio)
+    in_canary_scores, out_canary_scores = _scores_with_circular_roc(n_in, n_out)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    max_accuracy = auditor.max_accuracy(
+        prevalence=prevalence, significance=significance
+    )
+    expected_max_accuracy = np.sqrt(prevalence**2 + (1 - prevalence) ** 2)
+
+    if significance is None:
+      self.assertAlmostEqual(max_accuracy, expected_max_accuracy, places=3)
+    else:
+      np.testing.assert_allclose(max_accuracy, expected_max_accuracy, rtol=0.05)
+      self.assertGreaterEqual(max_accuracy, expected_max_accuracy)
 
   @parameterized.product(
       mu=(0.1, 0.3, 1.0, 3.0),

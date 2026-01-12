@@ -764,6 +764,41 @@ class CanaryScoreAuditor:
     fnr = self._fn_counts / self._fn_counts[-1]
     return 0.5 * np.dot(tnr[:-1] + tnr[1:], fnr[1:] - fnr[:-1])
 
+  def max_accuracy(
+      self,
+      *,
+      prevalence: float | None = None,
+      significance: float | None = None,
+  ) -> float:
+    """Computes the maximum accuracy achievable by a threshold-based classifier.
+
+    Args:
+      prevalence: The prevalence of the positive class. If not provided, the
+        prevalence is taken to be the proportion of in-canary examples to the
+        total.
+      significance: If provided, compute and return the high probability upper
+        bound on the maximum accuracy with this allowable probability of failure
+        (one minus confidence).
+
+    Returns:
+      The maximum accuracy.
+    """
+    n_pos = self._fn_counts[-1]
+    n_neg = self._tn_counts[-1]
+
+    if prevalence is None:
+      prevalence = n_pos / (n_pos + n_neg)
+
+    tp_counts = n_pos - self._fn_counts
+    if significance is None:
+      tnr_ubs = self._tn_counts / n_neg
+      tpr_ubs = tp_counts / n_pos
+    else:
+      tnr_ubs = _clopper_pearson_upper(self._tn_counts, n_neg, significance / 2)
+      tpr_ubs = _clopper_pearson_upper(tp_counts, n_pos, significance / 2)
+
+    return np.max(tpr_ubs * prevalence + tnr_ubs * (1 - prevalence))
+
   def epsilon_from_gdp(
       self,
       significance: float,
