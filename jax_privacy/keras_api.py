@@ -13,7 +13,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""API for adding DP-SGD to a Keras model."""
+"""API for adding DP-SGD to a Keras model.
+
+Example:
+  >>> import os
+  >>> os.environ["KERAS_BACKEND"] = "jax"
+  >>> import keras
+  >>> from jax_privacy import keras_api
+  >>> model = keras.Sequential([
+  ...     keras.Input(shape=(1,)),
+  ...     keras.layers.Dense(1),
+  ... ])
+  >>> params = keras_api.DPKerasConfig(
+  ...     epsilon=1.0,
+  ...     delta=1e-5,
+  ...     clipping_norm=1.0,
+  ...     batch_size=8,
+  ...     gradient_accumulation_steps=1,
+  ...     train_steps=10,
+  ...     train_size=80,
+  ...     noise_multiplier=1.0,
+  ... )
+  >>> private_model = keras_api.make_private(model, params)
+  >>> private_model.get_noise_multiplier()
+  1.0
+"""
 
 import dataclasses
 import functools
@@ -262,25 +286,6 @@ def get_noise_multiplier(model: keras.Model) -> float:
 
   If the noise multiplier is not set in DPKerasConfig, this will calibrate it
   once and cache the value on the model.
-
-  Example:
-    >>> import keras  # doctest: +SKIP
-    >>> from jax_privacy import keras_api  # doctest: +SKIP
-    >>> keras.config.set_backend("jax")  # doctest: +SKIP
-    >>> model = keras.Sequential([  # doctest: +SKIP
-    ...     keras.layers.Dense(1, input_shape=(1,))
-    ... ])
-    >>> params = keras_api.DPKerasConfig(  # doctest: +SKIP
-    ...     epsilon=1.0,
-    ...     delta=1e-5,
-    ...     clipping_norm=1.0,
-    ...     batch_size=8,
-    ...     gradient_accumulation_steps=1,
-    ...     train_steps=100,
-    ...     train_size=1000,
-    ... )
-    >>> private_model = keras_api.make_private(model, params)  # doctest: +SKIP
-    >>> private_model.get_noise_multiplier()  # doctest: +SKIP
   """
   if not hasattr(model, '_dp_params'):
     raise ValueError(
