@@ -59,3 +59,14 @@ usages are not needed as they can be found in the corresponding _test.py file.
 generally be as simple as possible; we prefer to keep the boilerplate minimal
 on these (no docstrings + type annotations), inline comments can be used, but
 should be used sparingly.
+
+## Linting and testing
+
+We use `flake8`, `pylint` and `pytype` for linting and type checking. Please
+run the following commands locally before submitting a pull request:
+
+```bash
+$ flake8 jax_privacy/**.py
+$ pylint jax_privacy/**.py
+$ pytype jax_privacy/**.py
+```

@@ -28,7 +28,7 @@ pip install flake8 pytype pylint pylint-exit
 pip install -r requirements-dev.txt
 
 # Lint with flake8.
-flake8 `find jax_privacy -name '*.py' | xargs` --count --select=E9,F63,F7,F82,E225,E251 --show-source --statistics
+flake8 `find jax_privacy -name '*.py' | xargs` --count --show-source --statistics
 
 # Lint with pylint.
 
