@@ -286,6 +286,12 @@ def get_noise_multiplier(model: keras.Model) -> float:
 
   If the noise multiplier is not set in DPKerasConfig, this will calibrate it
   once and cache the value on the model.
+
+  Args:
+    model: A Keras model previously wrapped with make_private().
+
+  Returns:
+    The configured or calibrated noise multiplier.
   """
   if not hasattr(model, '_dp_params'):
     raise ValueError(
@@ -579,7 +585,16 @@ LossFn = typing.Callable[..., tuple[chex.Numeric, _AuxType]]
 def _resolve_noise_multiplier(
     dp_params: DPKerasConfig, model: keras.Model | None = None
 ) -> float:
-  """Returns a cached noise multiplier or calibrates it once."""
+  """Returns a cached noise multiplier or calibrates it once.
+
+  Args:
+    dp_params: DP configuration to read or calibrate the noise multiplier
+      from.
+    model: Optional Keras model used to cache/reuse the calibrated value.
+
+  Returns:
+    The configured or calibrated noise multiplier.
+  """
   if dp_params.noise_multiplier is not None:
     return dp_params.noise_multiplier
   if model is not None:
