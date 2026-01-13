@@ -243,7 +243,6 @@ def main(_):
         sampling_prob=expected_batch_size / train_size,
     )
     plan = config.make(grad_fn)
-    privatizer = plan.noise_addition_transform
 
     sensitivity = grad_fn.sensitivity(
         dp_accounting.NeighboringRelation.REPLACE_ONE
@@ -251,26 +250,28 @@ def main(_):
     privatizer = noise_addition.gaussian_privatizer(
         stddev=noise_multiplier * sensitivity, prng_key=noise_rng
     )
-    noise_state = privatizer.init(model_params)
 
     optimizer = optax.sgd(learning_rate)
-    opt_state = optimizer.init(model_params)
+    privatizer = plan.noise_addition_transform
 
-    @jax.jit
-    def dp_train_step(model_params, opt_state, batch_data, noise_state):
-      batch_x = batch_data[:, :-1]
-      batch_y = batch_data[:, 1:]
-      grads, aux = grad_fn(model_params, batch_x, batch_y)
-      loss = aux.values.mean()
-      noisy_grads, noise_state = privatizer.update(grads, noise_state)
-      updates, opt_state = optimizer.update(noisy_grads, opt_state)
-      model_params = optax.apply_updates(model_params, updates)
-      return model_params, opt_state, loss, noise_state
+  @jax.jit
+  def dp_train_step(model_params, opt_state, batch_data, noise_state):
+    batch_x = batch_data[:, :-1]
+    batch_y = batch_data[:, 1:]
+    grads, aux = grad_fn(model_params, batch_x, batch_y)
+    loss = aux.values.mean()
+    noisy_grads, noise_state = privatizer.update(grads, noise_state)
+    updates, opt_state = optimizer.update(noisy_grads, opt_state)
+    model_params = optax.apply_updates(model_params, updates)
+    return model_params, opt_state, loss, noise_state
+
+  noise_state = privatizer.init(model_params)
+  opt_state = optimizer.init(model_params)
 
   print(f"Training Transformer with {'DP' if use_dp else 'no DP'}...")
-  for step, batch_idx in enumerate(
-    plan.batch_selection_strategy.batch_iterator(train_size)
-):
+
+  for step, batch_idx in enumerate(plan.batch_selection_strategy.batch_iterator(train_size)):
+
     idx = batch_selection.pad_to_multiple_of(batch_idx, padding_multiple)
     is_padding_example = idx == -1
     idx = jnp.where(idx == -1, 0, idx)
