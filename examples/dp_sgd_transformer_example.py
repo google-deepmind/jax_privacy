@@ -36,7 +36,9 @@ import dp_accounting
 import jax
 from jax import random
 import jax.numpy as jnp
+import optax
 import jax_privacy
+from jax_privacy import batch_selection
 from jax_privacy import noise_addition
 from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
@@ -60,6 +62,7 @@ D_FF = 64
 NUM_LAYERS = 2
 
 
+@jax.jit
 def init_transformer_params(key):
   """Initialize a simple transformer's parameters.
   
@@ -130,24 +133,24 @@ def layer_norm(x, scale, bias, eps=1e-5):
 
 
 def attention(x, wq, wk, wv, wo):
-  """Multi-head self-attention."""
+  """Multi-head self-attention using jax.nn.dot_product_attention."""
   batch_size, seq_len, _ = x.shape
   
-  # Compute Q, K, V
+  # Compute Q, K, V: shape (batch, seq_len, num_heads, head_dim)
   q = jnp.einsum("bsd,dhk->bshk", x, wq)
   k = jnp.einsum("bsd,dhk->bshk", x, wk)
   v = jnp.einsum("bsd,dhk->bshk", x, wv)
   
-  # Scaled dot-product attention
-  d_k = q.shape[-1]
-  scores = jnp.einsum("bqhk,bkhk->bhqk", q, k) / jnp.sqrt(d_k)
+  # Create causal mask for autoregressive attention
+  mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))
   
-  # Causal mask
-  mask = jnp.tril(jnp.ones((seq_len, seq_len)))
-  scores = jnp.where(mask == 0, -1e9, scores)
-  
-  attn_weights = jax.nn.softmax(scores, axis=-1)
-  attn_output = jnp.einsum("bhqk,bkhv->bqhv", attn_weights, v)
+  # Use JAX's built-in dot product attention
+  # Note: jax.nn.dot_product_attention expects (batch, seq, heads, head_dim)
+  attn_output = jax.nn.dot_product_attention(
+      q, k, v,
+      mask=mask,
+      is_causal=True,
+  )
   
   # Output projection
   output = jnp.einsum("bshv,hvd->bsd", attn_output, wo)
@@ -288,6 +291,10 @@ def main(_):
     )
     num_updates = num_epochs * (train_size // batch_size)
     
+    # Note: calibrate_noise_multiplier computes the noise multiplier relative
+    # to the MEAN gradient (not the sum). The noise added will be
+    # stddev = noise_multiplier * sensitivity, where sensitivity is computed
+    # based on the clipping norm.
     noise_multiplier = calibrate.calibrate_noise_multiplier(
         target_epsilon=FLAGS.target_epsilon,
         accountant=accountant,
@@ -299,6 +306,10 @@ def main(_):
     print(f"  Target (ε, δ): ({FLAGS.target_epsilon}, {FLAGS.target_delta})")
     print(f"  Noise multiplier: {noise_multiplier:.4f}")
     print(f"  Clipping norm: {clipping_norm}")
+    
+    # Initialize optimizer (using optax for cleaner updates)
+    optimizer = optax.adamw(learning_rate=learning_rate)
+    opt_state = optimizer.init(params)
     
     # Set up clipped gradients
     grad_and_value_fn = jax_privacy.clipped_grad(
@@ -323,7 +334,7 @@ def main(_):
     # [END DP SETUP]
     
     @jax.jit
-    def dp_train_step(params, batch_input, batch_target, noise_state):
+    def dp_train_step(params, opt_state, batch_input, batch_target, noise_state):
       """Single DP-SGD training step."""
       # Compute per-example clipped gradients
       grads, aux_outputs = grad_and_value_fn(params, batch_input, batch_target)
@@ -335,11 +346,10 @@ def main(_):
       # Add calibrated noise
       noisy_grads, noise_state = privatizer.update(mean_grads, noise_state)
       
-      # SGD update
-      params = jax.tree.map(
-          lambda p, g: p - learning_rate * g, params, noisy_grads
-      )
-      return params, loss, noise_state
+      # Apply optimizer updates using optax
+      updates, opt_state = optimizer.update(noisy_grads, opt_state, params)
+      params = optax.apply_updates(params, updates)
+      return params, opt_state, loss, noise_state
     
   else:
     @jax.jit
@@ -357,7 +367,11 @@ def main(_):
   print(f"{'=' * 60}")
   
   for epoch in range(num_epochs):
-    # Shuffle data
+    # Note: For strict privacy accounting, you should use Poisson sampling
+    # (each example included independently with probability batch_size/train_size)
+    # rather than shuffling. For simplicity, we use shuffling here, but in
+    # production you should use jax_privacy.batch_selection for proper sampling.
+    # See: https://github.com/google-deepmind/jax_privacy for batch_selection API.
     perm = random.permutation(random.key(epoch), train_size)
     input_ids_shuffled = input_ids[perm]
     target_ids_shuffled = target_ids[perm]
@@ -373,8 +387,8 @@ def main(_):
       batch_target = target_ids_shuffled[start_idx:end_idx]
       
       if use_dp:
-        params, loss, noise_state = dp_train_step(
-            params, batch_input, batch_target, noise_state
+        params, opt_state, loss, noise_state = dp_train_step(
+            params, opt_state, batch_input, batch_target, noise_state
         )
       else:
         params, loss = train_step(params, batch_input, batch_target)
