@@ -398,8 +398,8 @@ def _get_tn_fn_counts(
 
 def _tpr_at_given_fpr(
     fpr: np.typing.ArrayLike,
-    tn_counts: np.ndarray,
-    fn_counts: np.ndarray,
+    tp_counts: np.ndarray,
+    fp_counts: np.ndarray,
 ) -> np.ndarray | float:
   """Computes maximum TPR at a given FPR."""
   fpr = np.asarray(fpr)
@@ -407,69 +407,59 @@ def _tpr_at_given_fpr(
   if not np.all((0 <= fpr) & (fpr <= 1)):
     raise ValueError(f'fpr must be in [0, 1], got {fpr}.')
 
-  # This implementation assumes that tn_counts and fn_counts are sorted in
-  # increasing order, and have been filtered to contain only thresholds on the
-  # boundary of the convex hull.
-  n_pos = fn_counts[-1]
-  n_neg = tn_counts[-1]
+  n_pos = tp_counts[-1]
+  n_neg = fp_counts[-1]
 
-  target_tn_count = n_neg * (1 - fpr)
+  target_fp_count = n_neg * fpr
 
-  # Find the first threshold greater or equal to target_tn_count. We will
-  # interpolate between the previous one and this one.
-  threshold = np.searchsorted(tn_counts, target_tn_count)
+  # Find the index of the threshold where the false positive count is just
+  # greater than the target_fp_count. In case fpr is 1.0, we can use the index
+  # of the last threshold.
+  threshold = np.minimum(
+      np.searchsorted(fp_counts, target_fp_count, side='right'),
+      np.size(fp_counts) - 1,
+  )
 
-  # If threshold is 0 (i.e., if target_tn_count is 0), we interpolate between
-  # the first two thresholds. Because we have found the convex hull of FN/TN
-  # counts, the first TN count is always 0 and the second is positive.
-  threshold = np.maximum(threshold, 1)
+  # Interpolate between the two thresholds.
+  fp_left = fp_counts[threshold - 1]
+  fp_right = fp_counts[threshold]
+  q = (target_fp_count - fp_left) / (fp_right - fp_left)
 
-  tn_left = tn_counts[threshold - 1]
-  tn_right = tn_counts[threshold]
-  p = (target_tn_count - tn_left) / (tn_right - tn_left)
-
-  fn_left = fn_counts[threshold - 1]
-  fn_right = fn_counts[threshold]
-  fnr = ((1 - p) * fn_left + p * fn_right) / n_pos
-
-  return 1 - fnr
+  tp_left = tp_counts[threshold - 1]
+  tp_right = tp_counts[threshold]
+  return (tp_left + q * (tp_right - tp_left)) / n_pos
 
 
 def _epsilon_raw_counts_helper(
-    tn_counts: np.ndarray,
-    fn_counts: np.ndarray,
+    tp_counts: np.ndarray,
+    fp_counts: np.ndarray,
     min_count: int,
     delta: float,
 ) -> float:
   """Estimates epsilon given true and false counts at each threshold."""
-  n_pos = fn_counts[-1]
-  n_neg = tn_counts[-1]
+  n_pos = tp_counts[-1]
+  n_neg = fp_counts[-1]
 
   if min_count >= n_neg:
     return 0.0
 
   min_fpr = min_count / n_neg
-  tpr_at_min_fpr = _tpr_at_given_fpr(min_fpr, tn_counts, fn_counts)
+  tpr_at_min_fpr = _tpr_at_given_fpr(min_fpr, tp_counts, fp_counts)
 
   if delta == 0:
     return np.log(tpr_at_min_fpr / min_fpr)
 
-  tp_counts = n_pos - fn_counts
-  fp_counts = n_neg - tn_counts
+  # Add the point (tpr_at_min_fpr, min_fpr). This point often corresponds to the
+  # optimal epsilon, but it is not part of the truncated convex hull.
+  if tpr_at_min_fpr > delta:
+    initial_eps = max(0, np.log(tpr_at_min_fpr - delta) - np.log(min_fpr))
+  else:
+    initial_eps = 0
 
-  pos_counts = np.stack([tp_counts, fp_counts], axis=1)
-  pos_counts = pos_counts[fp_counts >= min_count]
-  pos_rates = pos_counts / [n_pos, n_neg]
-  pos_rates = np.append(pos_rates, [[tpr_at_min_fpr, min_fpr]], axis=0)
-
-  # We want to ignore invalid values in the log here. If (tpr - delta) is
-  # less or equal to zero, the bound is invalid. Let it return np.nan or -np.inf
-  # and we will filter it with np.nanmax.
-  with np.errstate(divide='ignore', invalid='ignore'):
-    return np.nanmax(
-        np.log(pos_rates[:, 0] - delta) - np.log(pos_rates[:, 1]),
-        initial=0,
-    )
+  tpr, fpr = tp_counts / n_pos, fp_counts / n_neg
+  valid = (fp_counts >= min_count) & (tpr > delta)
+  eps = np.log(tpr[valid] - delta) - np.log(fpr[valid])
+  return np.max(eps, initial=initial_eps)
 
 
 def _random_partition(
@@ -535,6 +525,16 @@ class CanaryScoreAuditor:
     self._thresholds, self._tn_counts, self._fn_counts = _get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
+
+  def _get_tp_counts(self) -> np.ndarray:
+    """Returns the true positive counts at each threshold."""
+    # Reverse the order so they are increasing.
+    return (self._fn_counts[-1] - self._fn_counts)[::-1]
+
+  def _get_fp_counts(self) -> np.ndarray:
+    """Returns the false positive counts at each threshold."""
+    # Reverse the order so they are increasing.
+    return (self._tn_counts[-1] - self._tn_counts)[::-1]
 
   def _bootstrap(
       self,
@@ -686,21 +686,17 @@ class CanaryScoreAuditor:
       )
 
     eps = _epsilon_raw_counts_helper(
-        self._tn_counts, self._fn_counts, min_count, delta
+        self._get_tp_counts(), self._get_fp_counts(), min_count, delta
     )
 
     if not one_sided:
-      # For a two-sided estimate, we also consider the reverse decision rule,
-      # where examples with scores *lower* than the threshold are classified as
-      # "in". Reverse the counts because the helper function expects the counts
-      # to be in ascending order.
+      # For a two-sided estimate, also consider the reverse decision rule, where
+      # examples with scores *lower* than the threshold are classified as "in".
 
-      tp_counts = (self._fn_counts[-1] - self._fn_counts)[::-1]
-      fp_counts = (self._tn_counts[-1] - self._tn_counts)[::-1]
-      eps = max(
-          eps,
-          _epsilon_raw_counts_helper(tp_counts, fp_counts, min_count, delta),
+      eps_reverse = _epsilon_raw_counts_helper(
+          self._tn_counts, self._fn_counts, min_count, delta
       )
+      eps = max(eps, eps_reverse)
 
     return max(eps, 0)
 
@@ -737,7 +733,7 @@ class CanaryScoreAuditor:
           bootstrap_params,
       )
 
-    return _tpr_at_given_fpr(fpr, self._tn_counts, self._fn_counts)
+    return _tpr_at_given_fpr(fpr, self._get_tp_counts(), self._get_fp_counts())
 
   def attack_auroc(
       self,

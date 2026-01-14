@@ -335,8 +335,10 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     _, tn_counts, fn_counts = auditing._get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
+    tp_counts = (fn_counts[-1] - fn_counts)[::-1]
+    fp_counts = (tn_counts[-1] - tn_counts)[::-1]
     eps = auditing._epsilon_raw_counts_helper(
-        tn_counts, fn_counts, min_count, delta
+        tp_counts, fp_counts, min_count, delta
     )
     true_eps = dp_accounting.get_epsilon_gaussian(1.0, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=1e-1)
@@ -349,10 +351,10 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_epsilon_raw_counts_helper_worst_case(self, min_count, n_neg, n_pos):
     # Tests that the epsilon uses the minimum allowed FPR for a perfect
     # classifier.
-    tn_counts = np.array([0, n_neg, n_neg])
-    fn_counts = np.array([0, 0, n_pos])
+    tp_counts = np.array([0, n_pos, n_pos])
+    fp_counts = np.array([0, 0, n_neg])
     epsilon = auditing._epsilon_raw_counts_helper(
-        tn_counts, fn_counts, min_count, delta=0
+        tp_counts, fp_counts, min_count, delta=0
     )
     np.testing.assert_allclose(epsilon, np.log(n_neg / min_count))
 
@@ -361,10 +363,10 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       delta=[0, 1 / 8, 1 / 4, 3 / 8, 1 / 2],
   )
   def test_epsilon_raw_counts_helper_nonzero_delta(self, min_count, delta):
-    tn_counts = np.array([0, 4, 8, 8])
-    fn_counts = np.array([0, 2, 6, 8])
+    tp_counts = np.array([0, 2, 6, 8])
+    fp_counts = np.array([0, 0, 4, 8])
     epsilon = auditing._epsilon_raw_counts_helper(
-        tn_counts, fn_counts, min_count, delta
+        tp_counts, fp_counts, min_count, delta
     )
     if min_count == 0:
       expected_slopes = {0: np.inf, 1 / 8: np.inf}
