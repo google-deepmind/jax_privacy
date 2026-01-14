@@ -17,7 +17,21 @@
 
 This example demonstrates how to train a simple Transformer decoder
 on character-level language modeling using differentially private stochastic
-gradient descent (DP-SGD) with the JAX Privacy core library components.
+gradient descent (DP-SGD) with the JAX Privacy core library components. The training
+is done using (DP-SGD) with a synthetic dataset that is generated from the 
+tiny Shakespeare dataset. 
+
+Character-level tokenization is employed, mapping each unique character to an integer ID.
+This avoids the complexity of subword tokenizers and keeps the privacy accounting straightforward.
+Each training example is a fixed-length character sequence, and the learning task is next-character prediction.
+Privacy is defined at the sequence level, meaning DP-SGD protects the contribution of any 
+single character sequence. A decoder-only Transformer with learned token embeddings, learned positional embeddings,
+multi-head self-attention implemented via `jax.nn.dot_product_attention`, and feed-forward (MLP) blocks.
+Per-example gradients are clipped to a fixed L2 norm and Gaussian noise is added. Additionally poisson sampling is used
+for batch selection to align with standard DP-SGD assumptions and privacy analysis.
+
+The goal of training is to learn to predict the next character in a sequence,
+illustrating how JAX Privacy components can be composed in a realistic NLP setting.
 """
 
 from absl import app
@@ -81,11 +95,7 @@ def transformer_block(model_params, batch_x, mask):
   k = k.reshape(k.shape[0], k.shape[1], num_heads, head_dim).transpose(0, 2, 1, 3)
   v = v.reshape(v.shape[0], v.shape[1], num_heads, head_dim).transpose(0, 2, 1, 3)
 
-  scale = jnp.sqrt(head_dim)
-  attn = jnp.matmul(q, k.transpose(0, 1, 3, 2)) / scale
-  attn = jnp.where(mask, attn, -1e9)
-  attn = jax.nn.softmax(attn, axis=-1)
-  out = jnp.matmul(attn, v)
+  out = jax.nn.dot_product_attention(q, k, v, mask=mask)
 
   out = out.transpose(0, 2, 1, 3).reshape(batch_x.shape[0], batch_x.shape[1], -1)
   out = jnp.dot(out, model_params['attn']['proj'])
@@ -114,7 +124,7 @@ def model(model_params, batch_x):
   seq_len = batch_x.shape[1]
   batch_x = model_params['embedding'][batch_x] + model_params['pos_embedding'][:seq_len]
 
-  mask = jnp.tril(jnp.ones((seq_len, seq_len)))
+  mask = jnp.tri(seq_len)
   mask = mask[None, None, :, :]
 
   for layer in model_params['layers']:
@@ -255,10 +265,10 @@ def main(_):
     privatizer = plan.noise_addition_transform
 
   @jax.jit
-  def dp_train_step(model_params, opt_state, batch_data, noise_state):
+  def dp_train_step(model_params, batch_data, is_padding_example, noise_state, opt_state):
     batch_x = batch_data[:, :-1]
     batch_y = batch_data[:, 1:]
-    grads, aux = grad_fn(model_params, batch_x, batch_y)
+    grads, aux = grad_fn(model_params, batch_x, batch_y, is_padding_example=is_padding_example)
     loss = aux.values.mean()
     noisy_grads, noise_state = privatizer.update(grads, noise_state)
     updates, opt_state = optimizer.update(noisy_grads, opt_state)
@@ -281,12 +291,12 @@ def main(_):
     batch_y = batch_data[:, 1:]
 
     model_params, noise_state, opt_state = dp_train_step(
-    model_params,
-    (batch_x, batch_y),
-    is_padding_example,
-    noise_state,
-    opt_state,
-)
+        model_params,
+        (batch_x, batch_y),
+        is_padding_example,
+        noise_state,
+        opt_state,
+    )
 
     if step % 100 == 0:
         print(f"Step {step}")
