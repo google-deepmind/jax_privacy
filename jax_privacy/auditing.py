@@ -597,7 +597,7 @@ class CanaryScoreAuditor:
         return 0.0, -1
       eps_vals = np.log(tpr_lbs[valid] - delta) - np.log(fpr_ubs[valid])
       subidx = np.argmax(eps_vals)
-      return eps_vals[subidx], valid[subidx]
+      return max(0.0, eps_vals[subidx]), valid[subidx]
 
     eps, idx = eps_and_idx(fnr_ubs, fpr_ubs)
 

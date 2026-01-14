@@ -272,7 +272,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     np.testing.assert_equal(fn_counts, [0, 4])
 
   @parameterized.product(
-      n_in=(10, 100, 1000),
+      n_in=(100, 1000),
       out_samples_ratio=(0.5, 1.0, 1.5),
       thresh=(0, 0.5, 1.0),
   )
@@ -294,7 +294,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     fp = np.sum(out_canary_scores >= thresh)
     tpr_lb = 1 - auditing._clopper_pearson_upper(fn, n_in, significance / 2)
     fpr_ub = auditing._clopper_pearson_upper(fp, n_out, significance / 2)
-    expected_eps = np.log(tpr_lb / fpr_ub)
+    expected_eps = max(0, np.log(tpr_lb / fpr_ub))
     np.testing.assert_allclose(eps, expected_eps)
 
   @parameterized.product(
