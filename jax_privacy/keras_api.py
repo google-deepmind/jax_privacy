@@ -37,6 +37,7 @@ Example:
   >>> private_model = keras_api.make_private(model, params)
   >>> private_model.get_noise_multiplier()
   1.0
+
 """
 
 import dataclasses
