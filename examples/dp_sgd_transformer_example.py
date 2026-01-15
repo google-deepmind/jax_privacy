@@ -36,9 +36,9 @@ import dp_accounting
 import jax
 from jax import random
 import jax.numpy as jnp
+import numpy as np
 import optax
 import jax_privacy
-from jax_privacy import batch_selection
 from jax_privacy import noise_addition
 from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
@@ -222,16 +222,19 @@ def loss_fn(params, input_ids, target_ids):
   return -jnp.mean(target_log_probs)
 
 
-def generate_synthetic_data(key, num_samples):
-  """Generate synthetic next-token prediction data.
+def generate_synthetic_data(seed, num_samples):
+  """Generate synthetic next-token prediction data using numpy.
+  
+  Uses numpy instead of JAX to ensure the full dataset lives on CPU,
+  with only batches transferred to GPU during training.
   
   Generates sequences where each token is predictable from the previous ones
   (simple pattern: each token is (previous_token + 1) mod vocab_size).
   """
-  keys = random.split(key, num_samples)
+  rng = np.random.default_rng(seed)
   
   # Start with random tokens
-  start_tokens = random.randint(keys[0], (num_samples, 1), 0, VOCAB_SIZE)
+  start_tokens = rng.integers(0, VOCAB_SIZE, size=(num_samples, 1))
   
   # Generate sequences with a simple pattern
   sequences = [start_tokens]
@@ -239,7 +242,7 @@ def generate_synthetic_data(key, num_samples):
     next_token = (sequences[-1] + 1) % VOCAB_SIZE
     sequences.append(next_token)
   
-  full_sequences = jnp.concatenate(sequences, axis=1)
+  full_sequences = np.concatenate(sequences, axis=1)
   
   # Input is tokens 0 to seq_len-1, target is tokens 1 to seq_len
   input_ids = full_sequences[:, :-1]
@@ -265,9 +268,9 @@ def main(_):
   key = random.key(42)
   key, init_key, data_key = random.split(key, 3)
   
-  # Generate synthetic data
+  # Generate synthetic data (uses numpy to keep data on CPU)
   print("\nGenerating synthetic data...")
-  input_ids, target_ids = generate_synthetic_data(data_key, train_size)
+  input_ids, target_ids = generate_synthetic_data(seed=42, num_samples=train_size)
   print(f"  Training samples: {train_size}")
   print(f"  Sequence length: {SEQ_LEN}")
   print(f"  Vocabulary size: {VOCAB_SIZE}")
@@ -367,24 +370,27 @@ def main(_):
   print(f"{'=' * 60}")
   
   for epoch in range(num_epochs):
-    # Note: For strict privacy accounting, you should use Poisson sampling
-    # (each example included independently with probability batch_size/train_size)
-    # rather than shuffling. For simplicity, we use shuffling here, but in
-    # production you should use jax_privacy.batch_selection for proper sampling.
-    # See: https://github.com/google-deepmind/jax_privacy for batch_selection API.
-    perm = random.permutation(random.key(epoch), train_size)
-    input_ids_shuffled = input_ids[perm]
-    target_ids_shuffled = target_ids[perm]
+    # Use Poisson sampling for proper privacy accounting:
+    # Each example is included independently with probability batch_size/train_size.
+    # This matches the privacy analysis assumptions for DP-SGD.
+    sampling_prob = batch_size / train_size
+    rng_epoch = np.random.default_rng(epoch)
     
     epoch_loss = 0.0
-    num_batches = train_size // batch_size
+    num_batches = 0
     
-    for batch_idx in range(num_batches):
-      start_idx = batch_idx * batch_size
-      end_idx = start_idx + batch_size
+    # Generate Poisson-sampled batches for this epoch
+    # Expected number of batches per epoch = train_size / batch_size
+    expected_batches = train_size // batch_size
+    for batch_idx in range(expected_batches):
+      # Poisson sampling: include each example independently with prob sampling_prob
+      mask = rng_epoch.random(train_size) < sampling_prob
+      if not mask.any():
+        continue  # Skip empty batches
       
-      batch_input = input_ids_shuffled[start_idx:end_idx]
-      batch_target = target_ids_shuffled[start_idx:end_idx]
+      # Get the Poisson-sampled batch (convert numpy arrays to JAX on-the-fly)
+      batch_input = jnp.array(input_ids[mask])
+      batch_target = jnp.array(target_ids[mask])
       
       if use_dp:
         params, opt_state, loss, noise_state = dp_train_step(
@@ -394,8 +400,9 @@ def main(_):
         params, loss = train_step(params, batch_input, batch_target)
       
       epoch_loss += loss
+      num_batches += 1
     
-    avg_loss = epoch_loss / num_batches
+    avg_loss = epoch_loss / max(num_batches, 1)
     
     if (epoch + 1) % 10 == 0 or epoch == 0:
       print(f"Epoch {epoch + 1:3d}/{num_epochs}: Loss = {avg_loss:.4f}")
