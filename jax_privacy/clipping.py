@@ -140,7 +140,7 @@ def clip_pytree(
     nan_to_num = lambda x: jnp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
     pytree = jax.tree.map(nan_to_num, pytree)
   clip_norm = jnp.maximum(clip_norm, 0.0)
-  l2_norm = optax.global_norm(pytree)
+  l2_norm = optax.tree.norm(pytree, ord=2)
   scale = jnp.minimum(1.0, clip_norm / l2_norm)
   if rescale_to_unit_norm:
     scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
@@ -277,12 +277,15 @@ def clipped_fun(
     the batch. `clip_fn` takes the same arguments as `fun`. The exact output
     signature depends on `has_aux` and `return_norms`:
 
-    | `has_aux` | `return_norms` | `clipped_fn` returns  |
-    | :-------- | :--------------| :-------------------- |
-    | `False`   | `False`        | `value`               |
-    | `True`    | `False`        | `value, aux`          |
-    | `False`   | `True`         | `value, norms`        |
-    | `True`    | `True`         | `value, (aux, norms)` |
+
+    ===========  ================  =======================
+    ``has_aux``  ``return_norms``  ``clipped_fn`` returns
+    ===========  ================  =======================
+    ``False``    ``False``         ``value``
+    ``True``     ``False``         ``value, aux``
+    ``False``    ``True``          ``value, norms``
+    ``True``     ``True``          ``value, (aux, norms)``
+    ===========  ================  =======================
   """
   if isinstance(batch_argnums, int):
     batch_argnums = (batch_argnums,)
