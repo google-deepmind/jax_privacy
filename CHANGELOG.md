@@ -28,3 +28,4 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 [unreleased]: https://github.com/google-deepmind/jax_privacy/compare/v1.0.0...HEAD.
 [1.0.0]: https://github.com/google-deepmind/jax_privacy/compare/v0.2...v1.0.0.
+

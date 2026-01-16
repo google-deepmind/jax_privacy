@@ -73,6 +73,30 @@ class Split(ThresholdStrategy):
   seed: int | None = None
 
 
+@dataclasses.dataclass(frozen=True)
+class MultiSplit(ThresholdStrategy):
+  """Splits data multiple times with significance correction.
+
+  Reports the median of lower bounds computed at significance level alpha/2
+  [Meinshausen et al. (2009)]. Theorem 3.1 says that 2 * median(p_i) is a valid
+  p-value, which implies that the median of bounds computed at significance
+  alpha / 2 corresponds to the valid rejection threshold for an overall level of
+  alpha. See proof of Theorem 3.1 in https://arxiv.org/pdf/0811.2177 for
+  details.
+
+  Attributes:
+    num_samples: The number of splits to use.
+    threshold_estimation_frac: The fraction of data to use for computing the
+      threshold. The rest will be used for computing the bound.
+    seed: The seed for the random number generator. If None, a seed will be
+      chosen non-deterministically.
+  """
+
+  num_samples: int = 100
+  threshold_estimation_frac: float = 0.5
+  seed: int | None = None
+
+
 AuditAllThresholdsMethod: TypeAlias = Callable[
     [
         'CanaryScoreAuditor',  # self
@@ -674,8 +698,8 @@ class CanaryScoreAuditor:
     Returns:
       Epsilon estimate ln(TPR/FPR).
     """
-    if min_count < 0:
-      raise ValueError(f'min_count must be non-negative, got {min_count}.')
+    if min_count < 1:
+      raise ValueError(f'min_count must be positive, got {min_count}.')
     if not 0 <= delta <= 1:
       raise ValueError(f'delta must be in [0, 1], got {delta}.')
 
@@ -1017,27 +1041,46 @@ class CanaryScoreAuditor:
       one_sided: bool = True,
   ) -> float:
     """Computes the epsilon bound for a given threshold strategy."""
+
+    def single_split(frac: float, alpha: float, seed: int | None) -> float:
+      rng = np.random.default_rng(seed)
+      in_scores_1, in_scores_2 = _random_partition(
+          self._in_canary_scores, rng, frac
+      )
+      out_scores_1, out_scores_2 = _random_partition(
+          self._out_canary_scores, rng, frac
+      )
+      auditor_1 = CanaryScoreAuditor(in_scores_1, out_scores_1)
+      _, threshold = audit_all_thresholds_method(
+          auditor_1, alpha, delta, one_sided, None
+      )
+      auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
+      return audit_all_thresholds_method(
+          auditor_2, alpha, delta, one_sided, threshold
+      )
+
     match threshold_strategy:
       case Explicit(threshold):
         eps = audit_all_thresholds_method(
             self, significance, delta, one_sided, threshold
         )
-      case Split(threshold_estimation_frac=p, seed=seed):
-        rng = np.random.default_rng(seed)
-        in_scores_1, in_scores_2 = _random_partition(
-            self._in_canary_scores, rng, p
-        )
-        out_scores_1, out_scores_2 = _random_partition(
-            self._out_canary_scores, rng, p
-        )
-        auditor_1 = CanaryScoreAuditor(in_scores_1, out_scores_1)
-        _, threshold = audit_all_thresholds_method(
-            auditor_1, significance, delta, one_sided, None
-        )
-        auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
-        eps = audit_all_thresholds_method(
-            auditor_2, significance, delta, one_sided, threshold
-        )
+      case Split(threshold_estimation_frac=frac, seed=seed):
+        eps = single_split(frac, significance, seed)
+      case MultiSplit(
+          num_samples=num_samples,
+          threshold_estimation_frac=frac,
+          seed=seed,
+      ):
+        rng = np.random.default_rng(seed=seed)
+        seeds = rng.integers(np.iinfo(np.int64).max, size=num_samples)
+        with futures.ThreadPoolExecutor() as pool:
+          values = list(
+              pool.map(
+                  functools.partial(single_split, frac, significance / 2),
+                  seeds,
+              )
+          )
+        eps = np.median(values)
       case Bonferroni():
         significance_bonferroni = significance / len(self._fn_counts)
         eps, _ = audit_all_thresholds_method(

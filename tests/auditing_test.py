@@ -321,7 +321,29 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     np.testing.assert_allclose(eps_lb, true_eps, rtol=0.2)
 
   @parameterized.product(
-      min_count=(0, 1, 50),
+      out_samples_ratio=(0.5, 1.0, 1.5),
+      mu=(0.7, 1.0, 1.5),
+  )
+  def test_epsilon_clopper_pearson_tight_multi_split(
+      self, out_samples_ratio, mu
+  ):
+    significance = 0.1
+    delta = 0.1
+    in_samples = 100_000
+    threshold_strategy = auditing.MultiSplit(seed=0)
+    out_samples = int(in_samples * out_samples_ratio)
+    in_canary_scores = _deterministic_normal(mu, 1, in_samples)
+    out_canary_scores = _deterministic_normal(0, 1, out_samples)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    eps_lb = auditor.epsilon_clopper_pearson(
+        significance, delta, threshold_strategy=threshold_strategy
+    )
+    true_eps = dp_accounting.get_epsilon_gaussian(1 / mu, delta)
+    np.testing.assert_array_less(eps_lb, true_eps)
+    np.testing.assert_allclose(eps_lb, true_eps, rtol=0.2)
+
+  @parameterized.product(
+      min_count=(1, 50),
       out_samples_ratio=(0.5, 1.0, 1.5),
   )
   def test_epsilon_raw_counts_helper_accurate_large_delta(
@@ -359,7 +381,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     np.testing.assert_allclose(epsilon, np.log(n_neg / min_count))
 
   @parameterized.product(
-      min_count=[0, 1, 2],
+      min_count=[1, 2],
       delta=[0, 1 / 8, 1 / 4, 3 / 8, 1 / 2],
   )
   def test_epsilon_raw_counts_helper_nonzero_delta(self, min_count, delta):
