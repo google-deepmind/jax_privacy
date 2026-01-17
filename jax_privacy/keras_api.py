@@ -224,8 +224,16 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
 
   Returns:
     The Keras model with overloaded methods for DP-SGD training.
+
+  Attributes:
+    dp_config: The `DPKerasConfig` object containing the configuration for
+      DP-SGD training. If `noise_multiplier` was not provided in the initial
+      `params`, this object will contain the auto-calibrated value.
   """
   _validate_model(model)
+
+  if params.noise_multiplier is None:
+    params = params.update_with_calibrated_noise_multiplier()
 
   # Adding DP-SGD to the model works in the following way:
   # 1. We add attributes to the model:
@@ -241,6 +249,7 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   #    that updates the metrics variables for DP-SGD training.
 
   _add_dp_sgd_attributes(model, params)
+  model.dp_config = params
   model.fit = types.MethodType(
       _create_fit_fn_with_validation(model.fit, params), model
   )
@@ -584,11 +593,7 @@ def _noised_clipped_grads(
       optimizer_variables,
   )
 
-  noise_multiplier = (
-      dp_params.noise_multiplier
-      if dp_params.noise_multiplier is not None
-      else dp_params.update_with_calibrated_noise_multiplier().noise_multiplier
-  )
+  noise_multiplier = dp_params.noise_multiplier
   l2_sensitivity = clipped_grad_fn.l2_norm_bound
   accumulation_factor = np.sqrt(dp_params.gradient_accumulation_steps)
   stddev = noise_multiplier * l2_sensitivity / accumulation_factor
