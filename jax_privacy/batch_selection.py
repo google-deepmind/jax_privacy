@@ -52,25 +52,53 @@ class PartitionType(enum.Enum):
 def _independent_partition(
     num_examples: int,
     num_groups: int,
-    rng: np.random.Generator,
+    rng,
     dtype: np.typing.DTypeLike
-) -> list[np.ndarray]:
-  sizes = rng.multinomial(num_examples, np.ones(num_groups) / num_groups)
-  boundaries = np.cumsum(sizes)[:-1]
-  indices = np.random.permutation(num_examples).astype(dtype)
-  return np.split(indices, boundaries)
+  ) -> list[np.ndarray]:
+    try:
+      import randomgen
+    except ImportError:
+      randomgen = None
+    if randomgen and isinstance(rng, randomgen.RandomGenerator):
+      sizes = rng.multinomial(num_examples, np.ones(num_groups) / num_groups)
+      boundaries = np.cumsum(sizes)[:-1]
+      indices = rng.permutation(num_examples).astype(dtype)
+    else:
+      sizes = rng.multinomial(num_examples, np.ones(num_groups) / num_groups)
+      boundaries = np.cumsum(sizes)[:-1]
+      indices = np.random.permutation(num_examples).astype(dtype)
+    return np.split(indices, boundaries)
 
 
 def _equal_split_partition(
     num_examples: int,
     num_groups: int,
-    rng: np.random.Generator,
+    rng,
     dtype: np.typing.DTypeLike
-) -> list[np.ndarray]:
-  indices = rng.permutation(num_examples).astype(dtype)
-  group_size = num_examples // num_groups
-  groups = np.array_split(indices, num_groups)
-  return [g[:group_size] for g in groups]
+  ) -> list[np.ndarray]:
+    try:
+      import randomgen
+    except ImportError:
+      randomgen = None
+    if randomgen and isinstance(rng, randomgen.RandomGenerator):
+      indices = rng.permutation(num_examples).astype(dtype)
+    else:
+      indices = np.random.permutation(num_examples).astype(dtype)
+    group_size = num_examples // num_groups
+    groups = np.array_split(indices, num_groups)
+    return [g[:group_size] for g in groups]
+class CryptoSecureBatchSelectionStrategy(BatchSelectionStrategy):
+  """Batch selection using cryptographically secure randomgen RNG."""
+  def batch_iterator(self, num_examples: int, rng: None = None):
+    try:
+      import randomgen
+    except ImportError:
+      raise ImportError("randomgen must be installed for CryptoSecureBatchSelectionStrategy.")
+    if rng is None:
+      rng = randomgen.RandomGenerator(randomgen.Xoshiro256(secure=True))
+    while True:
+      indices = rng.permutation(num_examples)
+      yield indices
 
 
 def split_and_pad_global_batch(
