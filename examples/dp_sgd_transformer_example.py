@@ -39,11 +39,13 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import jax_privacy
+from jax_privacy import keras_api
 from jax_privacy import noise_addition
 from jax_privacy.accounting import calibrate
+from jax_privacy.keras_api import create_poisson_data_source
 import numpy as np
 import optax
-import tensorflow as tf
+
 
 FLAGS = flags.FLAGS
 
@@ -73,27 +75,7 @@ class CharacterTokenizer:
     return "".join([self.id_to_char[i] for i in ids])
 
 
-def generate_dataset(text, seq_len, batch_size):
-  """Generates a dataset of sequences for next-token prediction."""
-  tokenizer = CharacterTokenizer(text)
-  encoded_text = np.array(tokenizer.encode(text))
 
-  def generate_examples():
-    for i in range(0, len(encoded_text) - seq_len, 1):
-      yield encoded_text[i : i + seq_len], encoded_text[i + 1 : i + seq_len + 1]
-
-  dataset = tf.data.Dataset.from_generator(
-      generate_examples,
-      output_signature=(
-          tf.TensorSpec(shape=(seq_len,), dtype=tf.int32),
-          tf.TensorSpec(shape=(seq_len,), dtype=tf.int32),
-      ),
-  )
-
-  return (
-      dataset.shuffle(10000).batch(batch_size, drop_remainder=True),
-      tokenizer,
-  )
 
 
 # --- 2. Transformer Model Definition (Flax Linen) ---
@@ -185,8 +167,15 @@ def main(_):
 
   # Dummy data
   dummy_text = "JAX Privacy " * 1000
-  dataset, tokenizer = generate_dataset(dummy_text, seq_len, FLAGS.batch_size)
-  train_size = len(dummy_text) - seq_len
+  tokenizer = CharacterTokenizer(dummy_text)
+  encoded_text = np.array(tokenizer.encode(dummy_text))
+  x_train, y_train = [], []
+  for i in range(0, len(encoded_text) - seq_len, 1):
+    x_train.append(encoded_text[i : i + seq_len])
+    y_train.append(encoded_text[i + 1 : i + seq_len + 1])
+  x_train = np.array(x_train)
+  y_train = np.array(y_train)
+  train_size = len(x_train)
 
   # Model initialization
   model = TransformerDecoder(
@@ -205,6 +194,15 @@ def main(_):
   # --- DP-SGD Setup ---
   print("Calibrating noise multiplier...")
   num_updates = FLAGS.num_epochs * train_steps_per_epoch
+  dp_params = keras_api.DPKerasConfig(
+      epsilon=FLAGS.target_epsilon,
+      delta=target_delta,
+      clipping_norm=FLAGS.clipping_norm,
+      batch_size=FLAGS.batch_size,
+      train_steps=num_updates,
+      train_size=train_size,
+      gradient_accumulation_steps=1,
+  )
   accountant = jax_privacy.accounting.analysis.DpsgdTrainingAccountant(
       dp_accountant_config=(
           jax_privacy.accounting.accountants.PldAccountantConfig()
@@ -221,6 +219,10 @@ def main(_):
   print(
       "Using noise multiplier: "
       f"{noise_multiplier:.4f} for ε={FLAGS.target_epsilon}"
+  )
+
+  data_source = create_poisson_data_source(
+      x_train, y_train, dp_params=dp_params
   )
 
   # `clipped_grad` wraps the loss function to compute per-example gradients,
@@ -242,8 +244,11 @@ def main(_):
 
   @jax.jit
   def train_step(params, opt_state, noise_state, batch):
+    inputs, targets, _sample_weight, mask = batch
     # 1. Compute clipped per-example gradients and sum them.
-    sum_clipped_grads = clipped_grad_fn(params, model, batch)
+    sum_clipped_grads = clipped_grad_fn(
+        params, model, (inputs, targets), is_padding_example=mask
+    )
 
     # 2. Average the gradients.
     avg_grads = jax.tree.map(
@@ -258,16 +263,15 @@ def main(_):
     new_params = optax.apply_updates(params, updates)
 
     # Also compute loss for logging.
-    loss_value = loss_fn(params, model, batch)
+    loss_value = loss_fn(params, model, (inputs, targets))
 
     return new_params, new_opt_state, new_noise_state, loss_value
 
   # --- Training Loop ---
   print("Starting training...")
   for epoch in range(FLAGS.num_epochs):
-    for step, batch in enumerate(dataset.as_numpy_iterator()):
-      if step >= train_steps_per_epoch:
-        break
+    for step in range(train_steps_per_epoch):
+      batch = next(data_source)
       params, opt_state, noise_state, loss_value = train_step(
           params, opt_state, noise_state, batch
       )

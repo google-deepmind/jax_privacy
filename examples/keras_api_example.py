@@ -20,10 +20,10 @@ https://github.com/keras-team/keras-io/blob/master/examples/vision/mnist_convnet
 """
 
 import os
-from absl import app
 
 os.environ["KERAS_BACKEND"] = "jax"
-from jax_privacy.keras import keras_api  # pylint: disable=g-import-not-at-top
+from absl import app
+from jax_privacy import keras_api  # pylint: disable=g-import-not-at-top
 import keras
 from keras import layers
 import numpy as np
@@ -70,40 +70,67 @@ def main(_):
 
   epsilon = 1.1
   delta = 1e-5
-  batch_size = 128
+  batch_size = 256
   epochs = 5
   train_size = len(x_train)
   dp = True
   clipping_norm = 1.0
 
   if dp:
-    params = keras_api.DPKerasConfig(
+    steps_per_epoch = train_size // batch_size
+    dp_params = keras_api.DPKerasConfig(
         epsilon=epsilon,
         delta=delta,
         clipping_norm=clipping_norm,
         batch_size=batch_size,
-        train_steps=epochs * (train_size // batch_size),
+        train_steps=epochs * steps_per_epoch,
         train_size=train_size,
         seed=0,
         gradient_accumulation_steps=1,
     )
-    model = keras_api.make_private(model, params)
+    # Compile the model before making it private to initialize optimizer state.
+    model.compile(
+        loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"]
+    )
+    # Run a single step to initialize metrics.
+    model.train_on_batch(x_train[:batch_size], y_train[:batch_size])
+
+    model = keras_api.make_private(model, dp_params)
     print(
         f"DP training:{epsilon=} {delta=} {clipping_norm=} {batch_size=} "
         f" {epochs=} {train_size=}"
     )
+
+    data_source = keras_api.create_poisson_data_source(
+        x_train, y_train, dp_params=dp_params
+    )
+
+    # Manual training loop
+    state = (
+        [v.value for v in model.trainable_variables],
+        [v.value for v in model.non_trainable_variables],
+        [v.value for v in model.optimizer.variables],
+        [v.value for m in model.metrics for v in m.variables],
+    )
+
+    for epoch in range(epochs):
+      for _ in range(steps_per_epoch):
+        batch = next(data_source)
+        logs, state = model.train_step(state, batch)
+      print(f"Epoch {epoch + 1}/{epochs} - logs: {logs}")
+
   else:
     print("Non-DP training")
-  model.compile(
-      loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"]
-  )
-  model.fit(
-      x_train,
-      y_train,
-      batch_size=batch_size,
-      epochs=epochs,
-      validation_data=(x_test, y_test),
-  )
+    model.compile(
+        loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"]
+    )
+    model.fit(
+        x_train,
+        y_train,
+        batch_size=batch_size,
+        epochs=epochs,
+        validation_data=(x_test, y_test),
+    )
   # [END example]
   print("DP: expected train accuracy: ~96%, val accuracy: ~92%")
   print("Non-DP: expected train accuracy: ~98%, val accuracy: ~98%")

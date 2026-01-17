@@ -31,6 +31,215 @@ from jax_privacy.accounting import calibrate
 import keras
 import numpy as np
 
+from jax_privacy import batch_selection
+
+
+def create_poisson_data_source(
+
+
+    x: np.ndarray,
+
+
+    y: np.ndarray,
+
+
+    dp_params: 'DPKerasConfig',
+
+
+    sample_weight: np.ndarray | None = None,
+
+
+) -> typing.Generator[
+
+
+    tuple[
+
+
+        np.ndarray,
+
+
+        np.ndarray,
+
+
+        np.ndarray | None,
+
+
+        np.ndarray,
+
+
+    ],
+
+
+    None,
+
+
+    None,
+
+
+]:
+
+
+  """Creates a data source that yields batches using Poisson sampling.
+
+
+
+
+
+  This is the recommended way to prepare data for DP training with the Keras API
+
+
+  to ensure valid privacy guarantees. The function creates an infinite generator
+
+
+  that samples batches from the provided data, pads them to a fixed size, and
+
+
+  yields them along with a padding mask.
+
+
+
+
+
+  Args:
+
+
+    x: The input features.
+
+
+    y: The target labels.
+
+
+    dp_params: The `DPKerasConfig` object containing the training parameters.
+
+
+    sample_weight: Optional array of weights for each sample.
+
+
+
+
+
+  Returns:
+
+
+    An infinite generator that yields 4-element tuples of
+
+
+    (padded_x, padded_y, padded_sample_weight, is_padding_mask).
+
+
+  """
+
+
+  num_samples = dp_params.train_size
+
+
+  sampling_probability = dp_params.effective_batch_size / num_samples
+
+
+
+
+
+  strategy = batch_selection.CyclicPoissonSampling(
+
+
+      sampling_prob=sampling_probability,
+
+
+      iterations=dp_params.train_steps,
+
+
+      truncated_batch_size=dp_params.batch_size,
+
+
+  )
+
+
+
+
+
+  def data_generator():
+
+
+    batch_indices_iterator = strategy.batch_iterator(
+
+
+        num_examples=num_samples,
+
+
+    )
+
+
+    for batch_indices in batch_indices_iterator:
+
+
+      pad_size = dp_params.batch_size - len(batch_indices)
+
+
+      padded_indices = np.pad(
+
+
+          batch_indices, (0, pad_size), 'constant', constant_values=-1
+
+
+      )
+
+
+
+
+
+      mask = padded_indices == -1
+
+
+      # Replace -1 with 0 for indexing, it will be masked out by `clipped_grad`.
+
+
+      safe_indices = np.where(mask, 0, padded_indices)
+
+
+
+
+
+      padded_x = x[safe_indices]
+
+
+      padded_y = y[safe_indices]
+
+
+
+
+
+      padded_weight = None
+
+
+      if sample_weight is not None:
+
+
+        padded_weight = sample_weight[safe_indices]
+
+
+
+
+
+      yield padded_x, padded_y, padded_weight, mask
+
+
+
+
+
+  def infinite_generator():
+
+
+    while True:
+
+
+      yield from data_generator()
+
+
+
+
+
+  return infinite_generator()
+
 
 @dataclasses.dataclass(frozen=True)
 class DPKerasConfig:
@@ -226,6 +435,10 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
     The Keras model with overloaded methods for DP-SGD training.
   """
   _validate_model(model)
+
+  if params.noise_multiplier is None:
+    params = params.update_with_calibrated_noise_multiplier()
+  model.dp_config = params
 
   # Adding DP-SGD to the model works in the following way:
   # 1. We add attributes to the model:
@@ -466,7 +679,12 @@ def _dp_train_step(
       optimizer_variables,
       _,
   ) = state
-  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
+
+  is_padding_example = None
+  if isinstance(data, tuple) and len(data) == 4:
+    x, y, sample_weight, is_padding_example = data
+  else:
+    x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
 
   dp_batch_size = self._dp_params.batch_size  # pylint: disable=protected-access
   actual_batch_size = jax.tree_util.tree_leaves(x)[0].shape[0]
@@ -487,7 +705,8 @@ def _dp_train_step(
       self.compute_loss_and_updates,
       self._dp_params,  # pylint: disable=protected-access
       state,
-      data,
+      (x, y, sample_weight),
+      is_padding_example=is_padding_example,
   )
   (
       unscaled_loss,
@@ -538,6 +757,7 @@ def _noised_clipped_grads(
     dp_params: DPKerasConfig,
     state: _StateType,
     data: _KerasInputsDataType,
+    is_padding_example: chex.Array | None = None,
 ) -> tuple[tuple[chex.Numeric, _AuxType], chex.ArrayTree]:
   """Computes noised and clipped gradients.
 
@@ -548,6 +768,8 @@ def _noised_clipped_grads(
     state: The state of the model.
     data: The data for the model: triple of x, y (can be None), sample_weight
       (can be None).
+    is_padding_example: An optional boolean mask indicating which examples in
+      the batch are padding.
 
   Returns:
     (loss, aux), grads
@@ -582,13 +804,10 @@ def _noised_clipped_grads(
       sample_weight,
       True,  # training=True
       optimizer_variables,
+      is_padding_example=is_padding_example,
   )
 
-  noise_multiplier = (
-      dp_params.noise_multiplier
-      if dp_params.noise_multiplier is not None
-      else dp_params.update_with_calibrated_noise_multiplier().noise_multiplier
-  )
+  noise_multiplier = dp_params.noise_multiplier
   l2_sensitivity = clipped_grad_fn.l2_norm_bound
   accumulation_factor = np.sqrt(dp_params.gradient_accumulation_steps)
   stddev = noise_multiplier * l2_sensitivity / accumulation_factor
