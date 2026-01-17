@@ -628,6 +628,7 @@ def _noised_clipped_grads(
     state: The state of the model.
     data: The data for the model: triple of x, y (can be None), sample_weight
       (can be None).
+    model: Optional Keras model used to cache the calibrated noise multiplier.
 
   Returns:
     (loss, aux), grads
