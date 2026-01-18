@@ -234,17 +234,19 @@ def _dense_matrix_factorization_privatizer(
   if noising_matrix.ndim != 2:
     raise ValueError(f'Expected 2D matrix, found {noising_matrix.shape=}.')
 
-  def privatize(sum_of_clipped_grads, noise_state):
+  def privatize(sum_of_clipped_grads, noise_state, *, noise=None):
     index = noise_state
     matrix_row = noising_matrix[index] * stddev
 
-    target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
-    noise = optax.tree.random_like(
-        rng_key=prng_key,
-        target_tree=target,
-        sampler=functools.partial(_gaussian_linear_combination, matrix_row),
-        dtype=dtype
-    )
+    if noise is None:
+      target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
+      noise = optax.tree.random_like(
+          rng_key=prng_key,
+          target_tree=target,
+          sampler=functools.partial(_gaussian_linear_combination, matrix_row),
+          dtype=dtype,
+      )
+
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, noise)
     return noisy_grads, index + 1
 
@@ -276,12 +278,17 @@ def _streaming_matrix_factorization_privatizer(
     intermediate = jax.tree.map(strategy.get_noise_structure, model)
     return prng_key, noising_matrix.init_multiply(intermediate)
 
-  def privatize(sum_of_clipped_grads, noise_state):
+  def privatize(sum_of_clipped_grads, noise_state, *, noise=None):
     prng_key, inner_state = noise_state
-    new_key, sub_key = jax.random.split(prng_key)
 
-    target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
-    iid_noise = _iid_normal_noise(sub_key, target, stddev, dtype)
+    if noise is None:
+      new_key, sub_key = jax.random.split(prng_key)
+      target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
+      iid_noise = _iid_normal_noise(sub_key, target, stddev, dtype)
+    else:
+      new_key = prng_key
+      iid_noise = noise
+
     corr_noise, new_state = noising_matrix.multiply_next(iid_noise, inner_state)
 
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, corr_noise)
