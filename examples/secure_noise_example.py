@@ -13,138 +13,114 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Example of training with cryptographically secure noise.
+r"""Example of how to use cryptographically secure random noise generation.
 
-This script demonstrates how to train a simple model with cryptographically
-secure noise generated on the CPU and injected into the training step on the
-accelerator.
+This example demonstrates how to inject custom noise into the gradient noising
+process, which is useful for sourcing randomness from outside of JAX's PRNG
+framework (e.g., from a hardware security module).
 """
 
 import time
-
-import flax.linen as nn
+from absl import app
+from absl import flags
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from randomgen.aes import AESCounter
-from randomgen.generator import ExtendedGenerator
+from jax_privacy import noise_addition
 
-from jax_privacy.batch_selection import CyclicPoissonSampling
-from jax_privacy.noise_addition import gaussian_privatizer
+_USE_SECURE_RNG = flags.DEFINE_boolean(
+    'use_secure_rng', True, 'Whether to use secure random number generation.'
+)
+_STEPS = flags.DEFINE_integer(
+    'steps', 10, 'Number of training steps to run.'
+)
+_STDDEV = flags.DEFINE_float('stddev', 1.0, 'Noise standard deviation.')
 
-
-def generate_secure_noise(params_tree, stddev, generator):
-  """Generates a PyTree of Gaussian noise on the CPU."""
-  numpy_generator = np.random.default_rng(generator.bit_generator)
-  noise_tree = jax.tree.map(
-      lambda x: stddev
-      * numpy_generator.standard_normal(size=x.shape).astype(x.dtype),
-      params_tree,
-  )
-  return noise_tree
-
-
-class SimpleModel(nn.Module):
-  """A simple linear model."""
-
-  @nn.compact
-  def __call__(self, x):
-    return nn.Dense(features=1)(x)
-
-
-def loss_fn(params, model, batch):
-  """Calculates the loss for a batch."""
-  preds = model.apply({'params': params}, batch['image'])
-  return jnp.mean((preds - batch['label']) ** 2)
-
-def main():
-  """Trains a simple model with secure noise."""
-  # RNG Setup
-  secure_rng = ExtendedGenerator(AESCounter())
-  jax_rng = jax.random.PRNGKey(0)
-
-  # Model and data setup
-  model = SimpleModel()
-  dummy_input = jnp.zeros((1, 28 * 28))
-  params = model.init(jax_rng, dummy_input)['params']
-  dataset_size = 1000
-  batch_size = 64
-  num_features = 28 * 28
-
-  # Create a dummy dataset
-  dummy_dataset = {
-      'image': jnp.ones((dataset_size, num_features)),
-      'label': jnp.ones((dataset_size, 1)),
+def toy_model_params():
+  """Returns a PyTree of model parameters for a toy model."""
+  return {
+      'layer1': jnp.zeros((1024, 1024)),
+      'layer2': jnp.zeros((1024, 512)),
   }
 
-  # Training setup
-  learning_rate = 0.1
-  stddev = 1.0
-  iterations = 20
-  privatizer = gaussian_privatizer(stddev=stddev)
-  optimizer = optax.sgd(learning_rate)
-  opt_state = optimizer.init(params)
-  noise_state = privatizer.init(params)
+def loss_fn(params, batch):
+  """A dummy loss function."""
+  return sum(jnp.sum(p) for p in jax.tree.leaves(params))
 
-  # Batch selection setup
-  batch_strategy = CyclicPoissonSampling(
-      sampling_prob=batch_size / dataset_size,
-      iterations=iterations,
+# WARNING: This function must never be called inside a @jax.jit context.
+# Doing so would cause the "random" noise to be statically compiled into the
+# XLA graph, resulting in the same noise being added at every step.
+def generate_secure_noise(stddev, grads_treedef):
+  """Generates i.i.d. Gaussian noise on the CPU using NumPy."""
+  return jax.tree.map(
+      lambda x: np.random.normal(scale=stddev, size=x.shape).astype(x.dtype),
+      grads_treedef
   )
-  batch_iterator = batch_strategy.batch_iterator(
-      num_examples=dataset_size,
-      rng=secure_rng.bit_generator,
+
+def main(_):
+  params = toy_model_params()
+  # This privatizer will be used to generate noise if use_secure_rng is False
+  privatizer = noise_addition.gaussian_privatizer(
+      stddev=_STDDEV.value,
+      prng_key=jax.random.key(0),
   )
+  privatizer_state = privatizer.init(params)
 
   @jax.jit
-  def train_step(params, opt_state, noise_state, batch, noise):
-    """Performs a single training step."""
-    grads = jax.grad(loss_fn)(params, model, batch)
-    noisy_grads, new_noise_state = privatizer.update(
-        grads, noise_state, noise=noise
-    )
-    updates, new_opt_state = optimizer.update(noisy_grads, opt_state, params)
-    new_params = optax.apply_updates(params, updates)
-    return new_params, new_opt_state, new_noise_state
+  def train_step(params, batch, privatizer_state, secure_noise):
+    """
+    Computes gradients and adds noise.
+    If `secure_noise` is provided, it's used for noising. Otherwise, the
+    privatizer generates the noise.
+    """
+    grads = jax.grad(loss_fn)(params, batch)
 
-  # Asynchronous noise generation
-  print("Generating initial secure noise...")
-  future_noise = generate_secure_noise(params, stddev, secure_rng)
-  future_noise = jax.device_put(future_noise)
-
-  # Training loop
-  total_time = 0
-  for step_num, batch_indices in enumerate(batch_iterator):
-    print(f"Step {step_num + 1}/{iterations}")
-    batch = jax.tree.map(lambda x: x[batch_indices], dummy_dataset)
-
-    # Use the noise for the current step
-    current_noise = future_noise
-
-    start_time = time.time()
-
-    # Generate noise for the *next* step while the current step runs
-    future_noise = generate_secure_noise(params, stddev, secure_rng)
-    future_noise = jax.device_put(future_noise)
-    
-    # Perform the training step
-    params, opt_state, noise_state = train_step(
-        params, opt_state, noise_state, batch, current_noise
+    # privatizer.update still gets called to advance the PRNG state,
+    # but its output is conditionally overwritten.
+    noisy_grads_jax, new_privatizer_state = privatizer.update(
+        grads, privatizer_state
     )
 
-    # Block to ensure the step is finished before measuring time
-    jax.block_until_ready(params)
-    end_time = time.time()
+    if secure_noise is not None:
+      # Manually add the CPU-generated secure noise
+      iid_normal = secure_noise
+      noisy_grads = jax.tree.map(
+          lambda g, n: g + n, grads, iid_normal
+      )
+    else:
+      noisy_grads = noisy_grads_jax
 
-    step_time = end_time - start_time
-    total_time += step_time
-    print(f"  Step time: {step_time:.4f}s")
-    print("  Secure noise injected.")
+    return noisy_grads, new_privatizer_state
 
-  print("\nTraining finished.")
-  print(f"Average time per step: {total_time / iterations:.4f}s")
+  print(f"Running {_STEPS.value} steps with use_secure_rng={_USE_SECURE_RNG.value}")
+  start_time = time.time()
 
+  # Dummy batch
+  batch = None
+  # We need to define grads_treedef once outside the loop
+  grads_treedef = jax.eval_shape(lambda p: jax.grad(loss_fn)(p, batch), params)
 
-if __name__ == "__main__":
-  main()
+  for step in range(_STEPS.value):
+    secure_noise_tree = None
+    if _USE_SECURE_RNG.value:
+      # In a real scenario, this is where you would call your secure RNG
+      secure_noise_tree = generate_secure_noise(_STDDEV.value, grads_treedef)
+
+    # Pass the secure noise to train_step
+    _, privatizer_state = train_step(
+        params, batch, privatizer_state, secure_noise_tree
+    )
+
+  # Block until all steps are complete to get accurate timing
+  jax.block_until_ready(privatizer_state)
+  end_time = time.time()
+
+  total_time = end_time - start_time
+  avg_step_time = total_time / _STEPS.value
+
+  print(f"Total time for {_STEPS.value} steps: {total_time:.4f} seconds")
+  print(f"Average Step Time: {avg_step_time:.4f} seconds")
+
+if __name__ == '__main__':
+  app.run(main)
