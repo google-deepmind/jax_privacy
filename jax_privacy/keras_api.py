@@ -13,7 +13,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""API for adding DP-SGD to a Keras model."""
+# pylint: disable=todo-style
+"""API for adding DP-SGD to a Keras model.
+
+Example Usage:
+
+.. code-block:: python
+
+   import os
+   os.environ["KERAS_BACKEND"] = "jax"
+   import keras
+   from jax_privacy import keras_api
+
+   model = keras.Sequential([
+       keras.Input(shape=(1,)),
+       keras.layers.Dense(1),
+   ])
+   params = keras_api.DPKerasConfig(
+       epsilon=1.0,
+       delta=1e-5,
+       clipping_norm=1.0,
+       batch_size=8,
+       gradient_accumulation_steps=1,
+       train_steps=10,
+       train_size=80,
+       noise_multiplier=1.0,
+   )
+   private_model = keras_api.make_private(model, params)
+   private_model.get_noise_multiplier()
+
+"""
 
 import dataclasses
 import functools
@@ -241,6 +270,7 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   #    that updates the metrics variables for DP-SGD training.
 
   _add_dp_sgd_attributes(model, params)
+  model.get_noise_multiplier = types.MethodType(get_noise_multiplier, model)
   model.fit = types.MethodType(
       _create_fit_fn_with_validation(model.fit, params), model
   )
@@ -254,6 +284,28 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
         _update_metrics_variables, model
     )
   return model
+
+
+def get_noise_multiplier(model: keras.Model) -> float:
+  """Returns the noise multiplier used for DP-SGD training.
+
+  If the noise multiplier is not set in DPKerasConfig, this will calibrate it
+  once and cache the value on the model.
+
+  Args:
+    model: A Keras model previously wrapped with make_private().
+
+  Returns:
+    The configured or calibrated noise multiplier.
+  """
+  if not hasattr(model, '_dp_params'):
+    raise ValueError(
+        'Model does not appear to be a DP-SGD Keras model. '
+        'Call make_private() first.'
+    )
+  return _resolve_noise_multiplier(
+      model._dp_params, model  # pylint: disable=protected-access
+  )
 
 
 def _validate_model(model: keras.Model) -> None:
@@ -285,6 +337,7 @@ def _validate_optimizer(model: keras.Model, params: DPKerasConfig) -> None:
 def _add_dp_sgd_attributes(model: keras.Model, params: DPKerasConfig) -> None:
   """Adds DP-SGD training attributes to the Keras model."""
   model._dp_params = params  # pylint: disable=protected-access
+  model._dp_noise_multiplier = params.noise_multiplier  # pylint: disable=protected-access
   seed = _get_random_int64() if params.seed is None else params.seed
   model.add_weight(
       name='_rng',
@@ -488,6 +541,7 @@ def _dp_train_step(
       self._dp_params,  # pylint: disable=protected-access
       state,
       data,
+      model=self,
   )
   (
       unscaled_loss,
@@ -533,11 +587,38 @@ def _dp_train_step(
 LossFn = typing.Callable[..., tuple[chex.Numeric, _AuxType]]
 
 
+def _resolve_noise_multiplier(
+    dp_params: DPKerasConfig, model: keras.Model | None = None
+) -> float:
+  """Returns a cached noise multiplier or calibrates it once.
+
+  Args:
+    dp_params: DP configuration to read or calibrate the noise multiplier
+      from.
+    model: Optional Keras model used to cache/reuse the calibrated value.
+
+  Returns:
+    The configured or calibrated noise multiplier.
+  """
+  if dp_params.noise_multiplier is not None:
+    return dp_params.noise_multiplier
+  if model is not None:
+    cached = getattr(model, '_dp_noise_multiplier', None)
+    if cached is not None:
+      return cached
+  calibrated = dp_params.update_with_calibrated_noise_multiplier()
+  noise_multiplier = calibrated.noise_multiplier
+  if model is not None:
+    model._dp_noise_multiplier = noise_multiplier  # pylint: disable=protected-access
+  return noise_multiplier
+
+
 def _noised_clipped_grads(
     compute_loss_and_updates_fn: LossFn,
     dp_params: DPKerasConfig,
     state: _StateType,
     data: _KerasInputsDataType,
+    model: keras.Model | None = None,
 ) -> tuple[tuple[chex.Numeric, _AuxType], chex.ArrayTree]:
   """Computes noised and clipped gradients.
 
@@ -548,6 +629,7 @@ def _noised_clipped_grads(
     state: The state of the model.
     data: The data for the model: triple of x, y (can be None), sample_weight
       (can be None).
+    model: Optional Keras model used to cache the calibrated noise multiplier.
 
   Returns:
     (loss, aux), grads
@@ -584,11 +666,7 @@ def _noised_clipped_grads(
       optimizer_variables,
   )
 
-  noise_multiplier = (
-      dp_params.noise_multiplier
-      if dp_params.noise_multiplier is not None
-      else dp_params.update_with_calibrated_noise_multiplier().noise_multiplier
-  )
+  noise_multiplier = _resolve_noise_multiplier(dp_params, model)
   l2_sensitivity = clipped_grad_fn.l2_norm_bound
   accumulation_factor = np.sqrt(dp_params.gradient_accumulation_steps)
   stddev = noise_multiplier * l2_sensitivity / accumulation_factor

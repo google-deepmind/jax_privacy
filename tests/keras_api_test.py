@@ -143,6 +143,25 @@ class KerasApiTest(parameterized.TestCase):
 
     self.assertTrue(hasattr(model, "_dp_params"))
     self.assertEqual(model._dp_params, params)
+    self.assertEqual(model._dp_noise_multiplier, params.noise_multiplier)
+
+  def test_get_noise_multiplier_uses_config_value(self):
+    model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
+    params = dataclasses.replace(self._get_params(), noise_multiplier=2.5)
+    private_model = keras_api.make_private(model, params)
+
+    self.assertEqual(private_model.get_noise_multiplier(), 2.5)
+
+  def test_get_noise_multiplier_calibrates_once(self):
+    model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
+    params = self._get_params()
+    private_model = keras_api.make_private(model, params)
+
+    noise_multiplier = private_model.get_noise_multiplier()
+    self.assertIsNotNone(noise_multiplier)
+    self.assertGreater(noise_multiplier, 0.0)
+    self.assertEqual(private_model._dp_noise_multiplier, noise_multiplier)
+    self.assertEqual(private_model.get_noise_multiplier(), noise_multiplier)
 
   @parameterized.named_parameters(
       ("no_rescale_no_clip", 100.0, 1, False, [-10.0, -20.0]),
