@@ -1,311 +1,181 @@
-# Copyright 2026, The jax_privacy Authors.
+# coding=utf-8
+# Copyright 2025 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#      http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
+# Unless required by applicable law- agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Fine-Tuning a Transformer with User-Level Differential Privacy.
 
-Literature Reference: Charles et al. (2024), "Fine-Tuning Large Language Models
-with User-Level Differential Privacy" (https://arxiv.org/abs/2407.07737)
+r"""Example of user-level DP-SGD for fine-tuning a transformer model.
 
---- Implementation Notes ---
-Standard DP-SGD clips every example. ULS (User-Level Sampling) is different:
-it averages all gradients from a single user into a 'user-update' BEFORE clipping.
-As noted in Sec 4.2 of the paper, this is much more efficient for LLMs because
-it improves the signal-to-noise ratio by reducing the magnitude of the update
-before we hit it with the sensitivity clip.
+This example implements user-level differentially private stochastic gradient
+descent (DP-SGD) for a transformer model, using the `jax_privacy` library's
+native components.
 
-We use a manual for-loop for the user-aggregation because users often have
-varying amounts of data (i.e., unbalanced datasets). This avoids complex
-padding and masking issues that can arise with JAX's vmap.
+The implementation demonstrates how to use `UserSelectionStrategy` to handle
+unbalanced user datasets efficiently, where each user contributes a different
+number of examples.
+
+For more details on the user-level DP-SGD algorithm for large language models,
+refer to the paper:
+Charles et al. (2024), "Fine-Tuning Large Language Models with User-Level
+Differential Privacy" (https://arxiv.org/abs/2404.06713).
 """
 
+from absl import app
+from absl import flags
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import random, tree_util
-from jax.flatten_util import ravel_pytree
 import optax
-import tensorflow as tf
+from jax_privacy.batch_selection import CyclicPoissonSampling
+from jax_privacy.batch_selection import UserSelectionStrategy
+from jax_privacy.clipping import clipped_grad
 
 
-from jax_privacy.noise_addition import gaussian_privatizer
+_USERS_PER_BATCH = flags.DEFINE_integer(
+    'users_per_batch', 4, 'Number of users to select in each batch.'
+)
+_EXAMPLES_PER_USER = flags.DEFINE_integer(
+    'examples_per_user', 2, 'Number of examples to select for each user.'
+)
+_STEPS = flags.DEFINE_integer('steps', 10, 'Number of training steps.')
+_L2_CLIP_NORM = flags.DEFINE_float(
+    'l2_clip_norm', 1.0, 'L2 clipping norm for gradients.'
+)
+_LEARNING_RATE = flags.DEFINE_float('learning_rate', 1e-3, 'Learning rate.')
 
 
-# Disable GPU warnings
-tf.config.experimental.set_visible_devices([], "GPU")
+class TransformerDecoder(nn.Module):
+  """A minimal Transformer Decoder."""
+  vocab_size: int
+  embed_dim: int
+  num_heads: int
+  ff_dim: int
+
+  @nn.compact
+  def __call__(self, x, train: bool):
+    x = nn.Embed(num_embeddings=self.vocab_size, features=self.embed_dim)(x)
+    x = nn.SelfAttention(
+        num_heads=self.num_heads, qkv_features=self.embed_dim
+    )(x)
+    x = nn.Dense(self.ff_dim)(x)
+    x = nn.relu(x)
+    x = nn.Dense(self.vocab_size)(x)
+    return x
 
 
-class CharacterTokenizer:
-    """Simple character-level tokenizer."""
-
-    def __init__(self, text_data):
-        self.vocab = sorted(list(set(text_data)))
-        self.vocab_size = len(self.vocab)
-        self.char_to_id = {c: i for i, c in enumerate(self.vocab)}
-        self.id_to_char = {i: c for i, c in enumerate(self.vocab)}
-
-    def encode(self, text):
-        return np.array([self.char_to_id[c] for c in text], dtype=np.int32)
-
-    def decode(self, ids):
-        return "".join([self.id_to_char[i] for i in ids])
-
-
-class TransformerDecoder:
-    """A simple Transformer Decoder model for demonstration."""
-
-    def __init__(
-        self,
-        vocab_size: int,
-        d_model: int,
-        n_heads: int,
-        n_layers: int,
-        max_len: int,
-    ):
-        self.d_model = d_model
-        self.n_heads = n_heads
-        self.n_layers = n_layers
-        self.max_len = max_len
-        self.vocab_size = vocab_size
-
-    def init_fn(self, key: jax.Array):
-        keys = random.split(key, self.n_layers + 3)
-        params = {}
-        # Token and position embeddings
-        params["token_embedding"] = random.normal(
-            keys[0], (self.vocab_size, self.d_model)
-        )
-        params["pos_embedding"] = random.normal(
-            keys[1], (self.max_len, self.d_model)
-        )
-
-        # Decoder layers
-        for i in range(self.n_layers):
-            layer_key = keys[i + 2]
-            q_key, k_key, v_key, ff_key1, ff_key2 = random.split(layer_key, 5)
-            params[f"layer_{i}_q"] = random.normal(
-                q_key, (self.d_model, self.d_model)
-            )
-            params[f"layer_{i}_k"] = random.normal(
-                k_key, (self.d_model, self.d_model)
-            )
-            params[f"layer_{i}_v"] = random.normal(
-                v_key, (self.d_model, self.d_model)
-            )
-            params[f"layer_{i}_ff1"] = random.normal(
-                ff_key1, (self.d_model, 4 * self.d_model)
-            )
-            params[f"layer_{i}_ff2"] = random.normal(
-                ff_key2, (4 * self.d_model, self.d_model)
-            )
-
-        # Output layer
-        params["output_projection"] = random.normal(
-            keys[-1], (self.d_model, self.vocab_size)
-        )
-        return params
-
-    def apply_fn(self, params, inputs: jnp.ndarray):
-        # inputs shape: (seq_len,)
-        seq_len = inputs.shape[0]
-        # Token and positional embeddings
-        token_embed = params["token_embedding"][inputs]
-        pos_embed = params["pos_embedding"][:seq_len]
-        x = token_embed + pos_embed
-
-        # Causal attention mask
-        mask = jnp.tril(jnp.ones((seq_len, seq_len)))
-
-        for i in range(self.n_layers):
-            # Self-attention
-            q = x @ params[f"layer_{i}_q"]
-            k = x @ params[f"layer_{i}_k"]
-            v = x @ params[f"layer_{i}_v"]
-
-            attn_scores = q @ k.T / jnp.sqrt(self.d_model)
-            attn_scores = jnp.where(mask, attn_scores, -1e9)
-            attn_weights = jax.nn.softmax(attn_scores, axis=-1)
-            attn_output = attn_weights @ v
-
-            # Add & Norm (simplified)
-            x = x + attn_output
-
-            # Feed-forward
-            ff_output = jax.nn.relu(x @ params[f"layer_{i}_ff1"])
-            ff_output = ff_output @ params[f"layer_{i}_ff2"]
-
-            # Add & Norm (simplified)
-            x = x + ff_output
-
-        # Final projection
-        logits = x @ params["output_projection"]
-        return logits
+def get_synthetic_data(
+    num_users: int,
+    num_examples_per_user: list[int],
+    seq_len: int,
+    vocab_size: int,
+):
+  """Generates synthetic data for the transformer model."""
+  data = []
+  labels = []
+  user_ids = []
+  for i in range(num_users):
+    user_data = np.random.randint(
+        0, vocab_size, size=(num_examples_per_user[i], seq_len)
+    )
+    user_labels = np.random.randint(
+        0, vocab_size, size=(num_examples_per_user[i], seq_len)
+    )
+    data.append(user_data)
+    labels.append(user_labels)
+    user_ids.extend([i] * num_examples_per_user[i])
+  return np.concatenate(data), np.concatenate(labels), np.array(user_ids)
 
 
-def loss_fn(params, batch):
-    """Cross-entropy loss for language modeling."""
-    inputs, targets = batch[:-1], batch[1:]
-    logits = model.apply_fn(params, inputs)
-    log_probs = jax.nn.log_softmax(logits)
-    return -jnp.mean(jnp.take_along_axis(log_probs, targets[:, None], axis=-1))
+def main(_):
+  # 1. Model & Data
+  vocab_size = 1000
+  embed_dim = 64
+  num_heads = 4
+  ff_dim = 256
+  seq_len = 32
+  num_users = 20
+  num_examples_per_user = np.random.randint(1, 10, size=num_users)
 
+  data, labels, user_ids = get_synthetic_data(
+      num_users=num_users,
+      num_examples_per_user=num_examples_per_user,
+      seq_len=seq_len,
+      vocab_size=vocab_size,
+  )
 
-def user_level_grad_fn(params, user_data, user_clip_norm):
-    """Averages gradients for one user then clips."""
-    num_sequences = len(user_data)
-    # Start with a flat zero vector to avoid pytree overhead in the loop
-    acc_grad_vector, unravel_fn = ravel_pytree(
-        tree_util.tree_map(jnp.zeros_like, params)
+  model = TransformerDecoder(
+      vocab_size=vocab_size,
+      embed_dim=embed_dim,
+      num_heads=num_heads,
+      ff_dim=ff_dim,
+  )
+  params = model.init(
+      jax.random.key(0), jnp.zeros((1, seq_len), dtype=jnp.int32), train=False
+  )['params']
+  optimizer = optax.adam(_LEARNING_RATE.value)
+  opt_state = optimizer.init(params)
+
+  # 2. Batch Selection
+  sampling_prob = _USERS_PER_BATCH.value / num_users
+  base_strategy = CyclicPoissonSampling(
+      sampling_prob=sampling_prob, iterations=_STEPS.value
+  )
+  user_strategy = UserSelectionStrategy(
+      base_strategy=base_strategy,
+      examples_per_user_per_batch=_EXAMPLES_PER_USER.value,
+  )
+
+  # 3. Training Step & Clipping
+  def loss_fn(params, batch_data, batch_labels):
+    logits = model.apply({'params': params}, batch_data, train=True)
+    one_hot_labels = jax.nn.one_hot(batch_labels, num_classes=vocab_size)
+    return jnp.mean(
+        optax.softmax_cross_entropy(logits=logits, labels=one_hot_labels)
     )
 
-    for sequence in user_data:
-        # Compute standard grad for one sentence
-        grad_pytree = jax.grad(loss_fn)(params, sequence)
-        grad_vector, _ = ravel_pytree(grad_pytree)
-        acc_grad_vector += grad_vector
+  # `clipped_grad` wraps the loss function to compute per-user clipped gradients.
+  # With `keep_batch_dim=False`, the loss function receives a batch of examples
+  # for a single user. The gradient is computed over this batch, and the
+  # resulting gradient (which is an average over the user's examples) is
+  # clipped. This aligns with the core requirement of user-level DP.
+  grad_fn = clipped_grad(
+      loss_fn,
+      l2_clip_norm=_L2_CLIP_NORM.value,
+      batch_argnums=(1, 2),
+      keep_batch_dim=False,
+  )
 
-    # CORE ULS LOGIC: Average the user's total contribution.
-    # This improves signal-to-noise ratio and ensures the 'User Sensitivity'
-    # is bounded regardless of how many examples the user has.
-    avg_grad_vector = acc_grad_vector / num_sequences
-
-    # Clip the averaged user gradient to bound the influence of the person.
-    grad_norm = jnp.linalg.norm(avg_grad_vector)
-    multiplier = jnp.minimum(1.0, user_clip_norm / (grad_norm + 1e-6))
-    clipped_grad_vector = avg_grad_vector * multiplier
-
-    return clipped_grad_vector, unravel_fn, grad_norm
-
-
-def train_step(params, opt_state, noise_state, user_batch, optimizer, privatizer):
-    """Performs one training step with user-level DP."""
-    # We start with a zero vector for accumulating the gradients from the batch.
-    # The shape is determined by the total number of model parameters.
-    _, unravel_fn_dummy = ravel_pytree(params)
-    param_count = ravel_pytree(params)[0].size
-    final_grad_vector = jnp.zeros(param_count)
-    unravel_fn = None
-
-    for u_id, user_data in user_batch.items():
-        # Sanity check: Log how many sequences are being averaged for each user.
-        print(
-            f"  User {u_id} contribution: "
-            f"{len(user_data)} sequences averaged into one gradient."
-        )
-
-        # Compute the clipped, averaged gradient for the current user.
-        clipped_user_grad, unravel_fn, grad_norm = user_level_grad_fn(
-            params, user_data, config["user_clip_norm"]
-        )
-
-        # Correctness Verification: Log the pre-clip gradient norm.
-        # If this value is > user_clip_norm, it will be clipped.
-        print(f"  > User {u_id} avg_grad_norm (pre-clip): {grad_norm:.4f}")
-
-
-        # Accumulate the clipped gradients from all users in the batch.
-        final_grad_vector += clipped_user_grad
-
-    # If unravel_fn was not set in the loop (because batch was empty), use dummy.
-    if unravel_fn is None:
-        unravel_fn = unravel_fn_dummy
-
-    # Convert the final gradient vector back into the model's pytree structure.
-    final_grad_pytree = unravel_fn(final_grad_vector)
-
-    # Add noise to the aggregated gradients using the privatizer.
-    noisy_grads, noise_state = privatizer.update(
-        final_grad_pytree, noise_state
-    )
-
-    # Compute and apply updates using the optax optimizer.
-    updates, opt_state = optimizer.update(noisy_grads, opt_state, params)
+  @jax.jit
+  def train_step(params, opt_state, batch_data, batch_labels):
+    grads = grad_fn(params, batch_data, batch_labels)
+    updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
+    return params, opt_state
 
-    return params, opt_state, noise_state
+  # 4. Training Loop
+  batch_iterator = user_strategy.batch_iterator(user_ids, rng=0)
+  for step, user_batch_indices in enumerate(batch_iterator):
+    if user_batch_indices.size == 0:
+      print(f"Step {step}: Skipping empty batch.")
+      continue
+
+    batch_data = data[user_batch_indices]
+    batch_labels = labels[user_batch_indices]
+    params, opt_state = train_step(params, opt_state, batch_data, batch_labels)
+    print(f"Step {step}: Completed.")
+
+  print("Training finished successfully.")
 
 
-# --- Configuration ---
-config = {
-    "num_steps": 10,
-    "batch_size": 2,  # Number of users per batch
-    "learning_rate": 0.05,
-    "user_clip_norm": 1.0,
-    "noise_multiplier": 1.1,
-    "d_model": 64,
-    "n_heads": 2,
-    "n_layers": 2,
-    "max_len": 32,
-}
-
-# --- Synthetic Data Generation ---
-# Create synthetic data where some users have more data than others.
-synthetic_corpus = (
-    "This is a simple text. The goal is to learn patterns."
-    "Transformers are powerful. User-level privacy is important."
-    "Jax is a high-performance numerical computing library."
-)
-tokenizer = CharacterTokenizer(synthetic_corpus)
-encoded_corpus = tokenizer.encode(synthetic_corpus)
-
-# Structure data by user ID. User 'A' has more data than 'B', 'C', or 'D'.
-user_data_db = {
-    "A": [
-        encoded_corpus[i : i + config["max_len"]] 
-        for i in range(0, 100, config["max_len"]) 
-    ],
-    "B": [encoded_corpus[20 : 20 + config["max_len"]]],
-    "C": [encoded_corpus[40 : 40 + config["max_len"]]],
-    "D": [encoded_corpus[60 : 60 + config["max_len"]]],
-}
-user_ids = list(user_data_db.keys())
-
-# --- Model and Optimizer Initialization ---
-rng_key = jax.random.key(42)
-model = TransformerDecoder(
-    vocab_size=tokenizer.vocab_size,
-    d_model=config["d_model"],
-    n_heads=config["n_heads"],
-    n_layers=config["n_layers"],
-    max_len=config["max_len"],
-)
-params = model.init_fn(rng_key)
-
-optimizer = optax.adam(learning_rate=config["learning_rate"])
-privatizer = gaussian_privatizer(
-    stddev=config["user_clip_norm"] * config["noise_multiplier"],
-    prng_key=jax.random.key(43),
-)
-
-opt_state = optimizer.init(params)
-noise_state = privatizer.init(params)
-
-# --- Training Loop ---
-print("Starting user-level DP training...")
-for step in range(config["num_steps"]):
-    # Sample a batch of users for this step
-    sampled_user_ids = np.random.choice(
-        user_ids, size=config["batch_size"], replace=False
-    )
-    user_batch = {u_id: user_data_db[u_id] for u_id in sampled_user_ids}
-
-    print(f"\nStep {step+1}/{config['num_steps']}:")
-    params, opt_state, noise_state = train_step(
-        params, opt_state, noise_state, user_batch, optimizer, privatizer
-    )
-
-    # For demonstration, calculate loss on a fixed batch
-    fixed_batch = user_data_db["A"][0]
-    current_loss = loss_fn(params, fixed_batch)
-    print(f"  Loss on fixed batch: {current_loss:.4f}")
-
-print("\nTraining finished.")
+if __name__ == '__main__':
+  app.run(main)
