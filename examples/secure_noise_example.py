@@ -26,8 +26,9 @@ from absl import flags
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optax
 from jax_privacy import noise_addition
+from numpy.random import Generator
+from randomgen import AESCounter
 
 _USE_SECURE_RNG = flags.DEFINE_boolean(
     'use_secure_rng', True, 'Whether to use secure random number generation.'
@@ -51,16 +52,16 @@ def loss_fn(params, batch):
 # WARNING: This function must never be called inside a @jax.jit context.
 # Doing so would cause the "random" noise to be statically compiled into the
 # XLA graph, resulting in the same noise being added at every step.
-def generate_secure_noise(stddev, grads_treedef):
-  """Generates i.i.d. Gaussian noise on the CPU using NumPy."""
-  return jax.tree.map(
-      lambda x: np.random.normal(scale=stddev, size=x.shape).astype(x.dtype),
-      grads_treedef
+def generate_secure_noise(stddev, params, generators):
+  """Generates i.i.d. Gaussian noise on the CPU using randomgen."""
+  return jax.tree_util.tree_map(
+      lambda p, g: g.standard_normal(size=p.shape, dtype=p.dtype) * stddev,
+      params,
+      generators,
   )
 
 def main(_):
   params = toy_model_params()
-  # This privatizer will be used to generate noise if use_secure_rng is False
   privatizer = noise_addition.gaussian_privatizer(
       stddev=_STDDEV.value,
       prng_key=jax.random.key(0),
@@ -76,21 +77,15 @@ def main(_):
     """
     grads = jax.grad(loss_fn)(params, batch)
 
-    # privatizer.update still gets called to advance the PRNG state,
-    # but its output is conditionally overwritten.
-    noisy_grads_jax, new_privatizer_state = privatizer.update(
-        grads, privatizer_state
-    )
-
     if secure_noise is not None:
-      # Manually add the CPU-generated secure noise
-      iid_normal = secure_noise
-      noisy_grads = jax.tree.map(
-          lambda g, n: g + n, grads, iid_normal
-      )
+      noisy_grads = jax.tree_util.tree_map(jnp.add, grads, secure_noise)
+      # We still need to update the privatizer state to keep the PRNG key state
+      # consistent, even though we are not using its output.
+      _, new_privatizer_state = privatizer.update(grads, privatizer_state)
     else:
-      noisy_grads = noisy_grads_jax
-
+      noisy_grads, new_privatizer_state = privatizer.update(
+          grads, privatizer_state
+      )
     return noisy_grads, new_privatizer_state
 
   print(f"Running {_STEPS.value} steps with use_secure_rng={_USE_SECURE_RNG.value}")
@@ -98,21 +93,25 @@ def main(_):
 
   # Dummy batch
   batch = None
-  # We need to define grads_treedef once outside the loop
-  grads_treedef = jax.eval_shape(lambda p: jax.grad(loss_fn)(p, batch), params)
+  
+  # Create a pytree of generators, one for each parameter.
+  keys = jax.tree.map(
+      lambda p: np.random.randint(2**63, size=2, dtype=np.uint64),
+      params
+  )
+  generators = jax.tree.map(lambda k: Generator(AESCounter(k)), keys)
 
   for step in range(_STEPS.value):
     secure_noise_tree = None
     if _USE_SECURE_RNG.value:
-      # In a real scenario, this is where you would call your secure RNG
-      secure_noise_tree = generate_secure_noise(_STDDEV.value, grads_treedef)
+      secure_noise_tree = generate_secure_noise(
+          _STDDEV.value, params, generators
+      )
 
-    # Pass the secure noise to train_step
     _, privatizer_state = train_step(
         params, batch, privatizer_state, secure_noise_tree
     )
 
-  # Block until all steps are complete to get accurate timing
   jax.block_until_ready(privatizer_state)
   end_time = time.time()
 
