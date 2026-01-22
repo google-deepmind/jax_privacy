@@ -16,22 +16,27 @@
 """Example of training a Transformer on text using JAX Privacy core API.
 
 This example demonstrates how to train a simple Transformer decoder
-on character-level language modeling using differentially private stochastic
-gradient descent (DP-SGD) with the JAX Privacy core library components. The training
-is done using (DP-SGD) with a synthetic dataset that is generated from the 
-tiny Shakespeare dataset. 
+on character-level language modeling using differentially private
+stochastic gradient descent (DP-SGD) with the JAX Privacy core library
+components. The training is done using (DP-SGD) with a synthetic
+dataset that is generated from the tiny Shakespeare dataset.
 
-Character-level tokenization is employed, mapping each unique character to an integer ID.
-This avoids the complexity of subword tokenizers and keeps the privacy accounting straightforward.
-Each training example is a fixed-length character sequence, and the learning task is next-character prediction.
-Privacy is defined at the sequence level, meaning DP-SGD protects the contribution of any 
-single character sequence. A decoder-only Transformer with learned token embeddings, learned positional embeddings,
-multi-head self-attention implemented via `jax.nn.dot_product_attention`, and feed-forward (MLP) blocks.
-Per-example gradients are clipped to a fixed L2 norm and Gaussian noise is added. Additionally poisson sampling is used
-for batch selection to align with standard DP-SGD assumptions and privacy analysis.
+Character-level tokenization is employed, mapping each unique character to
+an integer ID. This avoids the complexity of subword tokenizers and keeps
+the privacy accounting straightforward. Each training example is a
+fixed-length character sequence, and the learning task is next-character
+prediction. Privacy is defined at the sequence level, meaning DP-SGD
+protects the contribution of any single character sequence. A decoder-only
+Transformer with learned token embeddings, learned positional embeddings,
+multi-head self-attention implemented via `jax.nn.dot_product_attention`,
+and feed-forward (MLP) blocks. Per-example gradients are clipped to
+a fixed L2 norm and Gaussian noise is added. Additionally poisson sampling
+is used for batch selection to align with standard DP-SGD assumptions
+and privacy analysis.
 
 The goal of training is to learn to predict the next character in a sequence,
-illustrating how JAX Privacy components can be composed in a realistic NLP setting.
+illustrating how JAX Privacy components can be composed in a realistic
+NLP setting.
 """
 
 from absl import app
@@ -41,18 +46,24 @@ from jax import random
 import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import batch_selection
-from jax_privacy.experimental import execution_plan
 from jax_privacy import noise_addition
 from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
 from jax_privacy.accounting import calibrate
-import numpy as np
+from jax_privacy.experimental import execution_plan
+
 import optax
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
 
-def init_model_params(key, vocab_size=256, embed_dim=128, num_heads=4, num_layers=2, max_len=128):
+def init_model_params(
+    key,
+    vocab_size=256,
+    embed_dim=128,
+    num_layers=2,
+    max_len=128
+):
   """Initializes Transformer parameters."""
   keys = random.split(key, 5)
   model_params = {
@@ -62,21 +73,27 @@ def init_model_params(key, vocab_size=256, embed_dim=128, num_heads=4, num_layer
       'ln_f': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
       'head': random.normal(keys[4], (embed_dim, vocab_size)) * 0.1,
   }
-  for i in range(num_layers):
+  for _ in range(num_layers):
     layer_key = random.split(keys[2], 8)
     layer = {
-        'attn': {
-            'q': random.normal(layer_key[0], (embed_dim, embed_dim)) * 0.1,
-            'k': random.normal(layer_key[1], (embed_dim, embed_dim)) * 0.1,
-            'v': random.normal(layer_key[2], (embed_dim, embed_dim)) * 0.1,
-            'proj': random.normal(layer_key[3], (embed_dim, embed_dim)) * 0.1,
-        },
-        'mlp': {
-            'fc1': random.normal(layer_key[4], (embed_dim, 4 * embed_dim)) * 0.1,
-            'fc2': random.normal(layer_key[5], (4 * embed_dim, embed_dim)) * 0.1,
-        },
-        'ln1': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
-        'ln2': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
+      'attn': {
+          'q': random.normal(layer_key[0], (embed_dim, embed_dim)) * 0.1,
+          'k': random.normal(layer_key[1], (embed_dim, embed_dim)) * 0.1,
+          'v': random.normal(layer_key[2], (embed_dim, embed_dim)) * 0.1,
+          'proj': random.normal(layer_key[3], (embed_dim, embed_dim)) * 0.1,
+      },
+      'mlp': {
+          'fc1': random.normal(
+            layer_key[4],
+            (embed_dim, 4 * embed_dim)
+          ) * 0.1,
+          'fc2': random.normal(
+            layer_key[5],
+            (4 * embed_dim, embed_dim)
+          ) * 0.1,
+      },
+      'ln1': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
+      'ln2': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
     }
     model_params['layers'].append(layer)
   return model_params
@@ -91,13 +108,32 @@ def transformer_block(model_params, batch_x, mask):
 
   num_heads = 4
   head_dim = q.shape[-1] // num_heads
-  q = q.reshape(q.shape[0], q.shape[1], num_heads, head_dim).transpose(0, 2, 1, 3)
-  k = k.reshape(k.shape[0], k.shape[1], num_heads, head_dim).transpose(0, 2, 1, 3)
-  v = v.reshape(v.shape[0], v.shape[1], num_heads, head_dim).transpose(0, 2, 1, 3)
+  q = q.reshape(
+    q.shape[0],
+    q.shape[1],
+    num_heads,
+    head_dim
+  ).transpose(0, 2, 1, 3)
+  k = k.reshape(
+    k.shape[0],
+    k.shape[1],
+    num_heads,
+    head_dim
+  ).transpose(0, 2, 1, 3)
+  v = v.reshape(
+    v.shape[0],
+    v.shape[1],
+    num_heads,
+    head_dim
+  ).transpose(0, 2, 1, 3)
 
   out = jax.nn.dot_product_attention(q, k, v, mask=mask)
 
-  out = out.transpose(0, 2, 1, 3).reshape(batch_x.shape[0], batch_x.shape[1], -1)
+  out = out.transpose(0, 2, 1, 3).reshape(
+    batch_x.shape[0],
+    batch_x.shape[1],
+    -1
+  )
   out = jnp.dot(out, model_params['attn']['proj'])
 
   batch_x = batch_x + out
@@ -116,13 +152,21 @@ def layer_norm(batch_x, model_params):
   """Layer normalization."""
   mean = jnp.mean(batch_x, axis=-1, keepdims=True)
   var = jnp.var(batch_x, axis=-1, keepdims=True)
-  return model_params['scale'] * (batch_x - mean) / jnp.sqrt(var + 1e-5) + model_params['bias']
+  return (
+    model_params['scale']
+    * (batch_x - mean)
+    / jnp.sqrt(var + 1e-5)
+    + model_params['bias']
+  )
 
 
 def model(model_params, batch_x):
   """Transformer forward pass."""
   seq_len = batch_x.shape[1]
-  batch_x = model_params['embedding'][batch_x] + model_params['pos_embedding'][:seq_len]
+  batch_x = (
+    model_params['embedding'][batch_x]
+    + model_params['pos_embedding'][:seq_len]
+  )
 
   mask = jnp.tri(seq_len)
   mask = mask[None, None, :, :]
@@ -147,7 +191,10 @@ def load_text_data(max_len=128):
   """Loads and preprocesses text data."""
   # Use tiny Shakespeare dataset
   ds = tfds.load('tiny_shakespeare', split='train')
-  text = ''.join([example['text'].numpy().decode('utf-8') for example in ds.take(100)])
+  text = ''.join(
+    example['text'].numpy().decode('utf-8')
+    for example in ds.take(100)
+  )
 
   chars = sorted(list(set(text)))
   vocab_size = len(chars)
@@ -180,10 +227,16 @@ def update_model_params(model_params, updates):
   return optax.apply_updates(model_params, updates)
 
 
-def generate_text(model_params, seed_text, length=50, char_to_idx=None, idx_to_char=None):
+def generate_text(
+    model_params,
+    seed_text,
+    length=50,
+    char_to_idx=None,
+    idx_to_char=None
+  ):
   """Generates text using the trained model."""
   if char_to_idx is None or idx_to_char is None:
-    return "Generation not available without vocab"
+    return 'Generation not available without vocab'
 
   batch_x = jnp.array([[char_to_idx.get(c, 0) for c in seed_text]])
   generated = seed_text
@@ -265,10 +318,21 @@ def main(_):
     privatizer = plan.noise_addition_transform
 
   @jax.jit
-  def dp_train_step(model_params, batch_data, is_padding_example, noise_state, opt_state):
+  def dp_train_step(
+      model_params,
+      batch_data,
+      is_padding_example,
+      noise_state,
+      opt_state
+  ):
     batch_x = batch_data[:, :-1]
     batch_y = batch_data[:, 1:]
-    grads, aux = grad_fn(model_params, batch_x, batch_y, is_padding_example=is_padding_example)
+    grads, aux = grad_fn(
+      model_params,
+      batch_x,
+      batch_y,
+      is_padding_example=is_padding_example
+    )
     loss = aux.values.mean()
     noisy_grads, noise_state = privatizer.update(grads, noise_state)
     updates, opt_state = optimizer.update(noisy_grads, opt_state)
@@ -278,9 +342,11 @@ def main(_):
   noise_state = privatizer.init(model_params)
   opt_state = optimizer.init(model_params)
 
-  print(f"Training Transformer with {'DP' if use_dp else 'no DP'}...")
+  print(f'Training Transformer with {'DP' if use_dp else 'no DP'}...')
 
-  for step, batch_idx in enumerate(plan.batch_selection_strategy.batch_iterator(train_size)):
+  for step, batch_idx in enumerate(
+      plan.batch_selection_strategy.batch_iterator(train_size)
+    ):
 
     idx = batch_selection.pad_to_multiple_of(batch_idx, padding_multiple)
     is_padding_example = idx == -1
@@ -290,7 +356,7 @@ def main(_):
     batch_x = batch_data[:, :-1]
     batch_y = batch_data[:, 1:]
 
-    model_params, noise_state, opt_state = dp_train_step(
+    model_params, opt_state, _, noise_state = dp_train_step(
         model_params,
         (batch_x, batch_y),
         is_padding_example,
@@ -299,14 +365,19 @@ def main(_):
     )
 
     if step % 100 == 0:
-        print(f"Step {step}")
+      print(f'Step {step}')
 
   # Generate sample text with a seed from Shakespeare
-  seed_text = "ROMEO:"
-  generated = generate_text(model_params, seed_text, 100, char_to_idx, idx_to_char)
-  print(f"\nGenerated text: {generated}")
-  print("\nTraining complete!")
+  seed_text = 'ROMEO:'
+  generated = generate_text(
+    model_params,
+    seed_text, 100,
+    char_to_idx,
+    idx_to_char
+  )
+  print(f'\nGenerated text: {generated}')
+  print('\nTraining complete!')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
   app.run(main)
