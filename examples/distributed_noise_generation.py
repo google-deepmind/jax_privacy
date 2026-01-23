@@ -37,7 +37,6 @@ from absl import flags
 import jax
 import jax.numpy as jnp
 # pylint: disable=g-importing-member
-from jax.sharding import reshard
 from jax_privacy import noise_addition
 from jax_privacy.matrix_factorization import toeplitz
 
