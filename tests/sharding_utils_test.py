@@ -80,6 +80,20 @@ class ShardingTest(absltest.TestCase):
     self.assertEqual(sharding_utils._ceiling_to_multiple(4, 4), 4)
     self.assertEqual(sharding_utils._ceiling_to_multiple(5, 4), 8)
 
+  def test_flatten_zeros_like_preserves_metadata(self):
+    sharding = jax.sharding.NamedSharding(
+        self.mesh, jax.sharding.PartitionSpec(None, 'y')
+    )
+    x = jax.device_put(jnp.ones((2, 6), dtype=jnp.float32), sharding)
+    flattened = sharding_utils.flatten_with_zero_redundancy(x)
+    zeros = jnp.zeros_like(flattened)
+    self.assertEqual(zeros.shape, flattened.shape)
+    self.assertEqual(zeros.dtype, flattened.dtype)
+    self.assertEqual(zeros.sharding.spec, flattened.sharding.spec)
+    self.assertEqual(
+        zeros.sharding.mesh.axis_names, flattened.sharding.mesh.axis_names
+    )
+
 
 if __name__ == '__main__':
   absltest.main()
