@@ -354,12 +354,19 @@ class UserSelectionStrategy:
     num_examples = user_ids.size
     dtype = np.min_scalar_type(-num_examples)
 
+    # Precompute sorted indices and starts to avoid O(n) per user_id
+    # in np.where.
+    sorted_indices = np.argsort(inverse)
+    counts = np.bincount(inverse, minlength=num_users)
+    starts = np.r_[0, np.cumsum(counts)]
+
     def create_user_generator(user_id):
-      # TODO: b/415360727 - this where is suboptimal, as it is O(n) per user_id.
-      owned_examples = np.where(inverse == user_id)[0].astype(dtype)
+      start = starts[user_id]
+      end = starts[user_id + 1]
+      owned_examples = sorted_indices[start:end].astype(dtype)
       if self.shuffle_per_user:
         rng.shuffle(owned_examples)
-      return itertools.cycle(list(owned_examples))
+      return itertools.cycle(owned_examples)
 
     user_generators = [create_user_generator(i) for i in range(num_users)]
 

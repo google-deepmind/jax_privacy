@@ -14,8 +14,8 @@ requires-python = ">=3.11"
 dependencies = [
     "absl-py",
     "dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting",
-    "jax>=0.7.0",
-    "jaxlib>=0.7.0",
+    "jax>=0.7.1",
+    "jaxlib>=0.7.1",
     "pydantic",
     "numpy",
     "optax",

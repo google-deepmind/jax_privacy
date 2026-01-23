@@ -43,7 +43,9 @@ def _ceiling_to_multiple(size: int, multiple: int) -> int:
   return size + multiple - remainder if remainder != 0 else size
 
 
-def flatten_with_zero_redundancy(abstract_array: jax.Array) -> jax.Array:
+def flatten_with_zero_redundancy(
+    abstract_array: jax.ShapeDtypeStruct | jax.Array
+) -> jax.ShapeDtypeStruct:
   """Return a flattened, padded, and ZeRo-sharded abstract version of x.
 
   Specifically, the returned object will describe a 1D array that is
@@ -59,15 +61,11 @@ def flatten_with_zero_redundancy(abstract_array: jax.Array) -> jax.Array:
     A zero-redundancy abstract flattened+padded version of the input value.
   """
   mesh = jax.typeof(abstract_array).sharding.mesh
-  # As of JAX 0.7.0, jnp.*_like will not preserve sharding of ShapeDtypeStruct
-  # defined w.r.t. AbstractMeshes, so we return a concrete array here.
-  # Under JIT, this should get optimized away.
-  # TODO: b/415360727 - Version bump to 0.7.1, swap in jax.ShapeDtypeStruct,
-  # and add type annotations to this function.
-  return jax.numpy.empty(
-      _ceiling_to_multiple(abstract_array.size, mesh.size),
+  # As of JAX 0.7.1, we can use ShapeDtypeStruct with sharding preserved.
+  return jax.ShapeDtypeStruct(
+      shape=(_ceiling_to_multiple(abstract_array.size, mesh.size),),
       dtype=abstract_array.dtype,
-      out_sharding=jax.sharding.NamedSharding(mesh, jax.P(mesh.axis_names)),
+      sharding=jax.sharding.NamedSharding(mesh, jax.P(mesh.axis_names)),
   )
 
 
