@@ -51,7 +51,7 @@ PLD_EVENT_FNS = (
 PLD_ACCOUNTANT = functools.partial(
     dp_accounting.pld.PLDAccountant, value_discretization_interval=1e-3
 )
-RDP_ACCOUNTANT = dp_accounting.rdp.RdpAccountant
+RDP_ACCOUNTANT = dp_accounting.rdp.RdpAccountant  # pylint: disable=invalid-name
 
 
 def _make_test_case(event_fn, accountant):
