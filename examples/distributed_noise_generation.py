@@ -35,8 +35,7 @@ from typing import Any
 from absl import app
 from absl import flags
 import jax
-import jax.numpy as jnp
-# pylint: disable=g-importing-member
+import jax.numpy as jnp # pylint: disable=g-importing-member
 from jax_privacy import noise_addition
 from jax_privacy.matrix_factorization import toeplitz
 
@@ -163,10 +162,10 @@ def generate_noise(
   t0 = time.time()
   compiled_run = run.lower(model_params).compile()
   t1 = time.time()
-  print(f'[BandMF] Compilation time: {t1 - t0:.3f} seconds')
+  print('[BandMF] Compilation time: %.3f seconds' % (t1 - t0))
   state, noisy_grad = jax.block_until_ready(compiled_run(model_params))
   t2 = time.time()
-  print(f'[BandMF] Per-step run time: {(t2 - t1) / steps:.3f} seconds')
+  print('[BandMF] Per-step run time: %.3f seconds' % ((t2 - t1) / steps))
 
   return state, noisy_grad
 
