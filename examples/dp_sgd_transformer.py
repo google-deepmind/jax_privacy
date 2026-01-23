@@ -54,6 +54,7 @@ from jax_privacy.experimental import execution_plan
 from typing import Any, Mapping, Sequence, Tuple
 
 import optax
+tfds: Any
 import tensorflow_datasets as tfds
 
 
