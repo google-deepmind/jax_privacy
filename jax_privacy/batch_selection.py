@@ -293,7 +293,7 @@ class BallsInBinsSampling(BatchSelectionStrategy):
 
 @dataclasses.dataclass(frozen=True)
 class UserSelectionStrategy:
-  """Applies base_strategy at the user level, and selects multiple examples per user.
+  """A strategy that applies a base_strategy at the user level.
 
   Each batch returned by the batch_iterator is a 2D array of integer indices,
   where all entries in the same row are examples owned by the same user. The

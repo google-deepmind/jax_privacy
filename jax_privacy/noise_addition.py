@@ -59,7 +59,7 @@ from .matrix_factorization import streaming_matrix
 
 
 class _NoiseStructureFn(Protocol):
-  """Protocol specifying the semantics of _IntermediateStrategy.get_noise_structure.
+  """A function that returns the intermediate shape/sharding of noise.
 
   (Expected) Formal Guarantees of y = get_noise_structure(x):
     - x.size <= y.size (i.e., math.prod(x.shape) <= math.prod(y.shape)). See

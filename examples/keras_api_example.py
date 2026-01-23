@@ -23,7 +23,7 @@ import os
 from absl import app
 
 os.environ["KERAS_BACKEND"] = "jax"
-from jax_privacy.keras import keras_api  # pylint: disable=g-import-not-at-top
+from jax_privacy import keras_api  # pylint: disable=g-import-not-at-top
 import keras
 from keras import layers
 import numpy as np

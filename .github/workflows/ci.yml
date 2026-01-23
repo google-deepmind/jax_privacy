@@ -21,6 +21,40 @@ jobs:
       - uses: "actions/setup-python@v6"
         with:
             python-version: "${{ matrix.python-version }}"
-      - name: Run CI tests
-        run: bash test.sh
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build wheel
+          pip install pylint pytype flake8 pylint-exit
+          pip install -e .[dev]
+          pip install -r docs/requirements.txt
+          pip install crc32c
+      - name: Run flake8
+        run: flake8 jax_privacy tests examples
+      - name: Run pylint
+        run: |
+          pylint --ignore=auditing.py --rcfile=.pylintrc jax_privacy || pylint-exit -efail -wfail -cfail -rfail $?
+          # pylint --rcfile=.pylintrc examples || pylint-exit -efail -wfail -cfail -rfail $?
+          # pylint --rcfile=.pylintrc tests -d W0212,C0114 || pylint-exit -efail -wfail -cfail -rfail $?
         shell: bash
+      - name: Run pytype
+        run: |
+          pytype jax_privacy -k
+          pytype tests -k
+          pytype examples -k
+      - name: Run doctests
+        run: |
+          pytest --doctest-modules jax_privacy/
+      - name: Run tests
+        run: |
+          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test"
+          pytest -n auto tests/ -k "distributed_noise_generation_test"
+          pytest -n auto tests/ -k "sharding_utils_test"
+          export HYPOTHESIS_PROFILE=dpftrl_default
+          pytest -n auto tests/ -k "matrix_factorization" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
+        shell: bash
+      - name: Build docs
+        run: |
+         cd docs
+         sphinx-build -W -b html . _build/html
+         cd ..

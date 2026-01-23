@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Set
 import itertools
 
 from absl.testing import absltest
@@ -23,7 +24,7 @@ import numpy as np
 
 def brute_force_optimal_batch_sizes(
     batch_sizes: list[int], num_compilations: int
-) -> list[int]:
+) -> Set[int]:
   """Brute force implementation of optimal_physical_batch_sizes."""
   unique = np.array(sorted(set(batch_sizes)))
 

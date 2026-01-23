@@ -36,8 +36,6 @@ from absl import app
 from absl import flags
 import jax
 import jax.numpy as jnp
-# pylint: disable=g-importing-member
-from jax.experimental.shard import reshard
 from jax_privacy import noise_addition
 from jax_privacy.matrix_factorization import toeplitz
 
@@ -112,7 +110,7 @@ def bert_model_params(hidden_size: int) -> Any:
       is_leaf=lambda x: isinstance(x, tuple),
   )
 
-  return reshard(model_params, jax.sharding.PartitionSpec())
+  return jax.sharding.reshard(model_params, jax.sharding.PartitionSpec())
 
 
 def toy_model_params(hidden_size: int) -> jax.Array:
@@ -120,7 +118,9 @@ def toy_model_params(hidden_size: int) -> jax.Array:
   # This is a toy example where the model is just a 2D array of size (H, H^2).
   leaf_shape = (hidden_size, hidden_size**2)
 
-  return reshard(jnp.zeros(leaf_shape), jax.sharding.PartitionSpec('x', 'y'))
+  return jax.sharding.reshard(
+      jnp.zeros(leaf_shape), jax.sharding.PartitionSpec('x', 'y')
+  )
 
 
 def generate_noise(
