@@ -51,19 +51,20 @@ from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
 from jax_privacy.accounting import calibrate
 from jax_privacy.experimental import execution_plan
+from typing import Any, Mapping, Sequence, Tuple
 
 import optax
-import tensorflow as tf
 import tensorflow_datasets as tfds
 
 
 def init_model_params(
-    key,
-    vocab_size=256,
-    embed_dim=128,
-    num_layers=2,
-    max_len=128
-):
+    key: jax.Array,
+    *,
+    vocab_size: int = 256,
+    embed_dim: int = 128,
+    num_layers: int = 2,
+    max_len: int = 128
+) -> Mapping[str, Any]:
   """Initializes Transformer parameters."""
   keys = random.split(key, 5)
   model_params = {
@@ -73,8 +74,9 @@ def init_model_params(
       'ln_f': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
       'head': random.normal(keys[4], (embed_dim, vocab_size)) * 0.1,
   }
-  for _ in range(num_layers):
-    layer_key = random.split(keys[2], 8)
+  layer_keys = random.split(keys[2], num_layers * 8)
+  for i in range(num_layers):
+    layer_key = layer_keys[i*8:(i+1)*8]
     layer = {
       'attn': {
           'q': random.normal(layer_key[0], (embed_dim, embed_dim)) * 0.1,
@@ -99,7 +101,9 @@ def init_model_params(
   return model_params
 
 
-def transformer_block(model_params, batch_x, mask):
+def transformer_block(
+    model_params: Mapping[str, Any], batch_x: jax.Array, mask: jax.Array
+) -> jax.Array:
   """Single transformer block."""
   # Multi-head attention
   q = jnp.dot(batch_x, model_params['attn']['q'])
@@ -148,7 +152,9 @@ def transformer_block(model_params, batch_x, mask):
   return batch_x
 
 
-def layer_norm(batch_x, model_params):
+def layer_norm(
+    batch_x: jax.Array, model_params: Mapping[str, Any]
+) -> jax.Array:
   """Layer normalization."""
   mean = jnp.mean(batch_x, axis=-1, keepdims=True)
   var = jnp.var(batch_x, axis=-1, keepdims=True)
@@ -160,7 +166,7 @@ def layer_norm(batch_x, model_params):
   )
 
 
-def model(model_params, batch_x):
+def model(model_params: Mapping[str, Any], batch_x: jax.Array) -> jax.Array:
   """Transformer forward pass."""
   seq_len = batch_x.shape[1]
   batch_x = (
@@ -179,7 +185,9 @@ def model(model_params, batch_x):
   return logits
 
 
-def loss_fn(model_params, batch_x, batch_y):
+def loss_fn(
+    model_params: Mapping[str, Any], batch_x: jax.Array, batch_y: jax.Array
+) -> jax.Array:
   """Cross-entropy loss for next token prediction."""
   logits = model(model_params, batch_x)
   logits = logits[:, :-1, :].reshape(-1, logits.shape[-1])
@@ -187,7 +195,9 @@ def loss_fn(model_params, batch_x, batch_y):
   return optax.softmax_cross_entropy_with_integer_labels(logits, targets).mean()
 
 
-def load_text_data(max_len=128):
+def load_text_data(
+    max_len: int = 128,
+) -> Tuple[jax.Array, int, Mapping[str, int], Mapping[int, str]]:
   """Loads and preprocesses text data."""
   # Use tiny Shakespeare dataset
   ds = tfds.load('tiny_shakespeare', split='train')
@@ -213,27 +223,13 @@ def load_text_data(max_len=128):
   return seqs, vocab_size, char_to_idx, idx_to_char
 
 
-def batch_dataset(data, batch_size, shuffle=True):
-  """Creates batched dataset."""
-  dataset = tf.data.Dataset.from_tensor_slices(data)
-  if shuffle:
-    dataset = dataset.shuffle(buffer_size=len(data))
-  dataset = dataset.batch(batch_size, drop_remainder=True)
-  return dataset
-
-
-def update_model_params(model_params, updates):
-  """Applies Optax updates."""
-  return optax.apply_updates(model_params, updates)
-
-
 def generate_text(
-    model_params,
-    seed_text,
-    length=50,
-    char_to_idx=None,
-    idx_to_char=None
-  ):
+    model_params: Mapping[str, Any],
+    seed_text: str,
+    length: int = 50,
+    char_to_idx: Mapping[str, int] | None = None,
+    idx_to_char: Mapping[int, str] | None = None
+  ) -> str:
   """Generates text using the trained model."""
   if char_to_idx is None or idx_to_char is None:
     return 'Generation not available without vocab'
@@ -253,13 +249,15 @@ def generate_text(
   return generated
 
 
-def main(_):
+def main(argv: Sequence[str]) -> None:
+  if len(argv) > 1:
+    raise app.UsageError('Too many command-line arguments.')
+
   # Hyperparameters
   batch_size = 32
   num_epochs = 10
   learning_rate = 0.001
   clipping_norm = 1.0
-  use_dp = True
   epsilon = 1.0
   delta = 1e-5
   max_len = 128
@@ -274,57 +272,56 @@ def main(_):
   key = random.key(42)
   model_params = init_model_params(key, vocab_size=vocab_size, max_len=max_len)
 
-  if use_dp:
-    # Set up DP components
-    accountant = analysis.DpsgdTrainingAccountant(
-        dp_accountant_config=accountants.PldAccountantConfig()
-    )
-    noise_multiplier = calibrate.calibrate_noise_multiplier(
-        target_epsilon=epsilon,
-        target_delta=delta,
-        accountant=accountant,
-        batch_sizes=batch_size,
-        num_updates=num_epochs * (train_size // batch_size),
-        num_samples=train_size,
-    )
+  # Set up DP components
+  accountant = analysis.DpsgdTrainingAccountant(
+      dp_accountant_config=accountants.PldAccountantConfig()
+  )
+  noise_multiplier = calibrate.calibrate_noise_multiplier(
+      target_epsilon=epsilon,
+      target_delta=delta,
+      accountant=accountant,
+      batch_sizes=batch_size,
+      num_updates=num_epochs * (train_size // batch_size),
+      num_samples=train_size,
+  )
 
-    noise_rng = random.key(42)
+  noise_rng = random.key(42)
 
-    grad_fn = jax_privacy.clipped_grad(
-        loss_fn,
-        l2_clip_norm=clipping_norm,
-        batch_argnums=(1, 2),
-        has_aux=False,
-        return_values=True,
-        normalize_by=batch_size,
-    )
-    config = execution_plan.BandMFExecutionPlanConfig(
-        iterations=iterations,
-        num_bands=1,
-        epsilon=epsilon,
-        delta=delta,
-        sampling_prob=expected_batch_size / train_size,
-    )
-    plan = config.make(grad_fn)
+  grad_fn = jax_privacy.clipped_grad(
+      loss_fn,
+      l2_clip_norm=clipping_norm,
+      batch_argnums=(1, 2),
+      has_aux=False,
+      return_values=True,
+      normalize_by=batch_size,
+  )
+  config = execution_plan.BandMFExecutionPlanConfig(
+      iterations=iterations,
+      num_bands=1,
+      epsilon=epsilon,
+      delta=delta,
+      sampling_prob=expected_batch_size / train_size,
+  )
+  plan = config.make(grad_fn)
 
-    sensitivity = grad_fn.sensitivity(
-        dp_accounting.NeighboringRelation.REPLACE_ONE
-    )
-    privatizer = noise_addition.gaussian_privatizer(
-        stddev=noise_multiplier * sensitivity, prng_key=noise_rng
-    )
+  sensitivity = grad_fn.sensitivity(
+      dp_accounting.NeighboringRelation.REPLACE_ONE
+  )
+  privatizer = noise_addition.gaussian_privatizer(
+      stddev=noise_multiplier * sensitivity, prng_key=noise_rng
+  )
 
-    optimizer = optax.sgd(learning_rate)
-    privatizer = plan.noise_addition_transform
+  optimizer = optax.sgd(learning_rate)
+  privatizer = plan.noise_addition_transform
 
   @jax.jit
   def dp_train_step(
-      model_params,
-      batch_data,
-      is_padding_example,
-      noise_state,
-      opt_state
-  ):
+      model_params: Mapping[str, Any],
+      batch_data: Tuple[jax.Array, jax.Array],
+      is_padding_example: jax.Array,
+      noise_state: Any,
+      opt_state: Any
+  ) -> Tuple[Mapping[str, Any], Any, jax.Array, Any]:
     batch_x = batch_data[:, :-1]
     batch_y = batch_data[:, 1:]
     grads, aux = grad_fn(
@@ -342,7 +339,7 @@ def main(_):
   noise_state = privatizer.init(model_params)
   opt_state = optimizer.init(model_params)
 
-  print(f'Training Transformer with {'DP' if use_dp else 'no DP'}...')
+  print('Training Transformer with DP-SGD...')
 
   for step, batch_idx in enumerate(
       plan.batch_selection_strategy.batch_iterator(train_size)
