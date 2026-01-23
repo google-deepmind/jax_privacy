@@ -328,6 +328,8 @@ class UserSelectionStrategy:
       selecting examples_per_user_per_batch.
   """
 
+  base_strategy: BatchSelectionStrategy
+  examples_per_user_per_batch: int = 1
   shuffle_per_user: bool = False
 
   def batch_iterator(
