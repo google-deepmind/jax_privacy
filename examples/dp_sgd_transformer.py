@@ -322,8 +322,7 @@ def main(argv: Sequence[str]) -> None:
       noise_state: Any,
       opt_state: Any
   ) -> Tuple[Mapping[str, Any], Any, jax.Array, Any]:
-    batch_x = batch_data[:, :-1]
-    batch_y = batch_data[:, 1:]
+    batch_x, batch_y = batch_data
     grads, aux = grad_fn(
       model_params,
       batch_x,
