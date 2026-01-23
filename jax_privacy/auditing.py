@@ -18,7 +18,6 @@
 This library provides functions for estimating the privacy of a model,
 based on attack scores of held-in and held-out canaries.
 """
-# pytype: skip-file
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -37,7 +36,6 @@ import scipy.stats
 _norm = scipy.stats.norm
 _binom = scipy.stats.binom
 _logistic = scipy.special.expit
-_brentq = scipy.optimize.brentq
 
 
 class ThresholdStrategy:
@@ -106,7 +104,7 @@ AuditAllThresholdsMethod: TypeAlias = Callable[
         bool,  # one_sided
         float | None,  # threshold or None for all thresholds
     ],
-    tuple[float, float] | float,
+    tuple[float, float],
 ]
 
 
@@ -179,7 +177,7 @@ def _epsilon_one_run(
   while audit_objective(eps_hi) > 0:
     eps_lo, eps_hi = eps_hi, eps_hi * 2
 
-  return _brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
+  return scipy.optimize.brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
 
 
 @functools.lru_cache(maxsize=1000)
@@ -244,7 +242,7 @@ def _epsilon_one_run_fdp(
   while audit_objective(eps_hi) > 0:
     eps_lo, eps_hi = eps_hi, eps_hi * 2
 
-  return _brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
+  return scipy.optimize.brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -599,7 +597,7 @@ class CanaryScoreAuditor:
       delta: float,
       one_sided: bool,
       threshold: float | None = None,
-  ) -> tuple[float, float] | float:
+  ) -> tuple[float, float]:
     """Estimates epsilon with C-P bound at one or all thresholds."""
     if threshold is None:
       fn_counts = self._fn_counts
@@ -627,15 +625,17 @@ class CanaryScoreAuditor:
     eps, idx = eps_and_idx(fnr_ubs, fpr_ubs)
 
     if not one_sided:
+      # pylint: disable=arguments-out-of-order
       new_eps, new_idx = eps_and_idx(fpr_ubs, fnr_ubs)
+      # pylint: enable=arguments-out-of-order
       if new_eps > eps:
         idx = new_idx
         eps = new_eps
 
     if threshold is None:
-      return eps, self._thresholds[idx]
-    else:
-      return eps
+      threshold = self._thresholds[idx]
+
+    return eps, threshold
 
   def epsilon_clopper_pearson(
       self,
@@ -888,7 +888,7 @@ class CanaryScoreAuditor:
     if delta_gap(eps_ub) >= 0:
       return eps_ub
 
-    return _brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
+    return scipy.optimize.brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
 
   def _epsilon_one_run_all_thresholds(
       self,
@@ -897,7 +897,7 @@ class CanaryScoreAuditor:
       one_sided: bool,
       threshold: float | None = None,
       use_fdp: bool = False,
-  ) -> float | tuple[float, float]:
+  ) -> tuple[float, float]:
     """Computes the epsilon bound at one or all thresholds."""
     if not one_sided:
       raise ValueError('one_sided must be True.')
@@ -914,7 +914,7 @@ class CanaryScoreAuditor:
     if threshold is not None:
       tp = np.sum(self._in_canary_scores >= threshold)
       fp = np.sum(self._out_canary_scores >= threshold)
-      return audit_fn(0, m, tp + fp, tp, significance, delta)
+      return audit_fn(0, m, tp + fp, tp, significance, delta), threshold
 
     tp_counts = n_pos - self._fn_counts
     fp_counts = n_neg - self._tn_counts
@@ -945,7 +945,10 @@ class CanaryScoreAuditor:
         best_idx = idx
         best_q = _logistic(best_eps)
 
-    return best_eps, self._thresholds[best_idx]
+    if threshold is None:
+      threshold = self._thresholds[best_idx]
+
+    return best_eps, threshold
 
   def epsilon_one_run(
       self,
@@ -1056,13 +1059,14 @@ class CanaryScoreAuditor:
           auditor_1, alpha, delta, one_sided, None
       )
       auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
-      return audit_all_thresholds_method(
+      eps, _ = audit_all_thresholds_method(
           auditor_2, alpha, delta, one_sided, threshold
       )
+      return eps
 
     match threshold_strategy:
       case Explicit(threshold):
-        eps = audit_all_thresholds_method(
+        eps, _ = audit_all_thresholds_method(
             self, significance, delta, one_sided, threshold
         )
       case Split(threshold_estimation_frac=frac, seed=seed):
