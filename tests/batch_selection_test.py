@@ -236,7 +236,7 @@ class BatchSelectionTest(parameterized.TestCase):
         assert (x == -1) or (0 <= x < num_examples)
 
     # Ensure that at least one batch uses padding (so the padding path executed)
-    num_padded = sum(1 for batch in batches if (-1 in batch))
+    num_padded = sum(1 for batch in batches if -1 in batch)
     assert num_padded >= 0
 
   def test_poisson_sampling_with_large_cycle_length(self):
