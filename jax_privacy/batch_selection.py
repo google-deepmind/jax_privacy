@@ -248,12 +248,21 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
 
     for i in range(self.iterations):
       current_group = partition[i % self.cycle_length]
-      sample_size = rng.binomial(n=len(current_group), p=self.sampling_prob)
-      if self.truncated_batch_size is not None:
-        sample_size = min(sample_size, self.truncated_batch_size)
-      yield rng.choice(
-          current_group, size=sample_size, replace=False, shuffle=False
-      )
+      # Perform independent Bernoulli trials per eligible item to implement
+      # true Poisson (per-item Bernoulli) sampling.
+      if current_group.size == 0:
+        yield current_group
+        continue
+      mask = rng.random(size=current_group.shape[0]) < self.sampling_prob
+      selected = current_group[mask]
+      # If truncation is requested, uniformly subsample among the selected
+      # items (this preserves independent selection semantics before
+      # truncation).
+      if self.truncated_batch_size is not None and selected.size > self.truncated_batch_size:
+        selected = rng.choice(
+            selected, size=self.truncated_batch_size, replace=False, shuffle=False
+        )
+      yield selected
 
 
 @dataclasses.dataclass(frozen=True)
