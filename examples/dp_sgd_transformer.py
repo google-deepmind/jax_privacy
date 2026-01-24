@@ -204,7 +204,7 @@ def load_text_data(
   chars = sorted(list(set(text)))
   vocab_size = len(chars)
   char_to_idx = {ch: i for i, ch in enumerate(chars)}
-  idx_to_char = {i: ch for i, ch in enumerate(chars)}
+  idx_to_char = dict(enumerate(chars))
 
   data = [char_to_idx[ch] for ch in text]
   data = jnp.array(data)
