@@ -184,7 +184,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     >>> p = 0.5
     >>> b = CyclicPoissonSampling(sampling_prob=p, iterations=6, cycle_length=2)
     >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
-    [2 4] [1 8 9] [2 7 5 4] [11  1  3] [10  2  5  0  4] [ 1 11  6]
+    [ 4 10  9  1] [ 6  5 11  2] [7 3 1] [0 6 8 2] [9 1] [0]
 
 
   References:
