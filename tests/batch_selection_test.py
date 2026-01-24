@@ -255,7 +255,9 @@ class BatchSelectionTest(parameterized.TestCase):
         yield np.array([2, 0, 1], dtype=np.int32)
 
     strategy = batch_selection.UserSelectionStrategy(
-        _FixedBatchStrategy(), examples_per_user_per_batch=2, shuffle_per_user=False
+        _FixedBatchStrategy(),
+        examples_per_user_per_batch=2,
+        shuffle_per_user=False,
     )
     user_ids = np.array([10, 10, 20, 20, 20, 30])
     batch = next(strategy.batch_iterator(user_ids, rng=0))
