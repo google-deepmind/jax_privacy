@@ -166,6 +166,46 @@ class BatchSelectionTest(parameterized.TestCase):
           delta=4 * (iterations * expected_batch_size) ** 0.5,  # ~4 std dev
       )
 
+  def test_poisson_sampling_marginal_and_pairwise(self):
+    """Statistical test: marginals ≈ p and pairwise co-occurrence ≈ p^2."""
+    num_examples = 100
+    iterations = 10000
+    cycle_length = 1
+    expected_batch_size = 5
+    sampling_prob = expected_batch_size / (num_examples // cycle_length)
+    strategy = batch_selection.CyclicPoissonSampling(
+        sampling_prob=sampling_prob,
+        iterations=iterations,
+        cycle_length=cycle_length,
+        partition_type=batch_selection.PartitionType.INDEPENDENT,
+    )
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+
+    # Marginal selection probability per item
+    counts = np.zeros(num_examples, dtype=int)
+    for batch in batches:
+      if batch.size > 0:
+        counts[batch] += 1
+    empirical_p = counts.mean() / iterations
+    self.assertAlmostEqual(empirical_p, sampling_prob, delta=0.01)
+
+    # Pairwise co-occurrence for a few random pairs
+    rng = np.random.default_rng(1)
+    pairs = []
+    while len(pairs) < 5:
+      a, b = int(rng.integers(num_examples)), int(rng.integers(num_examples))
+      if a != b:
+        pairs.append((a, b))
+
+    for a, b in pairs:
+      both = 0
+      for batch in batches:
+        # membership test; batches are small so linear scan is fine
+        if a in batch and b in batch:
+          both += 1
+      empirical = both / iterations
+      self.assertAlmostEqual(empirical, sampling_prob ** 2, delta=0.01)
+
   def test_poisson_sampling_with_large_cycle_length(self):
     """Test for Poisson sampling with cycle_length > num_examples."""
     num_examples = 10
@@ -296,45 +336,6 @@ class BatchPaddingTest(parameterized.TestCase):
     np.testing.assert_array_equal(new_indices[new_indices != -1], indices)
 
 
-def test_poisson_sampling_marginal_and_pairwise(self):
-    """Statistical test: marginals ≈ p and pairwise co-occurrence ≈ p^2."""
-    num_examples = 100
-    iterations = 10000
-    cycle_length = 1
-    expected_batch_size = 5
-    sampling_prob = expected_batch_size / (num_examples // cycle_length)
-    strategy = batch_selection.CyclicPoissonSampling(
-        sampling_prob=sampling_prob,
-        iterations=iterations,
-        cycle_length=cycle_length,
-        partition_type=batch_selection.PartitionType.INDEPENDENT,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-
-    # Marginal selection probability per item
-    counts = np.zeros(num_examples, dtype=int)
-    for batch in batches:
-      if batch.size > 0:
-        counts[batch] += 1
-    empirical_p = counts.mean() / iterations
-    self.assertAlmostEqual(empirical_p, sampling_prob, delta=0.01)
-
-    # Pairwise co-occurrence for a few random pairs
-    rng = np.random.default_rng(1)
-    pairs = []
-    while len(pairs) < 5:
-      a, b = int(rng.integers(num_examples)), int(rng.integers(num_examples))
-      if a != b:
-        pairs.append((a, b))
-
-    for a, b in pairs:
-      both = 0
-      for batch in batches:
-        # membership test; batches are small so linear scan is fine
-        if a in batch and b in batch:
-          both += 1
-      empirical = both / iterations
-      self.assertAlmostEqual(empirical, sampling_prob ** 2, delta=0.01)
 
 
 if __name__ == "__main__":
