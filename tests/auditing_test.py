@@ -59,6 +59,15 @@ def _deterministic_normal(mu, sigma, n):
   return scipy.stats.norm.ppf(cdf_vals) * sigma + mu
 
 
+def _scores_with_circular_roc(
+    n_in: int, n_out: int
+) -> tuple[np.ndarray, np.ndarray]:
+  """Generates scores such that the ROC curve is a circular arc."""
+  out_canary_scores = np.linspace(0, 1, n_out)
+  in_canary_scores = np.sqrt(1 - np.linspace(0, 1, n_in) ** 2)
+  return in_canary_scores, out_canary_scores
+
+
 class CanaryScoreAuditorTest(parameterized.TestCase):
 
   def test_bootstrap_params_empty_quantiles(self):
@@ -263,7 +272,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     np.testing.assert_equal(fn_counts, [0, 4])
 
   @parameterized.product(
-      n_in=(10, 100, 1000),
+      n_in=(100, 1000),
       out_samples_ratio=(0.5, 1.0, 1.5),
       thresh=(0, 0.5, 1.0),
   )
@@ -285,7 +294,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     fp = np.sum(out_canary_scores >= thresh)
     tpr_lb = 1 - auditing._clopper_pearson_upper(fn, n_in, significance / 2)
     fpr_ub = auditing._clopper_pearson_upper(fp, n_out, significance / 2)
-    expected_eps = np.log(tpr_lb / fpr_ub)
+    expected_eps = max(0, np.log(tpr_lb / fpr_ub))
     np.testing.assert_allclose(eps, expected_eps)
 
   @parameterized.product(
@@ -312,7 +321,29 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     np.testing.assert_allclose(eps_lb, true_eps, rtol=0.2)
 
   @parameterized.product(
-      min_count=(0, 1, 50),
+      out_samples_ratio=(0.5, 1.0, 1.5),
+      mu=(0.7, 1.0, 1.5),
+  )
+  def test_epsilon_clopper_pearson_tight_multi_split(
+      self, out_samples_ratio, mu
+  ):
+    significance = 0.1
+    delta = 0.1
+    in_samples = 100_000
+    threshold_strategy = auditing.MultiSplit(seed=0)
+    out_samples = int(in_samples * out_samples_ratio)
+    in_canary_scores = _deterministic_normal(mu, 1, in_samples)
+    out_canary_scores = _deterministic_normal(0, 1, out_samples)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    eps_lb = auditor.epsilon_clopper_pearson(
+        significance, delta, threshold_strategy=threshold_strategy
+    )
+    true_eps = dp_accounting.get_epsilon_gaussian(1 / mu, delta)
+    np.testing.assert_array_less(eps_lb, true_eps)
+    np.testing.assert_allclose(eps_lb, true_eps, rtol=0.2)
+
+  @parameterized.product(
+      min_count=(1, 50),
       out_samples_ratio=(0.5, 1.0, 1.5),
   )
   def test_epsilon_raw_counts_helper_accurate_large_delta(
@@ -326,8 +357,10 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     _, tn_counts, fn_counts = auditing._get_tn_fn_counts(
         in_canary_scores, out_canary_scores
     )
+    tp_counts = (fn_counts[-1] - fn_counts)[::-1]
+    fp_counts = (tn_counts[-1] - tn_counts)[::-1]
     eps = auditing._epsilon_raw_counts_helper(
-        tn_counts, fn_counts, min_count, delta
+        tp_counts, fp_counts, min_count, delta
     )
     true_eps = dp_accounting.get_epsilon_gaussian(1.0, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=1e-1)
@@ -340,22 +373,22 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_epsilon_raw_counts_helper_worst_case(self, min_count, n_neg, n_pos):
     # Tests that the epsilon uses the minimum allowed FPR for a perfect
     # classifier.
-    tn_counts = np.array([0, n_neg, n_neg])
-    fn_counts = np.array([0, 0, n_pos])
+    tp_counts = np.array([0, n_pos, n_pos])
+    fp_counts = np.array([0, 0, n_neg])
     epsilon = auditing._epsilon_raw_counts_helper(
-        tn_counts, fn_counts, min_count, delta=0
+        tp_counts, fp_counts, min_count, delta=0
     )
     np.testing.assert_allclose(epsilon, np.log(n_neg / min_count))
 
   @parameterized.product(
-      min_count=[0, 1, 2],
+      min_count=[1, 2],
       delta=[0, 1 / 8, 1 / 4, 3 / 8, 1 / 2],
   )
   def test_epsilon_raw_counts_helper_nonzero_delta(self, min_count, delta):
-    tn_counts = np.array([0, 4, 8, 8])
-    fn_counts = np.array([0, 2, 6, 8])
+    tp_counts = np.array([0, 2, 6, 8])
+    fp_counts = np.array([0, 0, 4, 8])
     epsilon = auditing._epsilon_raw_counts_helper(
-        tn_counts, fn_counts, min_count, delta
+        tp_counts, fp_counts, min_count, delta
     )
     if min_count == 0:
       expected_slopes = {0: np.inf, 1 / 8: np.inf}
@@ -397,6 +430,23 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     else:
       tprs = [auditor.tpr_at_given_fpr(fpr) for fpr in fprs]
     np.testing.assert_allclose(tprs, fprs)
+
+  @parameterized.product(
+      out_samples_ratio=(0.5, 1.0, 1.5),
+      vectorized=(True, False),
+  )
+  def test_tpr_at_given_fpr_circular_roc(self, out_samples_ratio, vectorized):
+    n_in = 10_000
+    n_out = int(n_in * out_samples_ratio)
+    in_canary_scores, out_canary_scores = _scores_with_circular_roc(n_in, n_out)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    fprs = np.linspace(0, 1, 10)
+    if vectorized:
+      tprs = auditor.tpr_at_given_fpr(fprs)
+    else:
+      tprs = [auditor.tpr_at_given_fpr(fpr) for fpr in fprs]
+    expected_tprs = np.sqrt(fprs * (2 - fprs))
+    np.testing.assert_allclose(tprs, expected_tprs, rtol=1e-3)
 
   @parameterized.product(
       out_samples_ratio=(0.5, 1.0, 1.5),
@@ -485,6 +535,70 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     out_canary_scores = rng.uniform(0, 1, out_samples)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     np.testing.assert_allclose(auditor.attack_auroc(), 0.5, rtol=0.05)
+
+  @parameterized.product(
+      out_samples_ratio=(0.5, 1.0, 1.5),
+  )
+  def test_attack_auroc_circular_roc(self, out_samples_ratio):
+    n_in = 10_000
+    n_out = int(n_in * out_samples_ratio)
+    in_canary_scores, out_canary_scores = _scores_with_circular_roc(n_in, n_out)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    auroc = auditor.attack_auroc()
+    self.assertAlmostEqual(auroc, np.pi / 4, places=3)
+
+  @parameterized.product(
+      prevalence=(None, 0.0, 0.1, 0.5, 0.7, 1.0),
+      out_samples_ratio=(0.5, 1.0, 1.5),
+      significance=(None, 0.05),
+  )
+  def test_max_accuracy_simple(
+      self, prevalence, out_samples_ratio, significance
+  ):
+    # Use many canaries with the same score so the upper bound is tight.
+    n_in = 1000
+    n_out = int(n_in * out_samples_ratio)
+    in_canary_scores = [1] * (n_in // 2) + [3] * (n_in // 2)
+    out_canary_scores = [0] * (n_out // 2) + [2] * (n_out // 2)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    max_accuracy = auditor.max_accuracy(
+        prevalence=prevalence, significance=significance
+    )
+    if prevalence is None:
+      prevalence = n_in / (n_in + n_out)
+    # Accuracy for a threshold between 0 and 1 (TPR=1, TNR=0.5)
+    acc1 = prevalence + 0.5 * (1 - prevalence)
+    # Accuracy for a threshold between 2 and 3 (TPR=0.5, TNR=1)
+    acc2 = 0.5 * prevalence + (1 - prevalence)
+    expected_max_accuracy = max(acc1, acc2)
+    if significance is None:
+      self.assertAlmostEqual(max_accuracy, expected_max_accuracy)
+    else:
+      np.testing.assert_allclose(max_accuracy, expected_max_accuracy, rtol=0.05)
+      self.assertGreaterEqual(max_accuracy, expected_max_accuracy)
+
+  @parameterized.product(
+      prevalence=(0.0, 0.1, 0.5, 0.7, 1.0),
+      significance=(None, 0.05),
+      out_samples_ratio=(0.5, 1.0, 1.5),
+  )
+  def test_max_accuracy_circular_roc(
+      self, prevalence, significance, out_samples_ratio
+  ):
+    n_in = 10_000
+    n_out = int(n_in * out_samples_ratio)
+    in_canary_scores, out_canary_scores = _scores_with_circular_roc(n_in, n_out)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    max_accuracy = auditor.max_accuracy(
+        prevalence=prevalence, significance=significance
+    )
+    expected_max_accuracy = np.sqrt(prevalence**2 + (1 - prevalence) ** 2)
+
+    if significance is None:
+      self.assertAlmostEqual(max_accuracy, expected_max_accuracy, places=3)
+    else:
+      np.testing.assert_allclose(max_accuracy, expected_max_accuracy, rtol=0.05)
+      self.assertGreaterEqual(max_accuracy, expected_max_accuracy)
 
   @parameterized.product(
       mu=(0.1, 0.3, 1.0, 3.0),

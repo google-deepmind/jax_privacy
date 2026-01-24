@@ -59,7 +59,7 @@ from .matrix_factorization import streaming_matrix
 
 
 class _NoiseStructureFn(Protocol):
-  """Protocol specifying the semantics of _IntermediateStrategy.get_noise_structure.
+  """A function that returns the intermediate shape/sharding of noise.
 
   (Expected) Formal Guarantees of y = get_noise_structure(x):
     - x.size <= y.size (i.e., math.prod(x.shape) <= math.prod(y.shape)). See
@@ -234,7 +234,8 @@ def _dense_matrix_factorization_privatizer(
   if noising_matrix.ndim != 2:
     raise ValueError(f'Expected 2D matrix, found {noising_matrix.shape=}.')
 
-  def privatize(sum_of_clipped_grads, noise_state):
+  def privatize(sum_of_clipped_grads, noise_state, params=None):
+    del params  # Unused, but expected by optax.GradientTransformation API.
     index = noise_state
     matrix_row = noising_matrix[index] * stddev
 
@@ -276,7 +277,8 @@ def _streaming_matrix_factorization_privatizer(
     intermediate = jax.tree.map(strategy.get_noise_structure, model)
     return prng_key, noising_matrix.init_multiply(intermediate)
 
-  def privatize(sum_of_clipped_grads, noise_state):
+  def privatize(sum_of_clipped_grads, noise_state, params=None):
+    del params  # Unused, but expected by optax.GradientTransformation API.
     prng_key, inner_state = noise_state
     new_key, sub_key = jax.random.split(prng_key)
 

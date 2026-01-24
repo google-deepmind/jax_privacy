@@ -55,7 +55,7 @@ class BoundedSensitivityCallable:
 
   def sensitivity(
       self,
-      neighboring_relation: dp_accounting.NeighboringRelation = _REPLACE_SPECIAL,
+      neighboring_relation: dp_accounting.NeighboringRelation = _REPLACE_SPECIAL
   ):
     """Returns the L2 sensitivity of the Callable.
 

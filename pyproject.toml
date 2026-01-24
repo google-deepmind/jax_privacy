@@ -1,3 +1,61 @@
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "jax_privacy"
+version = "1.1.0"
+description = "Algorithms for Privacy-Preserving Machine Learning in JAX."
+authors = [
+  { name="Google DeepMind", email="jax-privacy-dev@google.com" },
+]
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "absl-py",
+    "dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting",
+    "jax>=0.7.1",
+    "jaxlib>=0.7.1",
+    "pydantic",
+    "numpy",
+    "optax",
+    "scipy",
+    "chex",
+]
+
+[project.optional-dependencies]
+dev = [
+    "dinosaur",
+    "equinox",
+    "orbax",
+    "scikit-learn==1.5.0",
+    "pytest-xdist",
+    "hypothesis",
+    "grain",
+    "keras",
+    "tensorflow",
+]
+
+[project.urls]
+Homepage = "https://github.com/google-deepmind/jax_privacy"
+
+[tool.setuptools.packages.find]
+exclude = ["*_test.py", "examples*", "experiments*"]
+namespaces = true
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+
+# We include pyink to allow external contributors to optionally, but easily,
+# pass google internal formatting checks.
+[tool.pyink]
+pyink = true
+pyink-use-majority-quotes = true
+pyink-indentation = 2
+line-length = 80
+include = '\.pyi?$'

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import dataclasses
-from typing import Any, TypeAlias, TypeVar
+from typing import Any, Generic, TypeAlias, TypeVar
 
 import chex
 import jax
@@ -37,7 +37,7 @@ ShapePyTree = Any
 
 
 @dataclasses.dataclass(frozen=True)
-class StreamingMatrix:
+class StreamingMatrix(Generic[State]):
   """A linear mapping x -> A x for a lower-triangular (streaming) A matrix.
 
   Via the attributes / member functions `init_multiply` and `multiply_next`,

@@ -80,6 +80,12 @@ def check_float64_dtype(blt: 'BufferedToeplitz'):
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class StreamingMatrixBuilder:
   """Builder to convert a BLT to a StreamingMatrix.
+
+  Attributes:
+    buf_decay: A numpy array of shape `(num_buffers,)` representing the decay
+      factors for each buffer.
+    output_scale: A numpy array of shape `(num_buffers,)` representing the
+      scale factors applied to each buffer when reading the output.
   """
 
   buf_decay: np.ndarray
@@ -87,6 +93,7 @@ class StreamingMatrixBuilder:
 
   @property
   def dtype(self) -> np.dtype:
+    """Returns the dtype of the BLT parameters."""
     assert self.output_scale.dtype == self.buf_decay.dtype
     return self.output_scale.dtype
 

@@ -36,7 +36,6 @@ import scipy.stats
 _norm = scipy.stats.norm
 _binom = scipy.stats.binom
 _logistic = scipy.special.expit
-_brentq = scipy.optimize.brentq
 
 
 class ThresholdStrategy:
@@ -73,6 +72,30 @@ class Split(ThresholdStrategy):
   seed: int | None = None
 
 
+@dataclasses.dataclass(frozen=True)
+class MultiSplit(ThresholdStrategy):
+  """Splits data multiple times with significance correction.
+
+  Reports the median of lower bounds computed at significance level alpha/2
+  [Meinshausen et al. (2009)]. Theorem 3.1 says that 2 * median(p_i) is a valid
+  p-value, which implies that the median of bounds computed at significance
+  alpha / 2 corresponds to the valid rejection threshold for an overall level of
+  alpha. See proof of Theorem 3.1 in https://arxiv.org/pdf/0811.2177 for
+  details.
+
+  Attributes:
+    num_samples: The number of splits to use.
+    threshold_estimation_frac: The fraction of data to use for computing the
+      threshold. The rest will be used for computing the bound.
+    seed: The seed for the random number generator. If None, a seed will be
+      chosen non-deterministically.
+  """
+
+  num_samples: int = 100
+  threshold_estimation_frac: float = 0.5
+  seed: int | None = None
+
+
 AuditAllThresholdsMethod: TypeAlias = Callable[
     [
         'CanaryScoreAuditor',  # self
@@ -81,7 +104,7 @@ AuditAllThresholdsMethod: TypeAlias = Callable[
         bool,  # one_sided
         float | None,  # threshold or None for all thresholds
     ],
-    tuple[float, float] | float,
+    tuple[float, float],
 ]
 
 
@@ -154,7 +177,7 @@ def _epsilon_one_run(
   while audit_objective(eps_hi) > 0:
     eps_lo, eps_hi = eps_hi, eps_hi * 2
 
-  return _brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
+  return scipy.optimize.brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
 
 
 @functools.lru_cache(maxsize=1000)
@@ -219,7 +242,7 @@ def _epsilon_one_run_fdp(
   while audit_objective(eps_hi) > 0:
     eps_lo, eps_hi = eps_hi, eps_hi * 2
 
-  return _brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
+  return scipy.optimize.brentq(audit_objective, eps_lo, eps_hi, xtol=1e-6)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -398,8 +421,8 @@ def _get_tn_fn_counts(
 
 def _tpr_at_given_fpr(
     fpr: np.typing.ArrayLike,
-    tn_counts: np.ndarray,
-    fn_counts: np.ndarray,
+    tp_counts: np.ndarray,
+    fp_counts: np.ndarray,
 ) -> np.ndarray | float:
   """Computes maximum TPR at a given FPR."""
   fpr = np.asarray(fpr)
@@ -407,69 +430,59 @@ def _tpr_at_given_fpr(
   if not np.all((0 <= fpr) & (fpr <= 1)):
     raise ValueError(f'fpr must be in [0, 1], got {fpr}.')
 
-  # This implementation assumes that tn_counts and fn_counts are sorted in
-  # increasing order, and have been filtered to contain only thresholds on the
-  # boundary of the convex hull.
-  n_pos = fn_counts[-1]
-  n_neg = tn_counts[-1]
+  n_pos = tp_counts[-1]
+  n_neg = fp_counts[-1]
 
-  target_tn_count = n_neg * (1 - fpr)
+  target_fp_count = n_neg * fpr
 
-  # Find the first threshold greater or equal to target_tn_count. We will
-  # interpolate between the previous one and this one.
-  threshold = np.searchsorted(tn_counts, target_tn_count)
+  # Find the index of the threshold where the false positive count is just
+  # greater than the target_fp_count. In case fpr is 1.0, we can use the index
+  # of the last threshold.
+  threshold = np.minimum(
+      np.searchsorted(fp_counts, target_fp_count, side='right'),
+      np.size(fp_counts) - 1,
+  )
 
-  # If threshold is 0 (i.e., if target_tn_count is 0), we interpolate between
-  # the first two thresholds. Because we have found the convex hull of FN/TN
-  # counts, the first TN count is always 0 and the second is positive.
-  threshold = np.maximum(threshold, 1)
+  # Interpolate between the two thresholds.
+  fp_left = fp_counts[threshold - 1]
+  fp_right = fp_counts[threshold]
+  q = (target_fp_count - fp_left) / (fp_right - fp_left)
 
-  tn_left = tn_counts[threshold - 1]
-  tn_right = tn_counts[threshold]
-  p = (target_tn_count - tn_left) / (tn_right - tn_left)
-
-  fn_left = fn_counts[threshold - 1]
-  fn_right = fn_counts[threshold]
-  fnr = ((1 - p) * fn_left + p * fn_right) / n_pos
-
-  return 1 - fnr
+  tp_left = tp_counts[threshold - 1]
+  tp_right = tp_counts[threshold]
+  return (tp_left + q * (tp_right - tp_left)) / n_pos
 
 
 def _epsilon_raw_counts_helper(
-    tn_counts: np.ndarray,
-    fn_counts: np.ndarray,
+    tp_counts: np.ndarray,
+    fp_counts: np.ndarray,
     min_count: int,
     delta: float,
 ) -> float:
   """Estimates epsilon given true and false counts at each threshold."""
-  n_pos = fn_counts[-1]
-  n_neg = tn_counts[-1]
+  n_pos = tp_counts[-1]
+  n_neg = fp_counts[-1]
 
   if min_count >= n_neg:
     return 0.0
 
   min_fpr = min_count / n_neg
-  tpr_at_min_fpr = _tpr_at_given_fpr(min_fpr, tn_counts, fn_counts)
+  tpr_at_min_fpr = _tpr_at_given_fpr(min_fpr, tp_counts, fp_counts)
 
   if delta == 0:
     return np.log(tpr_at_min_fpr / min_fpr)
 
-  tp_counts = n_pos - fn_counts
-  fp_counts = n_neg - tn_counts
+  # Add the point (tpr_at_min_fpr, min_fpr). This point often corresponds to the
+  # optimal epsilon, but it is not part of the truncated convex hull.
+  if tpr_at_min_fpr > delta:
+    initial_eps = max(0, np.log(tpr_at_min_fpr - delta) - np.log(min_fpr))
+  else:
+    initial_eps = 0
 
-  pos_counts = np.stack([tp_counts, fp_counts], axis=1)
-  pos_counts = pos_counts[fp_counts >= min_count]
-  pos_rates = pos_counts / [n_pos, n_neg]
-  pos_rates = np.append(pos_rates, [[tpr_at_min_fpr, min_fpr]], axis=0)
-
-  # We want to ignore invalid values in the log here. If (tpr - delta) is
-  # less or equal to zero, the bound is invalid. Let it return np.nan or -np.inf
-  # and we will filter it with np.nanmax.
-  with np.errstate(divide='ignore', invalid='ignore'):
-    return np.nanmax(
-        np.log(pos_rates[:, 0] - delta) - np.log(pos_rates[:, 1]),
-        initial=0,
-    )
+  tpr, fpr = tp_counts / n_pos, fp_counts / n_neg
+  valid = (fp_counts >= min_count) & (tpr > delta)
+  eps = np.log(tpr[valid] - delta) - np.log(fpr[valid])
+  return np.max(eps, initial=initial_eps)
 
 
 def _random_partition(
@@ -536,6 +549,16 @@ class CanaryScoreAuditor:
         in_canary_scores, out_canary_scores
     )
 
+  def _get_tp_counts(self) -> np.ndarray:
+    """Returns the true positive counts at each threshold."""
+    # Reverse the order so they are increasing.
+    return (self._fn_counts[-1] - self._fn_counts)[::-1]
+
+  def _get_fp_counts(self) -> np.ndarray:
+    """Returns the false positive counts at each threshold."""
+    # Reverse the order so they are increasing.
+    return (self._tn_counts[-1] - self._tn_counts)[::-1]
+
   def _bootstrap(
       self,
       fn: Callable[['CanaryScoreAuditor'], float],
@@ -574,7 +597,7 @@ class CanaryScoreAuditor:
       delta: float,
       one_sided: bool,
       threshold: float | None = None,
-  ) -> tuple[float, float] | float:
+  ) -> tuple[float, float]:
     """Estimates epsilon with C-P bound at one or all thresholds."""
     if threshold is None:
       fn_counts = self._fn_counts
@@ -597,20 +620,22 @@ class CanaryScoreAuditor:
         return 0.0, -1
       eps_vals = np.log(tpr_lbs[valid] - delta) - np.log(fpr_ubs[valid])
       subidx = np.argmax(eps_vals)
-      return eps_vals[subidx], valid[subidx]
+      return max(0.0, eps_vals[subidx]), valid[subidx]
 
     eps, idx = eps_and_idx(fnr_ubs, fpr_ubs)
 
     if not one_sided:
+      # pylint: disable=arguments-out-of-order
       new_eps, new_idx = eps_and_idx(fpr_ubs, fnr_ubs)
+      # pylint: enable=arguments-out-of-order
       if new_eps > eps:
         idx = new_idx
         eps = new_eps
 
     if threshold is None:
-      return eps, self._thresholds[idx]
-    else:
-      return eps
+      threshold = self._thresholds[idx]
+
+    return eps, threshold
 
   def epsilon_clopper_pearson(
       self,
@@ -674,8 +699,8 @@ class CanaryScoreAuditor:
     Returns:
       Epsilon estimate ln(TPR/FPR).
     """
-    if min_count < 0:
-      raise ValueError(f'min_count must be non-negative, got {min_count}.')
+    if min_count < 1:
+      raise ValueError(f'min_count must be positive, got {min_count}.')
     if not 0 <= delta <= 1:
       raise ValueError(f'delta must be in [0, 1], got {delta}.')
 
@@ -686,21 +711,17 @@ class CanaryScoreAuditor:
       )
 
     eps = _epsilon_raw_counts_helper(
-        self._tn_counts, self._fn_counts, min_count, delta
+        self._get_tp_counts(), self._get_fp_counts(), min_count, delta
     )
 
     if not one_sided:
-      # For a two-sided estimate, we also consider the reverse decision rule,
-      # where examples with scores *lower* than the threshold are classified as
-      # "in". Reverse the counts because the helper function expects the counts
-      # to be in ascending order.
+      # For a two-sided estimate, also consider the reverse decision rule, where
+      # examples with scores *lower* than the threshold are classified as "in".
 
-      tp_counts = (self._fn_counts[-1] - self._fn_counts)[::-1]
-      fp_counts = (self._tn_counts[-1] - self._tn_counts)[::-1]
-      eps = max(
-          eps,
-          _epsilon_raw_counts_helper(tp_counts, fp_counts, min_count, delta),
+      eps_reverse = _epsilon_raw_counts_helper(
+          self._tn_counts, self._fn_counts, min_count, delta
       )
+      eps = max(eps, eps_reverse)
 
     return max(eps, 0)
 
@@ -737,7 +758,7 @@ class CanaryScoreAuditor:
           bootstrap_params,
       )
 
-    return _tpr_at_given_fpr(fpr, self._tn_counts, self._fn_counts)
+    return _tpr_at_given_fpr(fpr, self._get_tp_counts(), self._get_fp_counts())
 
   def attack_auroc(
       self,
@@ -759,15 +780,45 @@ class CanaryScoreAuditor:
 
     # Calculate AUROC using the trapezoidal rule. Since we have TN counts and FN
     # counts handy, we're actually computing the area under the curve of the TNR
-    # as a function of FNR, which is equivalent. Cast to float64 to prevent
-    # overflow.
-    tn_counts_float = self._tn_counts.astype(np.float64)
-    fn_counts_float = self._fn_counts.astype(np.float64)
-    unnorm = np.dot(
-        tn_counts_float[:-1] + tn_counts_float[1:],
-        fn_counts_float[1:] - fn_counts_float[:-1],
-    )
-    return 0.5 * unnorm / (fn_counts_float[-1] * tn_counts_float[-1])
+    # as a function of FNR, which is equivalent.
+    tnr = self._tn_counts / self._tn_counts[-1]
+    fnr = self._fn_counts / self._fn_counts[-1]
+    return 0.5 * np.dot(tnr[:-1] + tnr[1:], fnr[1:] - fnr[:-1])
+
+  def max_accuracy(
+      self,
+      *,
+      prevalence: float | None = None,
+      significance: float | None = None,
+  ) -> float:
+    """Computes the maximum accuracy achievable by a threshold-based classifier.
+
+    Args:
+      prevalence: The prevalence of the positive class. If not provided, the
+        prevalence is taken to be the proportion of in-canary examples to the
+        total.
+      significance: If provided, compute and return the high probability upper
+        bound on the maximum accuracy with this allowable probability of failure
+        (one minus confidence).
+
+    Returns:
+      The maximum accuracy.
+    """
+    n_pos = self._fn_counts[-1]
+    n_neg = self._tn_counts[-1]
+
+    if prevalence is None:
+      prevalence = n_pos / (n_pos + n_neg)
+
+    tp_counts = n_pos - self._fn_counts
+    if significance is None:
+      tnr_ubs = self._tn_counts / n_neg
+      tpr_ubs = tp_counts / n_pos
+    else:
+      tnr_ubs = _clopper_pearson_upper(self._tn_counts, n_neg, significance / 2)
+      tpr_ubs = _clopper_pearson_upper(tp_counts, n_pos, significance / 2)
+
+    return np.max(tpr_ubs * prevalence + tnr_ubs * (1 - prevalence))
 
   def epsilon_from_gdp(
       self,
@@ -837,7 +888,7 @@ class CanaryScoreAuditor:
     if delta_gap(eps_ub) >= 0:
       return eps_ub
 
-    return _brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
+    return scipy.optimize.brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
 
   def _epsilon_one_run_all_thresholds(
       self,
@@ -846,7 +897,7 @@ class CanaryScoreAuditor:
       one_sided: bool,
       threshold: float | None = None,
       use_fdp: bool = False,
-  ) -> float | tuple[float, float]:
+  ) -> tuple[float, float]:
     """Computes the epsilon bound at one or all thresholds."""
     if not one_sided:
       raise ValueError('one_sided must be True.')
@@ -863,7 +914,7 @@ class CanaryScoreAuditor:
     if threshold is not None:
       tp = np.sum(self._in_canary_scores >= threshold)
       fp = np.sum(self._out_canary_scores >= threshold)
-      return audit_fn(0, m, tp + fp, tp, significance, delta)
+      return audit_fn(0, m, tp + fp, tp, significance, delta), threshold
 
     tp_counts = n_pos - self._fn_counts
     fp_counts = n_neg - self._tn_counts
@@ -894,7 +945,10 @@ class CanaryScoreAuditor:
         best_idx = idx
         best_q = _logistic(best_eps)
 
-    return best_eps, self._thresholds[best_idx]
+    if threshold is None:
+      threshold = self._thresholds[best_idx]
+
+    return best_eps, threshold
 
   def epsilon_one_run(
       self,
@@ -991,27 +1045,47 @@ class CanaryScoreAuditor:
       one_sided: bool = True,
   ) -> float:
     """Computes the epsilon bound for a given threshold strategy."""
+
+    def single_split(frac: float, alpha: float, seed: int | None) -> float:
+      rng = np.random.default_rng(seed)
+      in_scores_1, in_scores_2 = _random_partition(
+          self._in_canary_scores, rng, frac
+      )
+      out_scores_1, out_scores_2 = _random_partition(
+          self._out_canary_scores, rng, frac
+      )
+      auditor_1 = CanaryScoreAuditor(in_scores_1, out_scores_1)
+      _, threshold = audit_all_thresholds_method(
+          auditor_1, alpha, delta, one_sided, None
+      )
+      auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
+      eps, _ = audit_all_thresholds_method(
+          auditor_2, alpha, delta, one_sided, threshold
+      )
+      return eps
+
     match threshold_strategy:
       case Explicit(threshold):
-        eps = audit_all_thresholds_method(
+        eps, _ = audit_all_thresholds_method(
             self, significance, delta, one_sided, threshold
         )
-      case Split(threshold_estimation_frac=p, seed=seed):
-        rng = np.random.default_rng(seed)
-        in_scores_1, in_scores_2 = _random_partition(
-            self._in_canary_scores, rng, p
-        )
-        out_scores_1, out_scores_2 = _random_partition(
-            self._out_canary_scores, rng, p
-        )
-        auditor_1 = CanaryScoreAuditor(in_scores_1, out_scores_1)
-        _, threshold = audit_all_thresholds_method(
-            auditor_1, significance, delta, one_sided, None
-        )
-        auditor_2 = CanaryScoreAuditor(in_scores_2, out_scores_2)
-        eps = audit_all_thresholds_method(
-            auditor_2, significance, delta, one_sided, threshold
-        )
+      case Split(threshold_estimation_frac=frac, seed=seed):
+        eps = single_split(frac, significance, seed)
+      case MultiSplit(
+          num_samples=num_samples,
+          threshold_estimation_frac=frac,
+          seed=seed,
+      ):
+        rng = np.random.default_rng(seed=seed)
+        seeds = rng.integers(np.iinfo(np.int64).max, size=num_samples)
+        with futures.ThreadPoolExecutor() as pool:
+          values = list(
+              pool.map(
+                  functools.partial(single_split, frac, significance / 2),
+                  seeds,
+              )
+          )
+        eps = np.median(values)
       case Bonferroni():
         significance_bonferroni = significance / len(self._fn_counts)
         eps, _ = audit_all_thresholds_method(
