@@ -32,13 +32,42 @@ import abc
 import dataclasses
 import enum
 import itertools
-from typing import Iterator
+from typing import Iterator, Sequence, TypeVar
 
+import jax
+import jax.numpy as jnp
 from jax_privacy.experimental import microbatching
 import numpy as np
 
 
 RngType = np.random.Generator | int | None
+T = TypeVar('T')
+
+
+def create_poisson_data_source(
+    data: Sequence[T],
+    sampling_prob: float,
+    *,
+    prng_key: jax.Array,
+) -> Iterator[tuple[np.ndarray, list[T]]]:
+  """Creates a data source that samples with replacement.
+
+  Args:
+    data: A sequence of data elements.
+    sampling_prob: The probability of including each element in a batch.
+    prng_key: A JAX PRNG key.
+
+  Yields:
+    A tuple of (indices, batch), where indices are the indices of the
+    sampled elements, and batch is the list of sampled elements.
+  """
+  num_data = len(data)
+  while True:
+    prng_key, subkey = jax.random.split(prng_key)
+    mask = jax.random.bernoulli(subkey, sampling_prob, (num_data,))
+    indices = jnp.where(mask)[0]
+    batch = [data[i] for i in np.asarray(indices)]
+    yield np.asarray(indices), batch
 
 
 class PartitionType(enum.Enum):
