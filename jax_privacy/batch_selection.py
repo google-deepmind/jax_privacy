@@ -258,9 +258,15 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       # If truncation is requested, uniformly subsample among the selected
       # items (this preserves independent selection semantics before
       # truncation).
-      if self.truncated_batch_size is not None and selected.size > self.truncated_batch_size:
+      if (
+          self.truncated_batch_size is not None
+          and selected.size > self.truncated_batch_size
+      ):
         selected = rng.choice(
-            selected, size=self.truncated_batch_size, replace=False, shuffle=False
+            selected,
+            size=self.truncated_batch_size,
+            replace=False,
+            shuffle=False,
         )
       yield selected
 
