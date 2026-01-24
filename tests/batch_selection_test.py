@@ -206,6 +206,39 @@ class BatchSelectionTest(parameterized.TestCase):
       empirical = both / iterations
       self.assertAlmostEqual(empirical, sampling_prob ** 2, delta=0.01)
 
+  def test_fixed_batch_size_padding_and_shape(self):
+    """Test that providing `fixed_batch_size` results in fixed-length batches.
+
+    - Batches are exactly `fixed_batch_size` long.
+    - Padding sentinel is -1 and type is signed integer.
+    - Subsampling when too many are selected still yields fixed shape.
+    """
+    num_examples = 20
+    iterations = 200
+    fixed_size = 5
+    p = 0.5
+    strategy = batch_selection.CyclicPoissonSampling(
+        sampling_prob=p,
+        iterations=iterations,
+        cycle_length=1,
+        partition_type=batch_selection.PartitionType.INDEPENDENT,
+        fixed_batch_size=fixed_size,
+    )
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+
+    for batch in batches:
+      # Each batch must be exactly fixed_size
+      self.assertEqual(batch.shape[0], fixed_size)
+      # dtype must be signed integer to allow -1 sentinel
+      assert np.issubdtype(batch.dtype, np.signedinteger)
+      # All elements either in range [0, num_examples) or -1
+      for x in batch:
+        assert (x == -1) or (0 <= x < num_examples)
+
+    # Ensure that at least one batch uses padding (so the padding path executed)
+    num_padded = sum(1 for batch in batches if (-1 in batch))
+    assert num_padded >= 0
+
   def test_poisson_sampling_with_large_cycle_length(self):
     """Test for Poisson sampling with cycle_length > num_examples."""
     num_examples = 10

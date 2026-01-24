@@ -215,6 +215,10 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     truncated_batch_size: If True, after Poisson sampling, if we have more than
       truncated_batch_size examples in a batch, we uniformly sample
       truncated_batch_size of them and discard the rest.
+    fixed_batch_size: If set to an integer, each yielded batch will have this
+      exact length (padded with -1 or uniformly subsampled to meet the size).
+      This option is useful when downstream code requires fixed-shaped
+      batches for JIT compilation.
     cycle_length: If > 1, we use cyclic Poisson sampling: we partition the
       examples into cycle_length groups, and do Poisson sampling from the groups
       in a round-robin fashion. cycle_length == 1 retrieves standard Poisson
@@ -228,6 +232,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   sampling_prob: float
   iterations: int
   truncated_batch_size: int | None = None
+  fixed_batch_size: int | None = None
   cycle_length: int = 1
   partition_type: PartitionType = PartitionType.EQUAL_SPLIT
 
@@ -258,6 +263,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       # If truncation is requested, uniformly subsample among the selected
       # items (this preserves independent selection semantics before
       # truncation).
+      # Apply truncation if requested (uniform subsample among selected).
       if (
           self.truncated_batch_size is not None
           and selected.size > self.truncated_batch_size
@@ -268,7 +274,24 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
             replace=False,
             shuffle=False,
         )
-      yield selected
+
+      # If a fixed batch size is requested, return a fixed-size array. We use
+      # -1 as the padding sentinel and ensure a signed integer dtype so padding
+      # works across platforms. This keeps shape stable for JIT-compiled code.
+      if self.fixed_batch_size is not None:
+        fb = int(self.fixed_batch_size)
+        if selected.size > fb:
+          # Uniformly subsample to the fixed size.
+          selected = rng.choice(selected, size=fb, replace=False, shuffle=False)
+          yield selected.astype(np.int64)
+        else:
+          # Pad with -1 to achieve fixed size.
+          padded = np.full(fb, -1, dtype=np.int64)
+          padded[: selected.size] = selected.astype(np.int64)
+          yield padded
+
+      else:
+        yield selected
 
 
 @dataclasses.dataclass(frozen=True)
