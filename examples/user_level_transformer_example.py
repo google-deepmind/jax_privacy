@@ -143,7 +143,8 @@ def main(_):
         optax.softmax_cross_entropy(logits=logits, labels=one_hot_labels)
     )
 
-  # `clipped_grad` wraps the loss function to compute per-user clipped gradients.
+  # `clipped_grad` wraps the loss function to compute per-user clipped
+  # gradients.
   # With `keep_batch_dim=False`, the loss function receives a batch of examples
   # for a single user. The gradient is computed over this batch, and the
   # resulting gradient (which is an average over the user's examples) is
