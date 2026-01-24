@@ -40,16 +40,11 @@ NLP setting.
 """
 
 from absl import app
-import dp_accounting
 import jax
 from jax import random
 import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import batch_selection
-from jax_privacy import noise_addition
-from jax_privacy.accounting import accountants
-from jax_privacy.accounting import analysis
-from jax_privacy.accounting import calibrate
 from jax_privacy.experimental import execution_plan
 from typing import Any, Mapping, Sequence, Tuple
 
@@ -254,8 +249,6 @@ def main(argv: Sequence[str]) -> None:
     raise app.UsageError('Too many command-line arguments.')
 
   # Hyperparameters
-  batch_size = 32
-  num_epochs = 10
   learning_rate = 0.001
   clipping_norm = 1.0
   epsilon = 1.0
@@ -273,28 +266,6 @@ def main(argv: Sequence[str]) -> None:
   model_params = init_model_params(key, vocab_size=vocab_size, max_len=max_len)
 
   # Set up DP components
-  accountant = analysis.DpsgdTrainingAccountant(
-      dp_accountant_config=accountants.PldAccountantConfig()
-  )
-  noise_multiplier = calibrate.calibrate_noise_multiplier(
-      target_epsilon=epsilon,
-      target_delta=delta,
-      accountant=accountant,
-      batch_sizes=batch_size,
-      num_updates=num_epochs * (train_size // batch_size),
-      num_samples=train_size,
-  )
-
-  noise_rng = random.key(42)
-
-  grad_fn = jax_privacy.clipped_grad(
-      loss_fn,
-      l2_clip_norm=clipping_norm,
-      batch_argnums=(1, 2),
-      has_aux=False,
-      return_values=True,
-      normalize_by=batch_size,
-  )
   config = execution_plan.BandMFExecutionPlanConfig(
       iterations=iterations,
       num_bands=1,
@@ -302,14 +273,15 @@ def main(argv: Sequence[str]) -> None:
       delta=delta,
       sampling_prob=expected_batch_size / train_size,
   )
+  grad_fn = jax_privacy.clipped_grad(
+      loss_fn,
+      l2_clip_norm=clipping_norm,
+      batch_argnums=(1, 2),
+      has_aux=False,
+      return_values=True,
+      normalize_by=expected_batch_size,
+  )
   plan = config.make(grad_fn)
-
-  sensitivity = grad_fn.sensitivity(
-      dp_accounting.NeighboringRelation.REPLACE_ONE
-  )
-  privatizer = noise_addition.gaussian_privatizer(
-      stddev=noise_multiplier * sensitivity, prng_key=noise_rng
-  )
 
   optimizer = optax.sgd(learning_rate)
   privatizer = plan.noise_addition_transform
