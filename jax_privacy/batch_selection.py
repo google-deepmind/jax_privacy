@@ -178,7 +178,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   Example Usage (standard Poisson sampling) [2]:
     >>> b = CyclicPoissonSampling(sampling_prob=0.25, iterations=8)
     >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
-    [5 6 7] [5 8 3 7 2] [ 1  5 11] [0 3] [ 5  1  3  4 10] [2] [4 5 1 3] [6]
+    [10  5 11] [ 9  4 10  0  8  1] [7 3] [] [6 2 5] [ 9  5 11] [9 3 0] [9 4 2]
 
   Example Usage (BandMF-style sampling) [3]:
     >>> p = 0.5
