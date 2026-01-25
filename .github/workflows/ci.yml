@@ -7,57 +7,110 @@ on:
     branches: ["main"]
 
 jobs:
-  build-and-test:
-    name: "Python ${{ matrix.python-version }} on ${{ matrix.os }}"
-    runs-on: "${{ matrix.os }}"
-
+  lint:
+    name: "Lint: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         python-version: ["3.11"]
         os: [ubuntu-latest]
-
     steps:
       - uses: "actions/checkout@v6"
       - uses: "actions/setup-python@v6"
         with:
-            python-version: "${{ matrix.python-version }}"
-      - name: Install dependencies
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+      - name: Install Linting Tools
         run: |
           python -m pip install --upgrade pip
-          pip install build wheel
-          pip install pylint pytype flake8 pylint-exit pydocstyle
-          pip install -e .[dev]
-          pip install -r docs/requirements.txt
-          pip install crc32c
-      - name: Run flake8
-        run: flake8 jax_privacy tests examples
+          pip install -e ".[lint]"
+      - name: Run flake
+        run: |
+          flake8 jax_privacy tests examples
       - name: Run pydocstyle
         run: |
           pydocstyle --convention=google --add-ignore=D101,D102,D103,D105,D202,D402 jax_privacy/
       - name: Run pylint
+        shell: bash
         run: |
           pylint jax_privacy || pylint-exit -efail -wfail -cfail -rfail $?
           pylint examples || pylint-exit -efail -wfail -cfail -rfail $?
           pylint tests -d W0101,W0212,C0114 || pylint-exit -efail -wfail -cfail -rfail $?
-        shell: bash
       - name: Run pytype
         run: |
           pytype jax_privacy -k
           pytype tests -k
           pytype examples -k
-      - name: Run doctests
+
+  test:
+    name: "Unit Test: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+        os: [ubuntu-latest]
+    steps:
+      - uses: "actions/checkout@v6"
+      - uses: "actions/setup-python@v6"
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+      - name: Install Test Dependencies
         run: |
-          pytest --doctest-modules jax_privacy/
-      - name: Run tests
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+      - name: Run Doctests
+        run: |
+          pytest --doctest-modules jax_privacy
+      - name: Run Standard Tests
         run: |
           pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test"
           pytest -n auto tests/ -k "distributed_noise_generation_test"
           pytest -n auto tests/ -k "sharding_utils_test"
+
+  matrix-tests:
+    name: "Matrix Tests: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
+    needs: lint
+    runs-on: "${{ matrix.os }}"
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+        os: [ubuntu-latest]
+    steps:
+      - uses: "actions/checkout@v6"
+      - uses: "actions/setup-python@v6"
+        with:
+          python-version: "${{ matrix.python-version }}"
+          cache: "pip"
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+      - name: Run Heavy Tests
+        run: |
           export HYPOTHESIS_PROFILE=dpftrl_default
           pytest -n auto tests/ -k "matrix_factorization" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
         shell: bash
-      - name: Build docs
+
+  docs:
+    name: "Docs: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
+    needs: lint
+    runs-on: "${{ matrix.os }}"
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+        os: [ubuntu-latest]
+    steps:
+      - uses: "actions/checkout@v6"
+      - uses: "actions/setup-python@v6"
+        with:
+          python-version: "${{ matrix.python-version }}"
+          cache: "pip"
+      - name: Install Docs Dependencies
         run: |
-         cd docs
-         sphinx-build -W -b html . _build/html
-         cd ..
+          python -m pip install --upgrade pip
+          pip install -e ".[docs]"
+      - name: Build Sphinx
+        run: |
+          cd docs
+          sphinx-build -W -b html . _build/html
