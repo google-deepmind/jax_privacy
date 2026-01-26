@@ -56,12 +56,12 @@ test = [
     "crc32c",
     "keras",
     "tensorflow",
+    "flax; sys_platform != 'win32'",
 ]
 
 examples = [
     "dinosaur",
     "equinox",
-    # orbax pulls orbax-checkpoint → uvloop (not supported on Windows)
     "orbax; sys_platform != 'win32'",
     "scikit-learn==1.5.0",
     "grain",
@@ -71,6 +71,7 @@ examples = [
     "randomgen",
     "importlib_resources",
     "opencv-python",
+    "flax; sys_platform != 'win32'",
 ]
 
 docs = [
