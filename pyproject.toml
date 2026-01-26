@@ -37,6 +37,7 @@ test = [
     "pytest-xdist",
     "hypothesis",
     "crc32c",
+    "keras",
 ]
 
 examples = [
