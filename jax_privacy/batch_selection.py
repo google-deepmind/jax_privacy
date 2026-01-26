@@ -34,7 +34,7 @@ import enum
 import itertools
 from typing import Iterator
 
-from jax_privacy.experimental import microbatching
+from jax_privacy import sharding_utils
 import numpy as np
 
 
@@ -109,7 +109,7 @@ def split_and_pad_global_batch(
   minibatch_shape = (minibatch_size,) + indices.shape[1:]
   last_minibatch = np.full(minibatch_shape, -1, dtype=indices.dtype)
   last_minibatch[: minibatches[-1].shape[0]] = minibatches[-1]
-  permutation = microbatching.compute_early_stopping_order(
+  permutation = sharding_utils.compute_early_stopping_order(
       minibatch_size, microbatch_size
   )
   minibatches[-1] = last_minibatch[permutation]

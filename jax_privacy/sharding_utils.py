@@ -31,7 +31,10 @@ Differentially Private ML](https://arxiv.org/abs/2405.15913) and in
 
 import math
 from typing import Any, TypeAlias
+
 import jax
+import numpy as np
+
 
 PyTree: TypeAlias = Any
 PartitionSpecPyTree: TypeAlias = Any
@@ -147,3 +150,69 @@ def local_reshape_add(x: jax.Array, y: jax.Array) -> jax.Array:
   return (x + reshape(y)).astype(x.dtype)
 
 
+def compute_early_stopping_order(
+    batch_size: int,
+    microbatch_size: int | None,
+) -> np.ndarray:
+  """Return an index permutation so data is processed in order w/ microbatching.
+
+  To avoid communication in distributed environments with microbatching, data
+  data is reshaped from (batch_size, *dims) to (num_microbatches,
+  microbatch_size, *dims) using a Fortran-order reshape.
+
+  This is a helper function to reorder data so that they get processed in the
+  same order by `microbatch` as they would be processed
+  without microbatching. This can be particularly helpful when the last elements
+  of the batch are padding examples, in which case if they appear in the
+  same microbatch we can avoid processing them.  This function is only useful
+  if using the "is_padding_example" keyword argument with
+  `microbatch`.
+
+  Example Usage:
+    >>> order = compute_early_stopping_order(batch_size=10, microbatch_size=2)
+    >>> order
+    array([0, 2, 4, 6, 8, 1, 3, 5, 7, 9])
+
+  When permuting the input data to `microbatch` according
+  to the above permutation, the examples will be split up into 5 microbatchs:
+  [0, 1], [2, 3], [4, 5], [6, 7], [8, 9] and processed sequentially.
+
+    >>> from optax.experimental import microbatching
+    >>> microbatching.reshape_batch_axis(order, microbatch_size=2)
+    array([[0, 1],
+           [2, 3],
+           [4, 5],
+           [6, 7],
+           [8, 9]])
+
+  We can see how this is directly useful in the context of padding below.
+  Because the last two microbatches consist of only padding examples,
+  `microbatch` will skip them, saving compute.
+
+    >>> is_padding = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1])
+    >>> microbatching.reshape_batch_axis(is_padding[order], microbatch_size=2)
+    array([[0, 0],
+           [0, 0],
+           [0, 0],
+           [1, 1],
+           [1, 1]])
+
+  Args:
+    batch_size: The size of the batch axis.
+    microbatch_size: The target microbatch size that will be used with
+      `microbatch`.
+
+  Returns:
+    A permutation of the example indices, where padding examples are evenly
+    distributed across the microbatch indices and appear in the last k
+    microbatches.  This is useful for early stopping when the true batch size is
+    less than the size of the batch axis.
+  """
+  indices = np.arange(batch_size)
+  if microbatch_size is None:
+    return indices
+  elif batch_size % microbatch_size != 0:
+    raise ValueError(
+        f'batch_size={batch_size} is not divisible by {microbatch_size=}'
+    )
+  return indices.reshape(-1, microbatch_size).T.flatten()
