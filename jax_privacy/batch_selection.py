@@ -355,7 +355,7 @@ class UserSelectionStrategy:
     dtype = np.min_scalar_type(-num_examples)
 
     # Group example indices by user once to avoid an O(n) scan per user.
-    order = np.argsort(inverse, kind="stable").astype(dtype, copy=False)
+    order = np.argsort(inverse, kind='stable').astype(dtype, copy=False)
     counts = np.bincount(inverse, minlength=num_users)
     grouped_examples = np.split(order, np.cumsum(counts)[:-1])
 
