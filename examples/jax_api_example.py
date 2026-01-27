@@ -106,7 +106,7 @@ def updated_model_params(
 
 def main(argv: Sequence[str]) -> None:
   if len(argv) > 1:
-    raise app.UsageError('Too many command-line arguments.')
+    raise app.UsageError("Too many command-line arguments.")
 
   true_w = 2.0
   true_b = 1.0

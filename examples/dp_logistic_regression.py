@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
-from typing import Any, Mapping, Tuple
+from typing import Any, Mapping, Tuple, Sequence
 import numpy as np
 import optax
 
@@ -75,7 +75,9 @@ def create_benchmark(
   return params, feature_matrix, labels
 
 
-def main(_: Any) -> None:
+def main(argv: Sequence[str]) -> None:
+  if len(argv) > 1:
+    raise app.UsageError('Too many command-line arguments.')
 
   true_params, feature_matrix, labels = create_benchmark(USERS, FEATURES)
   params = jax.tree.map(jnp.zeros_like, true_params)
