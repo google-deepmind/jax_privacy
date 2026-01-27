@@ -27,13 +27,16 @@ os.environ["KERAS_BACKEND"] = "jax"
 from jax_privacy import keras_api
 import keras
 from keras import layers
+from typing import Tuple, Sequence
 import numpy as np
 
-num_classes = 10
-input_shape = (28, 28, 1)
+
+num_classes: int = 10
+input_shape: Tuple[int, int, int] = (28, 28, 1)
 
 
-def get_model():
+def get_model() -> keras.Model:
+  """Builds and returns the CNN model."""
   return keras.Sequential([
       keras.Input(shape=input_shape),
       layers.Conv2D(32, kernel_size=(3, 3), activation="relu"),
@@ -46,7 +49,10 @@ def get_model():
   ])
 
 
-def load_data():
+def load_data() -> Tuple[
+    Tuple[np.ndarray, np.ndarray],
+    Tuple[np.ndarray, np.ndarray],
+]:
   """Loads the MNIST data and returns the train and test sets."""
   # Load the data and split it between train and test sets
   (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
@@ -54,16 +60,21 @@ def load_data():
   # Scale images to the [0, 1] range
   x_train = x_train.astype("float32") / 255
   x_test = x_test.astype("float32") / 255
+
   # Make sure images have shape (28, 28, 1)
   x_train = np.expand_dims(x_train, -1)
   x_test = np.expand_dims(x_test, -1)
+
   # convert class vectors to "one hot encoding"
   y_train = keras.utils.to_categorical(y_train, num_classes)
   y_test = keras.utils.to_categorical(y_test, num_classes)
   return (x_train, y_train), (x_test, y_test)
 
 
-def main(_):
+def main(argv: Sequence[str]) -> None:
+  if len(argv) > 1:
+    raise app.UsageError("Too many command-line arguments.")
+
   # Marker to insert the main part of the example into ReadTheDocs.
   # [START example]
   (x_train, y_train), (x_test, y_test) = load_data()
@@ -91,12 +102,14 @@ def main(_):
     model = keras_api.make_private(model, params)
     print(
         f"DP training:{epsilon=} {delta=} {clipping_norm=} {batch_size=} "
-        f" {epochs=} {train_size=}"
+        f"{epochs=} {train_size=}"
     )
   else:
     print("Non-DP training")
   model.compile(
-      loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"]
+      loss="categorical_crossentropy",
+      optimizer="adam",
+      metrics=["accuracy"],
   )
   model.fit(
       x_train,
