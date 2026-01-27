@@ -33,7 +33,7 @@ import functools
 from typing import Dict, Tuple, Any
 import urllib.request
 
-from flax import nnx  # pytype: disable=import-error
+from flax import nnx
 import jax
 import jax.extend.backend
 import jax.numpy as jnp

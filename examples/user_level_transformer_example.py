@@ -31,7 +31,7 @@ Differential Privacy" (https://arxiv.org/abs/2404.06713).
 
 from absl import app
 from absl import flags
-import flax.linen as nn  # pytype: disable=import-error
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
