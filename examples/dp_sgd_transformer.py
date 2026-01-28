@@ -49,7 +49,7 @@ from jax_privacy.experimental import execution_plan
 from typing import Any, Mapping, Sequence, Tuple
 
 import optax
-import tensorflow_datasets as tfds # pytype: disable=import-error
+import tensorflow_datasets as tfds
 
 
 def init_model_params(
@@ -69,9 +69,9 @@ def init_model_params(
       'ln_f': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
       'head': random.normal(keys[4], (embed_dim, vocab_size)) * 0.1,
   }
-  layer_keys = random.split(keys[2], num_layers * 8)
+  layer_keys = random.split(keys[2], num_layers * 6)
   for i in range(num_layers):
-    layer_key = layer_keys[i*8:(i+1)*8]
+    layer_key = layer_keys[i*6:(i+1)*6]
     layer = {
       'attn': {
           'q': random.normal(layer_key[0], (embed_dim, embed_dim)) * 0.1,
@@ -185,8 +185,8 @@ def loss_fn(
 ) -> jax.Array:
   """Cross-entropy loss for next token prediction."""
   logits = model(model_params, batch_x)
-  logits = logits[:, :-1, :].reshape(-1, logits.shape[-1])
-  targets = batch_y[:, 1:].reshape(-1)
+  logits = logits.reshape(-1, logits.shape[-1])
+  targets = batch_y.reshape(-1)
   return optax.softmax_cross_entropy_with_integer_labels(logits, targets).mean()
 
 
@@ -221,6 +221,8 @@ def load_text_data(
 def generate_text(
     model_params: Mapping[str, Any],
     seed_text: str,
+    *,
+    max_len: int,
     length: int = 50,
     char_to_idx: Mapping[str, int] | None = None,
     idx_to_char: Mapping[int, str] | None = None
@@ -238,7 +240,7 @@ def generate_text(
     next_char = idx_to_char.get(int(next_token), '?')
     generated += next_char
     batch_x = jnp.concatenate([batch_x, jnp.array([[next_token]])], axis=1)
-    if batch_x.shape[1] >= 128:  # max_len
+    if batch_x.shape[1] >= max_len:
       break
 
   return generated
@@ -339,10 +341,12 @@ def main(argv: Sequence[str]) -> None:
   seed_text = 'ROMEO:'
   generated = generate_text(
     model_params,
-    seed_text, 100,
-    char_to_idx,
-    idx_to_char
-  )
+    seed_text,
+    max_len=max_len,
+    length=100,
+    char_to_idx=char_to_idx,
+    idx_to_char=idx_to_char,
+)
   print(f'\nGenerated text: {generated}')
   print('\nTraining complete!')
 
