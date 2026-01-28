@@ -48,6 +48,7 @@ examples = [
     "grain",
     "keras",
     "tensorflow",
+    "tensorflow_datasets",
 ]
 
 docs = [
