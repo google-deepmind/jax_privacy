@@ -35,6 +35,7 @@ lint = [
 test = [
     "pytest",
     "pytest-xdist",
+    "pytest-cov",       
     "hypothesis",
     "crc32c",
     "keras",
@@ -90,3 +91,4 @@ pyink-use-majority-quotes = true
 pyink-indentation = 2
 line-length = 80
 include = '\.pyi?$'
+
