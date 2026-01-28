@@ -50,7 +50,13 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
 
   def setUp(self):
     super().setUp()
-    chex.set_n_cpu_devices(8)
+    try:
+      chex.set_n_cpu_devices(8)
+    except RuntimeError:
+      # chex.set_n_cpu_devices may fail if JAX devices are already initialized
+      pass
+    if jax.device_count() < 8:
+      self.skipTest('requires 8 devices to run')
 
     axis_types = (jax.sharding.AxisType.Explicit,) * 2
     mesh = jax.make_mesh((4, 2), ('x', 'y'), axis_types=axis_types)
@@ -67,7 +73,7 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
       self,
       strategy_inverse_fn=banded_toeplitz_noising_matrix_fn,
   ):
-    self.assertEqual(jax.device_count(), 8)
+    self.assertGreaterEqual(jax.device_count(), 8)
 
     pspecs = {
         'v': jax.sharding.PartitionSpec(),
