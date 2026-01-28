@@ -245,6 +245,26 @@ class BatchSelectionTest(parameterized.TestCase):
       user_batch = user_ids[batch[:, 0]]
       self.assertLen(set(user_batch), user_batch.shape[0])
 
+  def test_user_selection_preserves_example_order_without_shuffle(self):
+    """UserSelectionStrategy keeps per-user example order when not shuffled."""
+
+    class _FixedBatchStrategy(batch_selection.BatchSelectionStrategy):
+
+      def batch_iterator(self, num_examples: int, rng=None):
+        del num_examples, rng
+        yield np.array([2, 0, 1], dtype=np.int32)
+
+    strategy = batch_selection.UserSelectionStrategy(
+        _FixedBatchStrategy(),
+        examples_per_user_per_batch=2,
+        shuffle_per_user=False,
+    )
+    user_ids = np.array([10, 10, 20, 20, 20, 30])
+    batch = next(strategy.batch_iterator(user_ids, rng=0))
+    np.testing.assert_array_equal(batch[0], np.array([5, 5]))
+    np.testing.assert_array_equal(batch[1], np.array([0, 1]))
+    np.testing.assert_array_equal(batch[2], np.array([2, 3]))
+
 
 class BatchPaddingTest(parameterized.TestCase):
 

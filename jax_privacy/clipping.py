@@ -25,8 +25,8 @@ import chex
 import dp_accounting
 import jax
 import jax.numpy as jnp
-from jax_privacy.experimental import microbatching
 import optax
+from optax.experimental import microbatching
 
 
 PyTree: TypeAlias = chex.ArrayTree
@@ -198,6 +198,36 @@ def _normalize_fun_to_return_aux(fun, has_aux):
     return lambda *args, **kwargs: (fun(*args, **kwargs), ())
 
 
+def _num_real_microbatches(
+    is_padding_example: jax.Array,
+    microbatch_size: int | None,
+) -> int | jax.Array:
+  """Calculates the number of non-padding microbatches.
+
+  The returned  result is 1 + the index of the last microbatch that contains at
+  least one non-padding example.  This means that microbatches consisting of
+  all-padding examples that do not appear at the end will be treated as a real
+  microbatch.
+
+  Args:
+    is_padding_example: A 1D array of shape (num_examples,).
+    microbatch_size: Argument passed to `microbatch`.
+
+  Returns:
+    The `true` batch size, as a scalar jax array.
+  """
+  if microbatch_size is None:
+    return is_padding_example.shape[0]
+  reshaped = microbatching.reshape_batch_axis(
+      is_padding_example, microbatch_size
+  )
+  # Ensure there is at least one True in the array.
+  is_real_batch = jnp.append(True, ~reshaped.all(axis=1))
+  # We want the last real microbatch, argmax returns the first True value,
+  # so we add increasing numbers from 0 to 1 to each index.
+  return jnp.argmax(is_real_batch + jnp.linspace(0, 1, is_real_batch.size))
+
+
 def clipped_fun(
     fun: Callable,
     has_aux: bool = False,
@@ -294,7 +324,8 @@ def clipped_fun(
     is_padding_example = kwargs.get('is_padding_example', None)
     batch_size = jax.tree.leaves(args[batch_argnums[0]])[0].shape[0]
     if is_padding_example is None:
-      kwargs['is_padding_example'] = jnp.zeros(batch_size, dtype=jnp.bool_)
+      is_padding_example = jnp.zeros(batch_size, dtype=jnp.bool_)
+      kwargs['is_padding_example'] = is_padding_example
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
@@ -308,6 +339,7 @@ def clipped_fun(
       )
       return clipped_value, aux, l2_norm
 
+    num_real_mb = _num_real_microbatches(is_padding_example, microbatch_size)
     sum_ = microbatching.AccumulationType.SUM
     concat = microbatching.AccumulationType.CONCAT
     axes = [0 if i in batch_argnums else None for i in range(len(args))]
@@ -322,9 +354,11 @@ def clipped_fun(
       batch_argnums_with_prng = batch_argnums
     microbatched_vmap_fun = microbatching.microbatch(
         jax.vmap(clipped_fun_one_group, axes, spmd_axis_name=spmd_axis_name),
-        batch_argnums=batch_argnums_with_prng,
+        argnums=batch_argnums_with_prng,
+        argnames='is_padding_example',
         microbatch_size=microbatch_size,
-        accumulation_type=(sum_, concat, concat),
+        accumulator=(sum_, concat, concat),
+        num_real_microbatches=num_real_mb
     )
 
     clipped_values, aux, norms = microbatched_vmap_fun(*args, **kwargs)

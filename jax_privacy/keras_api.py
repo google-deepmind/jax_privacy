@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# pylint: disable=todo-style
 """API for adding DP-SGD to a Keras model.
 
 Example Usage:
@@ -79,8 +78,7 @@ class DPKerasConfig:
         noise). You should set this value before training and only based on the
         privacy guarantees you have to achieve. You should not increase the
         delta only because of poor model performance.
-      clipping_norm: The clipping norm for the gradients. TODO: how to choose
-        it?
+      clipping_norm: The clipping norm for the per-example gradients.
       batch_size: The batch size for the training.
       gradient_accumulation_steps: The number of gradient accumulation steps.
         This is the number of batches to accumulate before adding noise and
@@ -313,7 +311,7 @@ def _validate_model(model: keras.Model) -> None:
     raise ValueError(f'Model {model} is not a Keras model.')
   if keras.config.backend() != 'jax':
     raise ValueError(f'Model {model} must use Jax backend.')
-  # TODO: Add validation that the model does not contain layers
+  # TODO: b/415360727 - Add validation that the model does not contain layers
   # that are not compatible with DP-SGD, e.g. batch norm.
 
 
@@ -556,7 +554,7 @@ def _dp_train_step(
   ) = self.optimizer.stateless_apply(
       optimizer_variables, grads, trainable_variables
   )
-  # TODO: access it and update it by name.
+  # TODO: b/415360727 - access it and update it by name.
   non_trainable_variables[1] = non_trainable_variables[1] + 1
 
   logs, metrics_variables = self._update_metrics_variables(  # pylint: disable=protected-access
@@ -640,7 +638,7 @@ def _noised_clipped_grads(
       optimizer_variables,
       metrics_variables,
   ) = state
-  # TODO: access it and update it by name.
+  # TODO: b/415360727 - access it and update it by name.
   noise_state = non_trainable_variables[0], ()
   x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
 
@@ -674,12 +672,10 @@ def _noised_clipped_grads(
 
   noisy_grads, new_noise_state = privatizer.update(clipped_grad, noise_state)
 
-  # TODO: Investigate whether we should return mean or sum here.
   loss = per_example_aux.values.mean()
   unscaled_loss = per_example_aux.aux[0].mean()
   y_pred = per_example_aux.aux[1]
   non_trainable_variables = [new_noise_state[0]] + non_trainable_variables[1:]
-  # TODO: Determine the correct way to aggregate metrics.
   new_metrics = jax.tree.map(lambda x: x.mean(axis=0), per_example_aux.aux[3])
 
   aux = (unscaled_loss, y_pred, non_trainable_variables, new_metrics)

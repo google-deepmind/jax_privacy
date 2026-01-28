@@ -25,12 +25,3 @@ Experimental Modules
 
   experimental.execution_plan
   experimental.compilation_utils
-
-
-Other References
-----------------
-.. autosummary::
-  :toctree: _autosummary_output
-  :nosignatures:
-
-  experimental.microbatching
