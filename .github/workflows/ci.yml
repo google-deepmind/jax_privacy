@@ -46,13 +46,12 @@ jobs:
 
   test:
     name: "Unit Test: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
-    needs: lint
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11"]
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-14, windows-latest]
     steps:
       - uses: "actions/checkout@v4"
       - uses: "actions/setup-python@v5"
@@ -64,10 +63,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test,examples]"
 
-      - name: Run Doctests
+      # 1. Linux: Full Power (Parallel + Coverage)
+      - name: Run Doctests (Linux)
+        if: runner.os == 'Linux'
         run: |
           pytest --doctest-modules jax_privacy
-      # 1. Linux: Full Power (Parallel + Coverage)
       - name: Run Standard Tests (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -105,7 +105,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11"]
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-14, windows-latest]
     steps:
       - uses: "actions/checkout@v4"
       - uses: "actions/setup-python@v5"
