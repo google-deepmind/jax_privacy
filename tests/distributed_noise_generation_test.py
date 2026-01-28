@@ -56,7 +56,7 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
       # chex.set_n_cpu_devices may fail if JAX devices are already initialized
       pass
     if jax.device_count() < 8:
-      self.skipTest("requires 8 devices to run")
+      self.skipTest('requires 8 devices to run')
 
     axis_types = (jax.sharding.AxisType.Explicit,) * 2
     mesh = jax.make_mesh((4, 2), ('x', 'y'), axis_types=axis_types)
