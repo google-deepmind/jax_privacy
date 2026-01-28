@@ -19,7 +19,7 @@ import jax
 import jax.numpy as jnp
 from jax_privacy import sharding_utils
 import numpy as np
-from optax.experimental import microbatching
+import optax
 
 
 class ShardingTest(absltest.TestCase):
@@ -108,7 +108,7 @@ class ShardingTest(absltest.TestCase):
 
     for microbatch_size, expected in expected_true_microbatches.items():
       perm = sharding_utils.compute_early_stopping_order(6, microbatch_size)
-      actual = microbatching.reshape_batch_axis(
+      actual = optax.microbatching.reshape_batch_axis(
           is_padding[perm], microbatch_size
       )
       chex.assert_trees_all_equal(actual, expected)

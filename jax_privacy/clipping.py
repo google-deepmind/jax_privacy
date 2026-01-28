@@ -26,7 +26,6 @@ import dp_accounting
 import jax
 import jax.numpy as jnp
 import optax
-from optax.experimental import microbatching
 
 
 PyTree: TypeAlias = chex.ArrayTree
@@ -218,7 +217,7 @@ def _num_real_microbatches(
   """
   if microbatch_size is None:
     return is_padding_example.shape[0]
-  reshaped = microbatching.reshape_batch_axis(
+  reshaped = optax.microbatching.reshape_batch_axis(
       is_padding_example, microbatch_size
   )
   # Ensure there is at least one True in the array.
@@ -340,8 +339,8 @@ def clipped_fun(
       return clipped_value, aux, l2_norm
 
     num_real_mb = _num_real_microbatches(is_padding_example, microbatch_size)
-    sum_ = microbatching.AccumulationType.SUM
-    concat = microbatching.AccumulationType.CONCAT
+    sum_ = optax.microbatching.AccumulationType.SUM
+    concat = optax.microbatching.AccumulationType.CONCAT
     axes = [0 if i in batch_argnums else None for i in range(len(args))]
     if prng_argnum is not None:
       args = list(args)
@@ -352,7 +351,7 @@ def clipped_fun(
       batch_argnums_with_prng = tuple(batch_argnums) + (prng_argnum,)
     else:
       batch_argnums_with_prng = batch_argnums
-    microbatched_vmap_fun = microbatching.microbatch(
+    microbatched_vmap_fun = optax.microbatch(
         jax.vmap(clipped_fun_one_group, axes, spmd_axis_name=spmd_axis_name),
         argnums=batch_argnums_with_prng,
         argnames='is_padding_example',
