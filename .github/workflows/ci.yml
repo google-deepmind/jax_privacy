@@ -88,19 +88,26 @@ jobs:
       - name: Run Doctests
         run: |
           pytest --doctest-modules jax_privacy
-      - name: Run Standard Tests (with coverage) (non-Windows)
-        if: runner.os != 'Windows'
+      - name: Run Standard Tests (Linux, with coverage and parallelism)
+        if: runner.os == 'Linux'
         run: |
           pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
           pytest -n auto tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml --cov=jax_privacy --cov-report=xml --cov-append
           pytest -n auto tests/ -k "sharding_utils_test" --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
 
-      - name: Run Standard Tests (with coverage) (Windows)
+      - name: Run Standard Tests (macOS, no parallelism, no coverage)
+        if: runner.os == 'macOS'
+        run: |
+          pytest tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test" --junitxml=report1.xml
+          pytest tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml
+          pytest tests/ -k "sharding_utils_test" --junitxml=report3.xml
+
+      - name: Run Standard Tests (Windows, no coverage)
         if: runner.os == 'Windows'
         run: |
-          pytest tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
-          pytest tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml --cov=jax_privacy --cov-report=xml --cov-append
-          pytest tests/ -k "sharding_utils_test" --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
+          pytest tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test" --junitxml=report1.xml
+          pytest tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml
+          pytest tests/ -k "sharding_utils_test" --junitxml=report3.xml
       - name: Upload pytest reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -114,6 +121,7 @@ jobs:
           name: pip-audit-report-${{ matrix.os }}
           path: pip_audit.json
       - name: Upload coverage to Codecov
+        if: runner.os == 'Linux'
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -139,12 +147,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[test]"
-      - name: Run Heavy Tests (non-Windows)
-        if: runner.os != 'Windows'
+      - name: Run Heavy Tests (Linux, parallel)
+        if: runner.os == 'Linux'
         env:
           HYPOTHESIS_PROFILE: dpftrl_default
         run: |
           pytest -n auto tests/ -k "matrix_factorization" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
+        shell: bash
+
+      - name: Run Heavy Tests (macOS, sequential)
+        if: runner.os == 'macOS'
+        env:
+          HYPOTHESIS_PROFILE: dpftrl_default
+        run: |
+          pytest tests/ -k "matrix_factorization" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
         shell: bash
 
       - name: Run Heavy Tests (Windows)
