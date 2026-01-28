@@ -1,24 +1,42 @@
 name: ci
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: ["main"]
+    paths-ignore: ["README.md"]
   pull_request:
     branches: ["main"]
+    paths-ignore: ["README.md"]
 
 jobs:
-  lint:
-    name: "Lint: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        python-version: ["3.11"]
-        os: [ubuntu-latest]
+  yaml-lint:
+    name: "YAML Lint"
+    runs-on: ubuntu-latest
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: 3.11
+      - name: Install yamllint
+        run: |
+          python -m pip install --upgrade pip
+          pip install yamllint
+      - name: Run yamllint on workflows
+        run: yamllint .github/workflows
+
+  lint:
+    name: "Lint: Python 3.11"
+    runs-on: ubuntu-latest
+    needs: yaml-lint
+    steps:
+      - uses: "actions/checkout@v4"
+      - uses: "actions/setup-python@v5"
+        with:
+          python-version: "3.11"
           cache: "pip"
       - name: Install Linting Tools
         run: |
@@ -44,14 +62,16 @@ jobs:
 
   test:
     name: "Unit Test: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
+    needs: lint
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11"]
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: "actions/checkout@v4"
+      - uses: "actions/setup-python@v5"
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
@@ -59,26 +79,73 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[test,examples]"
+      - name: Security audit
+        run: |
+          python -m pip install pip-audit
+          pip-audit --format=json > pip_audit.json || true
+          python - <<'PY'
+            import json, sys
+            try:
+                data = json.load(open('pip_audit.json'))
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                print('pip-audit did not produce valid JSON or file is missing:', e)
+                sys.exit(0)
+            vulns = data.get('vulns') or []
+            high = [v for v in vulns if (v.get('vuln') or {}).get('severity','').upper() in ('HIGH','CRITICAL')]
+            if high:
+                print('High/critical vulnerabilities found:')
+                for v in high:
+                    print(json.dumps(v, indent=2))
+                sys.exit(2)
+            print('No high/critical vulnerabilities found')
+          PY
       - name: Run Doctests
         run: |
           pytest --doctest-modules jax_privacy
-      - name: Run Standard Tests
+      - name: Run Standard Tests (with coverage) (non-Windows)
+        if: runner.os != 'Windows'
         run: |
-          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test"
-          pytest -n auto tests/ -k "distributed_noise_generation_test"
-          pytest -n auto tests/ -k "sharding_utils_test"
+          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
+          pytest -n auto tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml --cov=jax_privacy --cov-report=xml --cov-append
+          pytest -n auto tests/ -k "sharding_utils_test" --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
+
+      - name: Run Standard Tests (with coverage) (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pytest tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
+          pytest tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml --cov=jax_privacy --cov-report=xml --cov-append
+          pytest tests/ -k "sharding_utils_test" --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
+      - name: Upload pytest reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-reports-${{ matrix.os }}
+          path: report*.xml
+      - name: Upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report-${{ matrix.os }}
+          path: pip_audit.json
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
 
   matrix-tests:
     name: "Matrix Tests: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
     needs: lint
     runs-on: "${{ matrix.os }}"
+    timeout-minutes: 120
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11"]
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: "actions/checkout@v4"
+      - uses: "actions/setup-python@v5"
         with:
           python-version: "${{ matrix.python-version }}"
           cache: "pip"
@@ -86,25 +153,31 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[test]"
-      - name: Run Heavy Tests
+      - name: Run Heavy Tests (non-Windows)
+        if: runner.os != 'Windows'
+        env:
+          HYPOTHESIS_PROFILE: dpftrl_default
         run: |
-          export HYPOTHESIS_PROFILE=dpftrl_default
           pytest -n auto tests/ -k "matrix_factorization" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
         shell: bash
 
+      - name: Run Heavy Tests (Windows)
+        if: runner.os == 'Windows'
+        env:
+          HYPOTHESIS_PROFILE: dpftrl_default
+        run: |
+          pytest tests/ -k "matrix_factorization" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
+
+
   docs:
-    name: "Docs: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
+    name: "Docs: Python 3.11"
     needs: lint
-    runs-on: "${{ matrix.os }}"
-    strategy:
-      matrix:
-        python-version: ["3.11"]
-        os: [ubuntu-latest]
+    runs-on: ubuntu-latest
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: "actions/checkout@v4"
+      - uses: "actions/setup-python@v5"
         with:
-          python-version: "${{ matrix.python-version }}"
+          python-version: "3.11"
           cache: "pip"
       - name: Install Docs Dependencies
         run: |
