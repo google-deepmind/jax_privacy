@@ -88,14 +88,14 @@ jobs:
           pytest tests/ -k "sharding_utils_test" --junitxml=report3.xml
       - name: Upload pytest reports on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: pytest-reports-${{ matrix.os }}
           path: report*.xml
        
       - name: Upload coverage to Codecov
         if: runner.os == 'Linux'
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
