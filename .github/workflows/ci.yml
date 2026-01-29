@@ -18,15 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: "actions/checkout@v4"
-      - uses: "actions/setup-python@v5"
+      - uses: "actions/checkout@v6"
+      - uses: "actions/setup-python@v6"
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: |
-            pyproject.toml
-            setup.py
-            requirements*.txt
+          cache-dependency-path: pyproject.toml
       - name: Install Linting Tools
         run: |
           python -m pip install --upgrade pip
@@ -59,15 +56,12 @@ jobs:
         python-version: ["3.11"]
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: "actions/checkout@v4"
-      - uses: "actions/setup-python@v5"
+      - uses: "actions/checkout@v6"
+      - uses: "actions/setup-python@v6"
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-          cache-dependency-path: |
-            pyproject.toml
-            setup.py
-            requirements*.txt
+          cache-dependency-path: pyproject.toml
       - name: Install Test Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -94,14 +88,14 @@ jobs:
           pytest tests/ -k "sharding_utils_test" --junitxml=report3.xml
       - name: Upload pytest reports on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: pytest-reports-${{ matrix.os }}
           path: report*.xml
        
       - name: Upload coverage to Codecov
         if: runner.os == 'Linux'
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
@@ -112,15 +106,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: "actions/checkout@v4"
-      - uses: "actions/setup-python@v5"
+      - uses: "actions/checkout@v6"
+      - uses: "actions/setup-python@v6"
         with:
           python-version: "3.11"
           cache: "pip"
           cache-dependency-path: |
             pyproject.toml
-            setup.py
-            requirements*.txt
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -139,15 +131,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: "actions/checkout@v4"
-      - uses: "actions/setup-python@v5"
+      - uses: "actions/checkout@v6"
+      - uses: "actions/setup-python@v6"
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: |
-            pyproject.toml
-            setup.py
-            requirements*.txt
+          cache-dependency-path: pyproject.toml
       - name: Install Docs Dependencies
         run: |
           python -m pip install --upgrade pip
