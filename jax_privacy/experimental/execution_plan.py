@@ -410,6 +410,7 @@ class DpsgdExecutionPlanConfig:
     return group_size
 
   def _get_sampling_prob(self) -> float:
+    """Returns the sampling probability for the configured batch size."""
     if self.sampling_prob is not None:
       return float(self.sampling_prob)
     group_size = self._group_size()
