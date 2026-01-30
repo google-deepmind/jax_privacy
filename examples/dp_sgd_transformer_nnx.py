@@ -33,12 +33,13 @@ import functools
 from typing import Dict, Tuple, Any
 import urllib.request
 
+from absl import app
 from flax import nnx
 import jax
 import jax.extend.backend
 import jax.numpy as jnp
-from jax_privacy import noise_addition
 from jax_privacy.clipping import clipped_grad
+from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
 
@@ -53,6 +54,8 @@ LEARNING_RATE = 1e-3
 NUM_STEPS = 10
 CLIP_NORM = 1.0
 NOISE_MULTIPLIER = 1.0
+EPSILON = 10.0
+DELTA = 1e-6
 
 
 # Data loading and preparation
@@ -267,8 +270,10 @@ def pure_loss_fn(
   return optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
 
 
-def main():
+def main(argv: list[str]) -> None:
   """Main training loop."""
+  if len(argv) > 1:
+    raise app.UsageError('Too many command-line arguments.')
   device = jax.extend.backend.get_backend().platform
   print(f"Starting DP-SGD Training on {device.upper()}...")
 
@@ -292,7 +297,7 @@ def main():
       num_layers=NUM_LAYERS,
       rngs=rngs,
   )
-  optimizer = optax.adam(LEARNING_RATE)
+  optimizer = optax.sgd(LEARNING_RATE)
 
   # CRITICAL: Exhaustive split to separate trainable params from static
   # graph and other state.
@@ -310,9 +315,17 @@ def main():
       # RNG state which is handled as a standard argument by NNX.
   )
 
-  privatizer = noise_addition.gaussian_privatizer(
-      stddev=grad_fn.sensitivity() * NOISE_MULTIPLIER,
+  # Execution Plan Configuration
+  dataset_size = len(data) - CONTEXT_LENGTH
+  config = execution_plan.BandMFExecutionPlanConfig(
+      iterations=NUM_STEPS,
+      num_bands=1,
+      epsilon=EPSILON,
+      delta=DELTA,
+      sampling_prob=BATCH_SIZE / dataset_size,
   )
+  plan = config.make(grad_fn)
+  privatizer = plan.noise_addition_transform
   noise_state = privatizer.init(params)
 
   @jax.jit
@@ -350,10 +363,19 @@ def main():
     return params, opt_state, noise_state, loss.values.mean()
 
   # Training loop
-  # TODO: Use jax_privacy.batch_selection.CyclicPoissonSampling
   print(f"Training for {NUM_STEPS} steps...")
-  for step in range(NUM_STEPS):
-    batch = get_batch(data, BATCH_SIZE, CONTEXT_LENGTH)
+  iterator = plan.batch_selection_strategy.batch_iterator(dataset_size)
+  for step, batch_indices in enumerate(iterator):
+    if step >= NUM_STEPS:
+      break
+
+    if len(batch_indices) == 0:
+      continue
+
+    # Construct batch from indices
+    x = np.stack([data[i : i + CONTEXT_LENGTH] for i in batch_indices])
+    y = np.stack([data[i + 1 : i + CONTEXT_LENGTH + 1] for i in batch_indices])
+    batch = (x, y)
 
     params, opt_state, noise_state, loss = train_step(
         params, opt_state, batch, noise_state=noise_state
@@ -365,4 +387,4 @@ def main():
 
 
 if __name__ == "__main__":
-  main()
+  app.run(main)
