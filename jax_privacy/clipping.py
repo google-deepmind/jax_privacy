@@ -18,6 +18,7 @@
 import collections
 from collections.abc import Sequence
 import dataclasses
+import functools
 import numbers
 from typing import Any, Callable, TypeAlias
 
@@ -328,6 +329,7 @@ def clipped_fun(
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
+      value = optax.tree.cast(value, dtype)
       clipped_value, l2_norm = clip_pytree(
           value,
           clip_norm=l2_clip_norm,
@@ -348,33 +350,29 @@ def clipped_fun(
       split_rngs = jax.tree.map(lambda x: jax.random.split(x, batch_size), rngs)
       args[prng_argnum] = split_rngs
       axes[prng_argnum] = 0
-      batch_argnums_with_prng = tuple(batch_argnums) + (prng_argnum,)
-    else:
-      batch_argnums_with_prng = batch_argnums
-    microbatched_vmap_fun = optax.microbatch(
-        jax.vmap(clipped_fun_one_group, axes, spmd_axis_name=spmd_axis_name),
-        argnums=batch_argnums_with_prng,
-        argnames='is_padding_example',
+
+    microbatched_vmap_fun = optax.microbatching.micro_vmap(
+        clipped_fun_one_group,
+        in_axes=axes,
         microbatch_size=microbatch_size,
         accumulator=(sum_, concat, concat),
-        num_real_microbatches=num_real_mb
+        num_real_microbatches=num_real_mb,
+        vmap_fn=functools.partial(jax.vmap, spmd_axis_name=spmd_axis_name)
     )
 
     clipped_values, aux, norms = microbatched_vmap_fun(*args, **kwargs)
-    # It would save flops to call this after vmap but before the microbatching.
-    result = jax.tree.map(lambda x: jnp.sum(x, 0, dtype), clipped_values)
     if normalize_by != 1.0:
-      result = jax.tree.map(lambda x: x / normalize_by, result)
+      clipped_values = jax.tree.map(lambda x: x / normalize_by, clipped_values)
 
     match has_aux, return_norms:
       case False, False:
-        return result
+        return clipped_values
       case False, True:
-        return result, norms
+        return clipped_values, norms
       case True, False:
-        return result, aux
+        return clipped_values, aux
       case True, True:
-        return result, (aux, norms)
+        return clipped_values, (aux, norms)
 
   norm_bound = (1.0 if rescale_to_unit_norm else l2_clip_norm) / normalize_by
   if keep_batch_dim:
