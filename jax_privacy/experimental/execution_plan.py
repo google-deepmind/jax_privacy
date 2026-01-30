@@ -175,6 +175,16 @@ class BandMFExecutionPlanConfig:
   via (epsilon, delta), however for convenience it can also be configured via
   `noise_multiplier` by setting epsilon=delta=None.
 
+  Standard DP-SGD is the special case `num_bands=1`. A typical configuration
+  for Poisson-sampled DP-SGD is:
+    - num_bands=1
+    - sampling_prob = expected_batch_size / num_examples
+    - partition_type = INDEPENDENT
+    - neighboring_relation = ADD_OR_REMOVE_ONE
+    - accountant = PLDAccountant(ADD_OR_REMOVE_ONE)
+  This yields the usual Poisson sampling analysis, and uses uncorrelated
+  Gaussian noise (the BandMF strategy degenerates to the identity matrix).
+
   References:
   - https://arxiv.org/abs/2306.08153
   - https://arxiv.org/abs/2405.15913
@@ -304,174 +314,6 @@ class BandMFExecutionPlanConfig:
     privatizer = noise_addition.matrix_factorization_privatizer(
         noising_matrix,
         stddev=float(noise_multiplier * query_sensitivity * max_column_norm),
-        prng_key=self.noise_seed,
-    )
-
-    return DPExecutionPlan(
-        clipped_aggregation_fn=clipped_aggregation_fn,
-        batch_selection_strategy=batch_selection_strategy,
-        noise_addition_transform=privatizer,
-        dp_event=dp_event,
-    )
-
-
-@pydantic.dataclasses.dataclass(
-    frozen=True,
-    kw_only=True,
-    config=pydantic.ConfigDict(arbitrary_types_allowed=True),
-)  # pytype: disable=wrong-keyword-args
-class DpsgdExecutionPlanConfig:
-  """Configuration for a DP-SGD-based DPExecutionPlan.
-
-  This config builds a DPExecutionPlan for the standard DP-SGD mechanism with
-  Poisson (or cyclic Poisson) sampling. The recommended way to configure this
-  plan is via (epsilon, delta), however for convenience it can also be
-  configured via `noise_multiplier` by setting epsilon=delta=None.
-
-  Attributes:
-    iterations: The number of iterations the mechanism is defined for.
-    sampling_prob: Poisson sampling probability for each eligible example.
-      Exactly one of sampling_prob or expected_batch_size must be set.
-    expected_batch_size: Expected global batch size per iteration. If set, then
-      sampling_prob is inferred as expected_batch_size / group_size, where
-      group_size = num_examples // cycle_length.
-    num_examples: The number of examples in the dataset. Required when
-      expected_batch_size or truncated_batch_size is set.
-    epsilon: The desired privacy budget.
-    delta: Additional privacy parameter.
-    noise_multiplier: If specified, gives the standard deviation of the
-      Gaussian noise divided by the query sensitivity.
-    truncated_batch_size: If using truncated Poisson sampling, the maximum
-      batch size to truncate to. Requires num_examples to be set.
-    cycle_length: If > 1, use cyclic Poisson sampling over cycle_length groups.
-    partition_type: How to partition the examples into groups before Poisson
-      sampling. INDEPENDENT is compatible with add/remove adjacency, while
-      EQUAL_SPLIT is compatible with replace/zero-out adjacency.
-    accountant: A privacy accountant used to calibrate noise multiplier.
-      Expected to have an empty state (or calibration may fail).
-    neighboring_relation: The neighboring relation to use for the accountant.
-      Must be consistent with the accountant and the batch selection strategy.
-    noise_seed: A seed for the random number generator used for noise addition.
-  """
-
-  iterations: int = pydantic.Field(ge=0)
-  sampling_prob: float | None = pydantic.Field(default=None, ge=0, le=1)
-  expected_batch_size: int | None = pydantic.Field(default=None, ge=0)
-  num_examples: int | None = pydantic.Field(default=None, ge=0)
-  epsilon: float | None = pydantic.Field(ge=0, allow_inf_nan=True)
-  delta: float | None = pydantic.Field(gt=0, le=1)
-  noise_multiplier: float | None = pydantic.Field(default=None, ge=0)
-  truncated_batch_size: int | None = pydantic.Field(default=None, ge=0)
-  cycle_length: int = pydantic.Field(default=1, ge=1)
-  partition_type: batch_selection.PartitionType = pydantic.Field(
-      default=batch_selection.PartitionType.INDEPENDENT
-  )
-  accountant: dp_accounting.PrivacyAccountant = pydantic.Field(
-      default_factory=lambda: dp_accounting.pld.PLDAccountant(
-          NeighboringRelation.ADD_OR_REMOVE_ONE
-      )
-  )
-  neighboring_relation: dp_accounting.NeighboringRelation = (
-      NeighboringRelation.ADD_OR_REMOVE_ONE
-  )
-  noise_seed: int | None = None
-
-  def __post_init__(self):
-    _validate_epsilon_delta_noise_multiplier(
-        self.epsilon, self.delta, self.noise_multiplier
-    )
-    if (self.sampling_prob is None) == (self.expected_batch_size is None):
-      raise ValueError(
-          'Exactly one of sampling_prob or expected_batch_size must be set.'
-      )
-    if self.expected_batch_size is not None and self.num_examples is None:
-      raise ValueError(
-          'expected_batch_size requires num_examples to be set.'
-      )
-    if self.truncated_batch_size is not None and self.num_examples is None:
-      raise ValueError(
-          'truncated_batch_size requires num_examples to be set.'
-      )
-    _validate_adjacency_relation(
-        self.accountant,
-        self.neighboring_relation,
-        self.truncated_batch_size,
-        self.partition_type,
-    )
-
-  def _group_size(self) -> int:
-    if self.num_examples is None:
-      raise ValueError('num_examples must be set to compute group_size.')
-    group_size = self.num_examples // self.cycle_length
-    if group_size <= 0:
-      raise ValueError(
-          'num_examples must be >= cycle_length to compute group_size.'
-      )
-    return group_size
-
-  def _get_sampling_prob(self) -> float:
-    """Returns the sampling probability for the configured batch size."""
-    if self.sampling_prob is not None:
-      return float(self.sampling_prob)
-    group_size = self._group_size()
-    sampling_prob = self.expected_batch_size / float(group_size)
-    if sampling_prob > 1.0:
-      raise ValueError(
-          'expected_batch_size is too large for the given num_examples and'
-          f' cycle_length ({sampling_prob=}).'
-      )
-    return sampling_prob
-
-  def _get_dp_event(self, sigma: float) -> dp_accounting.DpEvent:
-    """Returns a DpEvent for the DP-SGD mechanism."""
-    sampling_prob = self._get_sampling_prob()
-    if self.truncated_batch_size is not None:
-      group_size = self._group_size()
-      single_cycle_event = dp_accounting.TruncatedSubsampledGaussianDpEvent(
-          dataset_size=group_size,
-          sampling_probability=sampling_prob,
-          truncated_batch_size=self.truncated_batch_size,
-          noise_multiplier=sigma,
-      )
-    else:
-      single_cycle_event = dp_accounting.PoissonSampledDpEvent(
-          sampling_prob,
-          dp_accounting.GaussianDpEvent(noise_multiplier=sigma),
-      )
-    return dp_accounting.SelfComposedDpEvent(
-        single_cycle_event, math.ceil(self.iterations / self.cycle_length)
-    )
-
-  def make(
-      self,
-      clipped_aggregation_fn: clipping.BoundedSensitivityCallable,
-  ) -> DPExecutionPlan:
-    """Returns a DP execution plan for the given DP-SGD mechanism config."""
-    query_sensitivity = clipped_aggregation_fn.sensitivity(
-        self.accountant.neighboring_relation
-    )
-    noise_multiplier = self.noise_multiplier
-    if noise_multiplier is None:
-      make_fresh_accountant = functools.partial(copy.deepcopy, self.accountant)
-      noise_multiplier = dp_accounting.calibrate_dp_mechanism(
-          make_fresh_accountant=make_fresh_accountant,
-          make_event_from_param=self._get_dp_event,
-          target_epsilon=self.epsilon,
-          target_delta=self.delta,
-      )
-
-    dp_event = self._get_dp_event(noise_multiplier)
-
-    batch_selection_strategy = batch_selection.CyclicPoissonSampling(
-        sampling_prob=self._get_sampling_prob(),
-        iterations=self.iterations,
-        cycle_length=self.cycle_length,
-        truncated_batch_size=self.truncated_batch_size,
-        partition_type=self.partition_type,
-    )
-
-    privatizer = noise_addition.gaussian_privatizer(
-        stddev=float(noise_multiplier * query_sensitivity),
         prng_key=self.noise_seed,
     )
 

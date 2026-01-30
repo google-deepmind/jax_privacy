@@ -12,13 +12,15 @@ for how this relates to minibatches and microbatches.
 
 The `execution_plan` module defines `DPExecutionPlan` objects that bundle batch
 selection, clipping, and noise addition components together along with a
-privacy accounting event. It currently supports BandMF and DP-SGD execution
-plans.
+privacy accounting event. It currently supports BandMF execution plans, which
+include standard DP-SGD as the special case `num_bands=1`.
 
-### Example: DP-SGD Execution Plan
+### Example: Standard DP-SGD (BandMF with num_bands=1)
 
 ```python
 import jax.numpy as jnp
+import dp_accounting
+from jax_privacy import batch_selection
 from jax_privacy import clipping
 from jax_privacy.experimental import execution_plan
 
@@ -29,12 +31,17 @@ clipped_grad = clipping.clipped_grad(
     loss_fn, l2_clip_norm=1.0, normalize_by=128
 )
 
-config = execution_plan.DpsgdExecutionPlanConfig(
+config = execution_plan.BandMFExecutionPlanConfig(
     iterations=1000,
-    expected_batch_size=128,
-    num_examples=60000,
+    num_bands=1,
+    sampling_prob=128 / 60000,
     epsilon=2.0,
     delta=1e-6,
+    partition_type=batch_selection.PartitionType.INDEPENDENT,
+    neighboring_relation=dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE,
+    accountant=dp_accounting.pld.PLDAccountant(
+        dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE
+    ),
 )
 
 plan = config.make(clipped_grad)
