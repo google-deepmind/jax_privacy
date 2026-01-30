@@ -7,7 +7,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law- agreed to in writing, software
+# Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
@@ -31,7 +31,7 @@ Differential Privacy" (https://arxiv.org/abs/2404.06713).
 
 from absl import app
 from absl import flags
-import flax.linen as nn  # pytype: disable=import-error
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -39,19 +39,17 @@ import optax
 from jax_privacy.batch_selection import CyclicPoissonSampling
 from jax_privacy.batch_selection import UserSelectionStrategy
 from jax_privacy.clipping import clipped_grad
+from jax_privacy.experimental import execution_plan
 
 
-_USERS_PER_BATCH = flags.DEFINE_integer(
-    'users_per_batch', 4, 'Number of users to select in each batch.'
-)
-_EXAMPLES_PER_USER = flags.DEFINE_integer(
-    'examples_per_user', 2, 'Number of examples to select for each user.'
-)
-_STEPS = flags.DEFINE_integer('steps', 10, 'Number of training steps.')
-_L2_CLIP_NORM = flags.DEFINE_float(
-    'l2_clip_norm', 1.0, 'L2 clipping norm for gradients.'
-)
-_LEARNING_RATE = flags.DEFINE_float('learning_rate', 1e-3, 'Learning rate.')
+# Constants
+USERS_PER_BATCH = 4
+EXAMPLES_PER_USER = 2
+STEPS = 10
+L2_CLIP_NORM = 1.0
+LEARNING_RATE = 1e-3
+EPSILON = 10.0
+DELTA = 1e-6
 
 
 class TransformerDecoder(nn.Module):
@@ -96,7 +94,9 @@ def get_synthetic_data(
   return np.concatenate(data), np.concatenate(labels), np.array(user_ids)
 
 
-def main(_):
+def main(argv: list[str]) -> None:
+  if len(argv) > 1:
+    raise app.UsageError('Too many command-line arguments.')
   # 1. Model & Data
   vocab_size = 1000
   embed_dim = 64
@@ -122,18 +122,24 @@ def main(_):
   params = model.init(
       jax.random.key(0), jnp.zeros((1, seq_len), dtype=jnp.int32), train=False
   )['params']
-  optimizer = optax.adam(_LEARNING_RATE.value)
+  optimizer = optax.sgd(LEARNING_RATE)
   opt_state = optimizer.init(params)
 
-  # 2. Batch Selection
-  sampling_prob = _USERS_PER_BATCH.value / num_users
-  base_strategy = CyclicPoissonSampling(
-      sampling_prob=sampling_prob, iterations=_STEPS.value
+  # 2. Batch Selection & Execution Plan
+  # Using BandMFExecutionPlanConfig to configure privacy and strategy
+  config = execution_plan.BandMFExecutionPlanConfig(
+      iterations=STEPS,
+      num_bands=1,
+      epsilon=EPSILON,
+      delta=DELTA,
+      sampling_prob=USERS_PER_BATCH / num_users,
   )
-  user_strategy = UserSelectionStrategy(
-      base_strategy=base_strategy,
-      examples_per_user_per_batch=_EXAMPLES_PER_USER.value,
-  )
+  
+  # We create a dummy plan to get the strategy and privatizer
+  # Note: `clipped_grad` is created later, but plan.make requires it. 
+  # However, for strategy and privatizer, we can create them separately or use a placeholder.
+  # But plan.make() calculates noise based on sensitivity.
+  # We need the grad_fn first.
 
   # 3. Training Step & Clipping
   def loss_fn(params, batch_data, batch_labels):
@@ -143,25 +149,35 @@ def main(_):
         optax.softmax_cross_entropy(logits=logits, labels=one_hot_labels)
     )
 
-  # `clipped_grad` wraps the loss function to compute per-user clipped
-  # gradients.
-  # With `keep_batch_dim=False`, the loss function receives a batch of examples
-  # for a single user. The gradient is computed over this batch, and the
-  # resulting gradient (which is an average over the user's examples) is
-  # clipped. This aligns with the core requirement of user-level DP.
   grad_fn = clipped_grad(
       loss_fn,
-      l2_clip_norm=_L2_CLIP_NORM.value,
+      l2_clip_norm=L2_CLIP_NORM,
       batch_argnums=(1, 2),
       keep_batch_dim=False,
   )
 
+  # Create Plan
+  plan = config.make(grad_fn)
+  privatizer = plan.noise_addition_transform
+  noise_state = privatizer.init(params)
+
+  # Wrap the plan's strategy with UserSelectionStrategy
+  # We assume plan.batch_selection_strategy is compatible (CyclicPoissonSampling)
+  user_strategy = UserSelectionStrategy(
+      base_strategy=plan.batch_selection_strategy,
+      examples_per_user_per_batch=EXAMPLES_PER_USER,
+  )
+
   @jax.jit
-  def train_step(params, opt_state, batch_data, batch_labels):
+  def train_step(params, opt_state, batch_data, batch_labels, noise_state):
     grads = grad_fn(params, batch_data, batch_labels)
-    updates, opt_state = optimizer.update(grads, opt_state, params)
+    
+    # Add Privacy Noise (Using plan's privatizer)
+    noisy_grads, noise_state = privatizer.update(grads, noise_state)
+    
+    updates, opt_state = optimizer.update(noisy_grads, opt_state, params)
     params = optax.apply_updates(params, updates)
-    return params, opt_state
+    return params, opt_state, noise_state
 
   # 4. Training Loop
   batch_iterator = user_strategy.batch_iterator(user_ids, rng=0)
@@ -172,7 +188,7 @@ def main(_):
 
     batch_data = data[user_batch_indices]
     batch_labels = labels[user_batch_indices]
-    params, opt_state = train_step(params, opt_state, batch_data, batch_labels)
+    params, opt_state, noise_state = train_step(params, opt_state, batch_data, batch_labels, noise_state)
     print(f"Step {step}: Completed.")
 
   print("Training finished successfully.")

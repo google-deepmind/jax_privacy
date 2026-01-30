@@ -33,12 +33,13 @@ import functools
 from typing import Dict, Tuple, Any
 import urllib.request
 
-from flax import nnx  # pytype: disable=import-error
+from absl import app
+from flax import nnx
 import jax
 import jax.extend.backend
 import jax.numpy as jnp
-from jax_privacy import noise_addition
 from jax_privacy.clipping import clipped_grad
+from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
 
@@ -50,8 +51,11 @@ EMBED_SIZE = 16
 NUM_HEADS = 4
 NUM_LAYERS = 2
 LEARNING_RATE = 1e-3
-NUM_STEPS = 5
+NUM_STEPS = 10
 CLIP_NORM = 1.0
+NOISE_MULTIPLIER = 1.0
+EPSILON = 10.0
+DELTA = 1e-6
 
 
 # Data loading and preparation
@@ -64,7 +68,7 @@ def download_data(url: str) -> str:
   Returns:
     The content of the downloaded file as a string.
   """
-  with urllib.request.urlopen(url) as response:
+  with urllib.request.urlopen(url, timeout=10) as response:
     return response.read().decode('utf-8')
 
 
@@ -164,11 +168,12 @@ class TransformerBlock(nnx.Module):
     Returns:
       Output array of the same shape as input.
     """
-    seq_len = x.shape[1]
-    causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool_))
-    # Add batch and head dimensions to the mask for broadcasting
-    causal_mask = causal_mask[None, None, :, :]
-    x = x + self.attention(x, mask=causal_mask, decode=False)
+    # Add is_causal=True to handle masking automatically
+    # Note: nnx.MultiHeadAttention does not support is_causal=True in
+    # __init__ or __call__ in this version. Using make_causal_mask instead
+    # as requested to remove manual generation.
+    mask = nnx.make_causal_mask(x[..., 0])
+    x = x + self.attention(x, mask=mask, decode=False)
     x = self.ln1(x)
     x = x + self.ffw(x)
     x = self.ln2(x)
@@ -256,20 +261,19 @@ def pure_loss_fn(
   Returns:
     The scalar loss value.
   """
-  m = nnx.merge(graphdef, params, other)
+  model = nnx.merge(graphdef, params, other)
 
-  # CRITICAL: Add a dummy batch dimension of 1 to satisfy make_causal_mask
-  # and attention expectations which look for a 4D mask derived from
-  # a batched input. We index [0] on the output to remove it.
-  # x indices: [seq_len] -> [1, seq_len]
-  logits = m(x[None, :])[0]
+  # Standard call without rank normalization
+  logits = model(x)
 
 
   return optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
 
 
-def main():
+def main(argv: list[str]) -> None:
   """Main training loop."""
+  if len(argv) > 1:
+    raise app.UsageError('Too many command-line arguments.')
   device = jax.extend.backend.get_backend().platform
   print(f"Starting DP-SGD Training on {device.upper()}...")
 
@@ -293,7 +297,7 @@ def main():
       num_layers=NUM_LAYERS,
       rngs=rngs,
   )
-  optimizer = optax.adam(LEARNING_RATE)
+  optimizer = optax.sgd(LEARNING_RATE)
 
   # CRITICAL: Exhaustive split to separate trainable params from static
   # graph and other state.
@@ -305,13 +309,23 @@ def main():
       functools.partial(pure_loss_fn, graphdef=graphdef, other=other),
       l2_clip_norm=CLIP_NORM,
       batch_argnums=(1, 2),  # x and y are batched
-      keep_batch_dim=False,  # Process per-example
-      return_values=True     # Return loss values for logging
+      keep_batch_dim=True,   # Return per-example gradients
+      return_values=True,    # Return loss values for logging
+      # Note: We do not pass prng_argnum here because 'other' (arg 4) contains
+      # RNG state which is handled as a standard argument by NNX.
   )
 
-  privatizer = noise_addition.gaussian_privatizer(
-      stddev=CLIP_NORM,
+  # Execution Plan Configuration
+  dataset_size = len(data) - CONTEXT_LENGTH
+  config = execution_plan.BandMFExecutionPlanConfig(
+      iterations=NUM_STEPS,
+      num_bands=1,
+      epsilon=EPSILON,
+      delta=DELTA,
+      sampling_prob=BATCH_SIZE / dataset_size,
   )
+  plan = config.make(grad_fn)
+  privatizer = plan.noise_addition_transform
   noise_state = privatizer.init(params)
 
   @jax.jit
@@ -338,11 +352,8 @@ def main():
     # Compute clipped gradients and per-example loss values
     grads, loss = grad_fn(params, x, y)
 
-    # Aggregate gradients (mean across batch)
-    mean_grads = jax.tree.map(lambda g: jnp.mean(g, axis=0), grads)
-
     # Add Privacy Noise
-    noisy_grads, noise_state = privatizer.update(mean_grads, noise_state)
+    noisy_grads, noise_state = privatizer.update(grads, noise_state)
 
     # Apply updates using Optax
     updates, opt_state = optimizer.update(noisy_grads, opt_state)
@@ -353,8 +364,18 @@ def main():
 
   # Training loop
   print(f"Training for {NUM_STEPS} steps...")
-  for step in range(NUM_STEPS):
-    batch = get_batch(data, BATCH_SIZE, CONTEXT_LENGTH)
+  iterator = plan.batch_selection_strategy.batch_iterator(dataset_size)
+  for step, batch_indices in enumerate(iterator):
+    if step >= NUM_STEPS:
+      break
+
+    if len(batch_indices) == 0:
+      continue
+
+    # Construct batch from indices
+    x = np.stack([data[i : i + CONTEXT_LENGTH] for i in batch_indices])
+    y = np.stack([data[i + 1 : i + CONTEXT_LENGTH + 1] for i in batch_indices])
+    batch = (x, y)
 
     params, opt_state, noise_state, loss = train_step(
         params, opt_state, batch, noise_state=noise_state
@@ -366,4 +387,4 @@ def main():
 
 
 if __name__ == "__main__":
-  main()
+  app.run(main)
