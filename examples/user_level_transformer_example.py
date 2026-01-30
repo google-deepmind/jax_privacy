@@ -184,7 +184,7 @@ def main(argv: list[str]) -> None:
   batch_iterator = user_strategy.batch_iterator(user_ids, rng=0)
   for step, user_batch_indices in enumerate(batch_iterator):
     if user_batch_indices.size == 0:
-      print(f"Step {step}: Skipping empty batch.")
+      print(f'Step {step}: Skipping empty batch.')
       continue
 
     batch_data = data[user_batch_indices]
@@ -192,9 +192,9 @@ def main(argv: list[str]) -> None:
     params, opt_state, noise_state = train_step(
         params, opt_state, batch_data, batch_labels, noise_state
     )
-    print(f"Step {step}: Completed.")
+    print(f'Step {step}: Completed.')
 
-  print("Training finished successfully.")
+  print('Training finished successfully')
 
 
 if __name__ == '__main__':
