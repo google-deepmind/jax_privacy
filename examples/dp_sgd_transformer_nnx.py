@@ -275,17 +275,17 @@ def main(argv: list[str]) -> None:
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
   device = jax.extend.backend.get_backend().platform
-  print(f"Starting DP-SGD Training on {device.upper()}...")
+  print(f'Starting DP-SGD Training on {device.upper()}...')
 
   # Data
   text = download_data(
-      "https://raw.githubusercontent.com/karpathy/char-rnn/master/"
-      "data/tinyshakespeare/input.txt"
+      'https://raw.githubusercontent.com/karpathy/char-rnn/master/'
+      'data/tinyshakespeare/input.txt'
   )
   stoi = create_tokenizer(text)
   vocab_size = len(stoi)
   data = encode(text, stoi)
-  print(f"Dataset has {len(data)} tokens, {vocab_size} vocab size.")
+  print(f'Dataset has {len(data)} tokens, {vocab_size} vocab size.')
 
   # Model and optimizer
   rngs = nnx.Rngs(0)
@@ -363,7 +363,7 @@ def main(argv: list[str]) -> None:
     return params, opt_state, noise_state, loss.values.mean()
 
   # Training loop
-  print(f"Training for {NUM_STEPS} steps...")
+  print(f'Training for {NUM_STEPS} steps...')
   iterator = plan.batch_selection_strategy.batch_iterator(dataset_size)
   for step, batch_indices in enumerate(iterator):
     if step >= NUM_STEPS:
@@ -381,9 +381,9 @@ def main(argv: list[str]) -> None:
         params, opt_state, batch, noise_state=noise_state
     )
 
-    print(f"Step {step + 1}/{NUM_STEPS}, Loss: {loss:.4f}")
+    print(f'Step {step + 1}/{NUM_STEPS}, Loss: {loss:.4f}')
 
-  print("Training Complete.")
+  print('Training Complete.')
 
 
 if __name__ == "__main__":
