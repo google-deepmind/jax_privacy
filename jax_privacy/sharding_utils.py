@@ -177,7 +177,7 @@ def compute_early_stopping_order(
   to the above permutation, the examples will be split up into 5 microbatchs:
   [0, 1], [2, 3], [4, 5], [6, 7], [8, 9] and processed sequentially.
 
-    >>> from optax.experimental import microbatching
+    >>> from optax import microbatching
     >>> microbatching.reshape_batch_axis(order, microbatch_size=2)
     array([[0, 1],
            [2, 3],
