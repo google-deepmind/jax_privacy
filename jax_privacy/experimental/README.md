@@ -8,6 +8,49 @@ be integrated into the core jax_privacy library or potentially deprecated.
 Responsible for generating global batches of indices. See definitions below
 for how this relates to minibatches and microbatches.
 
+## execution_plan.py
+
+The `execution_plan` module defines `DPExecutionPlan` objects that bundle batch
+selection, clipping, and noise addition components together along with a
+privacy accounting event. It currently supports BandMF execution plans, which
+include standard DP-SGD as the special case `num_bands=1`.
+
+### Example: Standard DP-SGD (BandMF with num_bands=1)
+
+```python
+import jax.numpy as jnp
+import dp_accounting
+from jax_privacy import batch_selection
+from jax_privacy import clipping
+from jax_privacy.experimental import execution_plan
+
+# A simple per-example loss. The clipped_grad helper aggregates per-example
+# gradients into a clipped sum (or mean, if normalize_by is set).
+loss_fn = lambda params, batch: jnp.mean((batch - params) ** 2)
+clipped_grad = clipping.clipped_grad(
+    loss_fn, l2_clip_norm=1.0, normalize_by=128
+)
+
+config = execution_plan.BandMFExecutionPlanConfig(
+    iterations=1000,
+    num_bands=1,
+    sampling_prob=128 / 60000,
+    epsilon=2.0,
+    delta=1e-6,
+    partition_type=batch_selection.PartitionType.INDEPENDENT,
+    neighboring_relation=dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE,
+    accountant=dp_accounting.pld.PLDAccountant(
+        dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE
+    ),
+)
+
+plan = config.make(clipped_grad)
+
+# plan.batch_selection_strategy produces global batches of indices.
+# plan.noise_addition_transform adds calibrated Gaussian noise.
+# plan.dp_event can be composed with dp_accounting for privacy accounting.
+```
+
 ### Definitions: Global Batch Size vs. Minibatch Size vs. Microbatch Size
 
 **(Physical) Microbatch Size** (default = None): The minibatch will be split
