@@ -34,7 +34,7 @@ from typing import Dict, Tuple, Any
 import urllib.request
 
 from absl import app
-from flax import nnx
+from flax import nnx  # pytype: disable=import-error
 import jax
 import jax.extend.backend
 import jax.numpy as jnp

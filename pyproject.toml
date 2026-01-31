@@ -35,6 +35,9 @@ dev = [
     "keras",
     "tensorflow",
 ]
+examples = [
+    "flax",
+]
 
 [project.urls]
 Homepage = "https://github.com/google-deepmind/jax_privacy"
