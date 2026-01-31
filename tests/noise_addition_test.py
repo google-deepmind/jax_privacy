@@ -279,6 +279,25 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
         get_noise_sample(identity), get_noise_sample(noising_matrix),
     )
 
+  @parameterized.named_parameters(
+      ('dense_identity', np.eye(_ITERATIONS)),
+      ('streaming_identity', streaming_matrix.identity())
+  )
+  def test_optax_chain(self, noising_matrix):
+    key = jax.random.key(_SEED)
+
+    privatizer = noise_addition.matrix_factorization_privatizer(
+        noising_matrix=noising_matrix, prng_key=key, stddev=_STDDEV
+    )
+    optimizer = optax.adamw(learning_rate=0.1)
+    noisy_optimizer = optax.chain(privatizer, optimizer)
+
+    params = jnp.zeros(10)
+    state0 = noisy_optimizer.init(params)
+    update, state1 = noisy_optimizer.update(params, state0, params)
+    chex.assert_trees_all_equal_shapes_and_dtypes(state0, state1)
+    chex.assert_trees_all_equal_shapes_and_dtypes(update, params)
+
 
 if __name__ == '__main__':
   jax.config.update('jax_enable_x64', True)

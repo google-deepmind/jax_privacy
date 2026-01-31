@@ -31,11 +31,11 @@ def cartesian_product(**kwargs):
 
 PYTREE_STRUCTS = [
     jax.ShapeDtypeStruct(shape=(5, 5), dtype=jnp.float32),
-    dict(
-        a=jax.ShapeDtypeStruct(shape=(10,), dtype=jnp.float16),
-        b=jax.ShapeDtypeStruct(shape=(5, 5), dtype=jnp.float32),
-        c=jax.ShapeDtypeStruct(shape=(), dtype=jnp.bfloat16),
-    ),
+    {
+        'a': jax.ShapeDtypeStruct(shape=(10,), dtype=jnp.float16),
+        'b': jax.ShapeDtypeStruct(shape=(5, 5), dtype=jnp.float32),
+        'c': jax.ShapeDtypeStruct(shape=(), dtype=jnp.bfloat16),
+    },
 ]
 
 

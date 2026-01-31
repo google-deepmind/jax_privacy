@@ -22,8 +22,9 @@ https://github.com/keras-team/keras-io/blob/master/examples/vision/mnist_convnet
 import os
 from absl import app
 
-os.environ["KERAS_BACKEND"] = "jax"  # pylint: disable=wrong-import-position
-from jax_privacy.keras import keras_api  # pylint: disable=g-import-not-at-top
+os.environ["KERAS_BACKEND"] = "jax"
+# pylint: disable=g-import-not-at-top,wrong-import-position
+from jax_privacy import keras_api
 import keras
 from keras import layers
 import numpy as np

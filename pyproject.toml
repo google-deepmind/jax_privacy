@@ -14,29 +14,60 @@ requires-python = ">=3.11"
 dependencies = [
     "absl-py",
     "dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting",
-    "jax>=0.7.0",
-    "jaxlib>=0.7.0",
+    "jax>=0.7.1",
+    "jaxlib>=0.7.1",
     "pydantic",
     "numpy",
-    "optax",
+    "optax @ git+https://github.com/google-deepmind/optax.git",
     "scipy",
     "chex",
 ]
 
 [project.optional-dependencies]
-dev = [
+lint = [
+    "flake8",
+    "pydocstyle",
+    "pylint",
+    "pylint-exit",
+    "pytype",
+]
+
+test = [
+    "pytest",
+    "pytest-xdist",
+    "hypothesis",
+    "crc32c",
+    "keras",
+]
+
+examples = [
     "dinosaur",
     "equinox",
     "orbax",
     "scikit-learn==1.5.0",
-    "pytest-xdist",
-    "hypothesis",
     "grain",
     "keras",
     "tensorflow",
 ]
 examples = [
     "flax",
+]
+
+docs = [
+    "sphinx<9.0.0",
+    "sphinx-rtd-theme",
+    "myst-nb",
+    "sphinx-collections",
+    "ipykernel",
+    "sphinx_autodoc_typehints",
+    "tensorflow",
+    "keras",
+]
+
+dev = [
+    "jax_privacy[lint,test,examples,docs]",
+    "build",
+    "wheel",
 ]
 
 [project.urls]

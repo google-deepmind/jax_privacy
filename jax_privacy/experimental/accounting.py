@@ -20,19 +20,21 @@ Example Usage (Calculating Epsilon for DP-SGD):
   >>> import dp_accounting
   >>> event = dpsgd_event(noise_multiplier=3, iterations=512, sampling_prob=0.1)
   >>> accountant = dp_accounting.pld.PLDAccountant()
-  >>> accountant.compose(event).get_epsilon(target_delta=1e-6)
-  3.769686577205207
+  >>> epsilon = accountant.compose(event).get_epsilon(target_delta=1e-6)
+  >>> round(epsilon, 2)
+  3.77
 
 Example Usage (Calibrating Noise Multiplier for DP-SGD):
 
   >>> make_event = lambda sigma: dpsgd_event(sigma, 512, sampling_prob=0.1)
-  >>> dp_accounting.calibrate_dp_mechanism(
+  >>> noise_multiplier = dp_accounting.calibrate_dp_mechanism(
   ...     dp_accounting.pld.PLDAccountant,
   ...     make_event,
   ...     target_epsilon=1.0,
   ...     target_delta=1e-6
   ... )
-  9.661830157637436
+  >>> round(noise_multiplier, 2)
+  9.66
 
 Example Usage (Calibrating Number of Iterations for DP-SGD):
 
@@ -105,7 +107,7 @@ def truncated_dpsgd_event(
     num_examples: int,
     truncated_batch_size: int,
 ) -> dp_accounting.DpEvent:
-  """Returns the DpEvent for truncated DP-SGD with the given training parameters.
+  """Returns the DpEvent for truncated DP-SGD with the given training params.
 
   This mechanism is like DP-SGD, but batches larger than `truncated_batch_size`
   are truncated to size `truncated_batch_size`. See these references for more

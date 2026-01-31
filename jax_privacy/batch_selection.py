@@ -34,7 +34,7 @@ import enum
 import itertools
 from typing import Iterator
 
-from jax_privacy.experimental import microbatching
+from jax_privacy import sharding_utils
 import numpy as np
 
 
@@ -109,7 +109,7 @@ def split_and_pad_global_batch(
   minibatch_shape = (minibatch_size,) + indices.shape[1:]
   last_minibatch = np.full(minibatch_shape, -1, dtype=indices.dtype)
   last_minibatch[: minibatches[-1].shape[0]] = minibatches[-1]
-  permutation = microbatching.compute_early_stopping_order(
+  permutation = sharding_utils.compute_early_stopping_order(
       minibatch_size, microbatch_size
   )
   minibatches[-1] = last_minibatch[permutation]
@@ -248,6 +248,8 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
 
     for i in range(self.iterations):
       current_group = partition[i % self.cycle_length]
+      # See Lemma 1 of https://arxiv.org/abs/2406.17298v3 for a proof this
+      # is equivalent to Poisson sampling.
       sample_size = rng.binomial(n=len(current_group), p=self.sampling_prob)
       if self.truncated_batch_size is not None:
         sample_size = min(sample_size, self.truncated_batch_size)
@@ -293,7 +295,7 @@ class BallsInBinsSampling(BatchSelectionStrategy):
 
 @dataclasses.dataclass(frozen=True)
 class UserSelectionStrategy:
-  """Applies base_strategy at the user level, and selects multiple examples per user.
+  """A strategy that applies a base_strategy at the user level.
 
   Each batch returned by the batch_iterator is a 2D array of integer indices,
   where all entries in the same row are examples owned by the same user. The
@@ -354,12 +356,17 @@ class UserSelectionStrategy:
     num_examples = user_ids.size
     dtype = np.min_scalar_type(-num_examples)
 
+    # Group example indices by user once to avoid an O(n) scan per user.
+    order = np.argsort(inverse, kind='stable').astype(dtype, copy=False)
+    counts = np.bincount(inverse, minlength=num_users)
+    grouped_examples = np.split(order, np.cumsum(counts)[:-1])
+
     def create_user_generator(user_id):
-      # TODO: b/415360727 - this where is suboptimal, as it is O(n) per user_id.
-      owned_examples = np.where(inverse == user_id)[0].astype(dtype)
+      owned_examples = grouped_examples[user_id]
       if self.shuffle_per_user:
+        owned_examples = owned_examples.copy()
         rng.shuffle(owned_examples)
-      return itertools.cycle(list(owned_examples))
+      return itertools.cycle(owned_examples.tolist())
 
     user_generators = [create_user_generator(i) for i in range(num_users)]
 
