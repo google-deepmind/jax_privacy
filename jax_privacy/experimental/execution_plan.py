@@ -175,6 +175,18 @@ class BandMFExecutionPlanConfig:
   via (epsilon, delta), however for convenience it can also be configured via
   `noise_multiplier` by setting epsilon=delta=None.
 
+  Standard DP-SGD is the special case `num_bands=1`. A typical configuration
+  for Poisson-sampled DP-SGD is:
+
+    - num_bands=1
+    - sampling_prob = expected_batch_size / num_examples
+    - partition_type = INDEPENDENT
+    - neighboring_relation = ADD_OR_REMOVE_ONE
+    - accountant = PLDAccountant(ADD_OR_REMOVE_ONE)
+
+  This yields the usual Poisson sampling analysis, and uses uncorrelated
+  Gaussian noise (the BandMF strategy degenerates to the identity matrix).
+
   References:
   - https://arxiv.org/abs/2306.08153
   - https://arxiv.org/abs/2405.15913
