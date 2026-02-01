@@ -30,6 +30,7 @@ Differential Privacy" (https://arxiv.org/abs/2404.06713).
 """
 
 from absl import app
+import time
 import flax.linen as nn  # pytype: disable=import-error
 import jax
 import jax.numpy as jnp
@@ -43,7 +44,7 @@ from jax_privacy.experimental import execution_plan
 # Constants
 USERS_PER_BATCH = 4
 EXAMPLES_PER_USER = 2
-STEPS = 10
+STEPS = 5
 L2_CLIP_NORM = 1.0
 LEARNING_RATE = 1e-3
 EPSILON = 10.0
@@ -120,7 +121,7 @@ def main(argv: list[str]) -> None:
   params = model.init(
       jax.random.key(0), jnp.zeros((1, seq_len), dtype=jnp.int32), train=False
   )['params']
-  optimizer = optax.sgd(LEARNING_RATE)
+  optimizer = optax.adam(LEARNING_RATE)
   opt_state = optimizer.init(params)
 
   # 2. Batch Selection & Execution Plan
@@ -181,6 +182,7 @@ def main(argv: list[str]) -> None:
     return params, opt_state, noise_state
 
   # 4. Training Loop
+  start_time = time.time()
   batch_iterator = user_strategy.batch_iterator(user_ids, rng=0)
   for step, user_batch_indices in enumerate(batch_iterator):
     if user_batch_indices.size == 0:
@@ -189,11 +191,17 @@ def main(argv: list[str]) -> None:
 
     batch_data = data[user_batch_indices]
     batch_labels = labels[user_batch_indices]
+
+    # Calculate and print loss
+    loss_val = loss_fn(params, batch_data, batch_labels)
+
     params, opt_state, noise_state = train_step(
         params, opt_state, batch_data, batch_labels, noise_state
     )
-    print(f'Step {step}: Completed.')
+    print(f'Step {step}: Loss: {loss_val:.4f}')
 
+  end_time = time.time()
+  print(f'Total Time: {end_time - start_time:.4f} seconds')
   print('Training finished successfully')
 
 

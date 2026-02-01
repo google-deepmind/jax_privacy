@@ -48,8 +48,6 @@ examples = [
     "grain",
     "keras",
     "tensorflow",
-]
-examples = [
     "flax",
 ]
 
