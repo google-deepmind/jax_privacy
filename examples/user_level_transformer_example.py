@@ -30,13 +30,12 @@ Differential Privacy" (https://arxiv.org/abs/2404.06713).
 """
 
 from absl import app
-from absl import flags
-import flax.linen as nn
+import time
+import flax.linen as nn  # pytype: disable=import-error
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from jax_privacy.batch_selection import CyclicPoissonSampling
 from jax_privacy.batch_selection import UserSelectionStrategy
 from jax_privacy.clipping import clipped_grad
 from jax_privacy.experimental import execution_plan
@@ -45,7 +44,7 @@ from jax_privacy.experimental import execution_plan
 # Constants
 USERS_PER_BATCH = 4
 EXAMPLES_PER_USER = 2
-STEPS = 10
+STEPS = 5
 L2_CLIP_NORM = 1.0
 LEARNING_RATE = 1e-3
 EPSILON = 10.0
@@ -122,7 +121,7 @@ def main(argv: list[str]) -> None:
   params = model.init(
       jax.random.key(0), jnp.zeros((1, seq_len), dtype=jnp.int32), train=False
   )['params']
-  optimizer = optax.sgd(LEARNING_RATE)
+  optimizer = optax.adam(LEARNING_RATE)
   opt_state = optimizer.init(params)
 
   # 2. Batch Selection & Execution Plan
@@ -134,11 +133,11 @@ def main(argv: list[str]) -> None:
       delta=DELTA,
       sampling_prob=USERS_PER_BATCH / num_users,
   )
-  
+
   # We create a dummy plan to get the strategy and privatizer
-  # Note: `clipped_grad` is created later, but plan.make requires it. 
-  # However, for strategy and privatizer, we can create them separately or use a placeholder.
-  # But plan.make() calculates noise based on sensitivity.
+  # Note: `clipped_grad` is created later, but plan.make requires it.
+  # However, for strategy and privatizer, we can create them separately or use
+  # a placeholder. But plan.make() calculates noise based on sensitivity.
   # We need the grad_fn first.
 
   # 3. Training Step & Clipping
@@ -162,7 +161,8 @@ def main(argv: list[str]) -> None:
   noise_state = privatizer.init(params)
 
   # Wrap the plan's strategy with UserSelectionStrategy
-  # We assume plan.batch_selection_strategy is compatible (CyclicPoissonSampling)
+  # We assume plan.batch_selection_strategy is compatible
+  # (CyclicPoissonSampling)
   user_strategy = UserSelectionStrategy(
       base_strategy=plan.batch_selection_strategy,
       examples_per_user_per_batch=EXAMPLES_PER_USER,
@@ -171,27 +171,38 @@ def main(argv: list[str]) -> None:
   @jax.jit
   def train_step(params, opt_state, batch_data, batch_labels, noise_state):
     grads = grad_fn(params, batch_data, batch_labels)
-    
+
     # Add Privacy Noise (Using plan's privatizer)
     noisy_grads, noise_state = privatizer.update(grads, noise_state)
-    
-    updates, opt_state = optimizer.update(noisy_grads, opt_state, params)
+
+    updates, opt_state = optimizer.update(
+        noisy_grads, opt_state, params
+    )
     params = optax.apply_updates(params, updates)
     return params, opt_state, noise_state
 
   # 4. Training Loop
+  start_time = time.time()
   batch_iterator = user_strategy.batch_iterator(user_ids, rng=0)
   for step, user_batch_indices in enumerate(batch_iterator):
     if user_batch_indices.size == 0:
-      print(f"Step {step}: Skipping empty batch.")
+      print(f'Step {step}: Skipping empty batch.')
       continue
 
     batch_data = data[user_batch_indices]
     batch_labels = labels[user_batch_indices]
-    params, opt_state, noise_state = train_step(params, opt_state, batch_data, batch_labels, noise_state)
-    print(f"Step {step}: Completed.")
 
-  print("Training finished successfully.")
+    # Calculate and print loss
+    loss_val = loss_fn(params, batch_data, batch_labels)
+
+    params, opt_state, noise_state = train_step(
+        params, opt_state, batch_data, batch_labels, noise_state
+    )
+    print(f'Step {step}: Loss: {loss_val:.4f}')
+
+  end_time = time.time()
+  print(f'Total Time: {end_time - start_time:.4f} seconds')
+  print('Training finished successfully')
 
 
 if __name__ == '__main__':
