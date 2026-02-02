@@ -32,6 +32,7 @@ class ExecutionPlanTest(parameterized.TestCase):
       {"epsilon": None, "delta": None, "noise_multiplier": None},
       {"epsilon": 1.0, "delta": 1e-06, "noise_multiplier": 2.0},
       {"num_bands": 0},
+      {"truncated_batch_size": 5, "num_examples": None},
   )
   def test_bandmf_validation(self, **kwargs):
     default_kwargs = {

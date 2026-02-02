@@ -167,7 +167,7 @@ class BandMFExecutionPlanConfig:
   """Configuration for a BandMF-based DPExecutionPlan.
 
   The expected batch size of the batch selection strategy is
-  `num_examples / num_bands * sampling_prob`. In most cases, `num_examples' is
+  `num_examples / num_bands * sampling_prob`. In most cases, `num_examples` is
   ignored because `num_examples` is considered a sensitive quantity under some
   DP definitions. The exception is when using truncation, where it is necessary
   for accounting (hence, one should be careful about the DP definition when
@@ -175,19 +175,12 @@ class BandMFExecutionPlanConfig:
   via (epsilon, delta), however for convenience it can also be configured via
   `noise_multiplier` by setting epsilon=delta=None.
 
-  Standard DP-SGD is the special case `num_bands=1`. A typical configuration
-  for Poisson-sampled DP-SGD is:
-    - num_bands=1
-    - sampling_prob = expected_batch_size / num_examples
-    - partition_type = INDEPENDENT
-    - neighboring_relation = ADD_OR_REMOVE_ONE
-    - accountant = PLDAccountant(ADD_OR_REMOVE_ONE)
-  This yields the usual Poisson sampling analysis, and uses uncorrelated
-  Gaussian noise (the BandMF strategy degenerates to the identity matrix).
+  Standard DP-SGD is the special case `num_bands=1`. In that case, configure
+  the usual DP-SGD hyperparameters (sampling_prob, l2_clip_norm, iterations,
+  and either epsilon/delta or noise_multiplier).
 
-  References:
-  - https://arxiv.org/abs/2306.08153
-  - https://arxiv.org/abs/2405.15913
+  References: https://arxiv.org/abs/2306.08153 and
+  https://arxiv.org/abs/2405.15913
 
   Attributes:
     epsilon: The desired privacy budget.
@@ -202,9 +195,9 @@ class BandMFExecutionPlanConfig:
     normalize_by: Divide the sum-of-clipped gradients by this value.
     sampling_prob: The Poisson sampling probability for each example in a group.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
-      size to truncate to.
-    num_examples: The number of examples in the dataset. Unused if
-      truncated_batch_size is None.
+      size to truncate to. Requires num_examples to be set.
+    num_examples: The number of examples in the dataset. Required when
+      truncated_batch_size is set.
     partition_type: How to partition the examples into groups for before Poisson
       sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
       and replace-one adjacency notions, while INDEPENDENT is compatible
@@ -246,6 +239,11 @@ class BandMFExecutionPlanConfig:
     _validate_epsilon_delta_noise_multiplier(
         self.epsilon, self.delta, self.noise_multiplier
     )
+    if self.truncated_batch_size is not None:
+      if self.num_examples is None:
+        raise ValueError(
+            'truncated_batch_size requires num_examples to be set.'
+        )
     _validate_adjacency_relation(
         self.accountant,
         self.neighboring_relation,
