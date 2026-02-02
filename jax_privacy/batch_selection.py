@@ -301,7 +301,8 @@ class FixedBatchSampling(BatchSelectionStrategy):
   batches are sampled without replacement within a batch, and with replacement
   across batches (i.e., the same example can appear in multiple iterations).
 
-  References: https://arxiv.org/abs/1807.01647 and https://arxiv.org/abs/1908.10530
+  References: https://arxiv.org/abs/1807.01647 and
+  https://arxiv.org/abs/1908.10530
 
   Attributes:
     batch_size: The number of examples per batch.
