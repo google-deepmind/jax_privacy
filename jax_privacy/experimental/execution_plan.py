@@ -175,8 +175,11 @@ class BandMFExecutionPlanConfig:
   via (epsilon, delta), however for convenience it can also be configured via
   `noise_multiplier` by setting epsilon=delta=None.
 
-  References: https://arxiv.org/abs/2306.08153 and
-  https://arxiv.org/abs/2405.15913
+  Standard DP-SGD is the special case `num_bands=1`. In that case, configure
+  the usual DP-SGD hyperparameters (sampling_prob, l2_clip_norm, iterations,
+  and either epsilon/delta or noise_multiplier).
+
+  References: https://arxiv.org/abs/2306.08153 and https://arxiv.org/abs/2405.15913
 
   Attributes:
     epsilon: The desired privacy budget.
@@ -193,7 +196,7 @@ class BandMFExecutionPlanConfig:
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to. Requires num_examples to be set.
     num_examples: The number of examples in the dataset. Required when
-      truncated_batch_size is set, and must be >= num_bands.
+      truncated_batch_size is set.
     partition_type: How to partition the examples into groups for before Poisson
       sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
       and replace-one adjacency notions, while INDEPENDENT is compatible
@@ -239,10 +242,6 @@ class BandMFExecutionPlanConfig:
       if self.num_examples is None:
         raise ValueError(
             'truncated_batch_size requires num_examples to be set.'
-        )
-      if self.num_examples < self.num_bands:
-        raise ValueError(
-            'num_examples must be >= num_bands when using truncated_batch_size.'
         )
     _validate_adjacency_relation(
         self.accountant,
