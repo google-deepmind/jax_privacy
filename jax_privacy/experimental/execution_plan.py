@@ -179,7 +179,8 @@ class BandMFExecutionPlanConfig:
   the usual DP-SGD hyperparameters (sampling_prob, l2_clip_norm, iterations,
   and either epsilon/delta or noise_multiplier).
 
-  References: https://arxiv.org/abs/2306.08153 and https://arxiv.org/abs/2405.15913
+  References: https://arxiv.org/abs/2306.08153 and
+  https://arxiv.org/abs/2405.15913
 
   Attributes:
     epsilon: The desired privacy budget.
