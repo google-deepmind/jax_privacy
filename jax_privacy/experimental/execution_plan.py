@@ -186,9 +186,8 @@ class BandMFExecutionPlanConfig:
   Gaussian noise (the BandMF strategy degenerates to the identity matrix).
 
   References:
-
-  - https://arxiv.org/abs/2306.08153
-  - https://arxiv.org/abs/2405.15913
+    - https://arxiv.org/abs/2306.08153
+    - https://arxiv.org/abs/2405.15913
 
   Attributes:
     epsilon: The desired privacy budget.
