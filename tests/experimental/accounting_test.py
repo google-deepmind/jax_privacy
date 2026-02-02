@@ -54,6 +54,7 @@ RDP_REPLACE_EVENT_FNS = (
         iterations=128,
         dataset_size=1000,
         batch_size=16,
+        replace=False,
     ),
 )
 
@@ -100,6 +101,19 @@ class AccountingTest(parameterized.TestCase):
     )
     eps = accountant().compose(event_fn(nm)).get_epsilon(target_delta=1e-6)
     self.assertAlmostEqual(eps, 1.0, places=4)
+
+  def test_fixed_dpsgd_event_replace_true_type(self):
+    event = accounting.fixed_dpsgd_event(
+        1.0,
+        5,
+        dataset_size=10,
+        batch_size=3,
+        replace=True,
+    )
+    self.assertIsInstance(event, dp_accounting.dp_event.SelfComposedDpEvent)
+    self.assertIsInstance(
+        event.event, dp_accounting.dp_event.SampledWithReplacementDpEvent
+    )
 
 
 if __name__ == "__main__":
