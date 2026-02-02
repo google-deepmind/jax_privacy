@@ -167,7 +167,7 @@ class BandMFExecutionPlanConfig:
   """Configuration for a BandMF-based DPExecutionPlan.
 
   The expected batch size of the batch selection strategy is
-  `num_examples / num_bands * sampling_prob`. In most cases, `num_examples' is
+  `num_examples / num_bands * sampling_prob`. In most cases, `num_examples` is
   ignored because `num_examples` is considered a sensitive quantity under some
   DP definitions. The exception is when using truncation, where it is necessary
   for accounting (hence, one should be careful about the DP definition when
@@ -246,6 +246,15 @@ class BandMFExecutionPlanConfig:
     _validate_epsilon_delta_noise_multiplier(
         self.epsilon, self.delta, self.noise_multiplier
     )
+    if self.truncated_batch_size is not None:
+      if self.num_examples is None:
+        raise ValueError(
+            'truncated_batch_size requires num_examples to be set.'
+        )
+      if self.num_examples < self.num_bands:
+        raise ValueError(
+            'num_examples must be >= num_bands when using truncated_batch_size.'
+        )
     _validate_adjacency_relation(
         self.accountant,
         self.neighboring_relation,
