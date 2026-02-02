@@ -202,9 +202,9 @@ class BandMFExecutionPlanConfig:
     normalize_by: Divide the sum-of-clipped gradients by this value.
     sampling_prob: The Poisson sampling probability for each example in a group.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
-      size to truncate to.
-    num_examples: The number of examples in the dataset. Unused if
-      truncated_batch_size is None.
+      size to truncate to. Requires num_examples to be set.
+    num_examples: The number of examples in the dataset. Required when
+      truncated_batch_size is set, and must be >= num_bands.
     partition_type: How to partition the examples into groups for before Poisson
       sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
       and replace-one adjacency notions, while INDEPENDENT is compatible
