@@ -71,6 +71,33 @@ def _validate_args(noise_multiplier, iterations, sampling_prob):
     )
 
 
+def _validate_fixed_args(
+    noise_multiplier: float,
+    iterations: int,
+    dataset_size: int,
+    batch_size: int,
+) -> None:
+  """Validates the arguments for fixed-size sampling DP events."""
+  if noise_multiplier < 0:
+    raise ValueError(
+        f'Noise multiplier must be non-negative, got {noise_multiplier}.'
+    )
+  if iterations < 0:
+    raise ValueError(
+        f'Number of iterations must be non-negative, got {iterations}.'
+    )
+  if dataset_size < 0:
+    raise ValueError(
+        f'dataset_size must be non-negative, got {dataset_size}.'
+    )
+  if batch_size < 0:
+    raise ValueError(
+        f'batch_size must be non-negative, got {batch_size}.'
+    )
+  if batch_size > dataset_size:
+    raise ValueError('batch_size must be <= dataset_size.')
+
+
 def dpsgd_event(
     noise_multiplier: float,
     iterations: int,
@@ -96,6 +123,45 @@ def dpsgd_event(
   _validate_args(noise_multiplier, iterations, sampling_prob)
   gaussian = dp_accounting.GaussianDpEvent(noise_multiplier)
   sampled = dp_accounting.PoissonSampledDpEvent(sampling_prob, gaussian)
+  return dp_accounting.SelfComposedDpEvent(sampled, iterations)
+
+
+def fixed_dpsgd_event(
+    noise_multiplier: float,
+    iterations: int,
+    *,
+    dataset_size: int,
+    batch_size: int,
+) -> dp_accounting.DpEvent:
+  """Returns the DpEvent for DP-SGD with fixed-size sampling.
+
+  This mechanism samples a fixed-size batch without replacement at each
+  iteration and applies a Gaussian mechanism to the aggregated gradients. It is
+  equivalent to DP-SGD with fixed-size sampling.
+
+  Note: This event is compatible with the RDP accountant under the REPLACE_ONE
+  neighboring relation.
+
+  Args:
+    noise_multiplier: The noise multiplier of the mechanism.
+    iterations: The number of iterations to run the mechanism for.
+    dataset_size: The number of examples in the dataset.
+    batch_size: The fixed batch size per iteration.
+  Returns:
+    A DpEvent object.
+  """
+  _validate_fixed_args(
+      noise_multiplier,
+      iterations,
+      dataset_size,
+      batch_size,
+  )
+  gaussian = dp_accounting.GaussianDpEvent(noise_multiplier)
+  sampled = dp_accounting.dp_event.SampledWithoutReplacementDpEvent(
+      dataset_size,
+      batch_size,
+      gaussian,
+  )
   return dp_accounting.SelfComposedDpEvent(sampled, iterations)
 
 
