@@ -64,7 +64,9 @@ PLD_ACCOUNTANT = functools.partial(
 RDP_ACCOUNTANT = dp_accounting.rdp.RdpAccountant  # pylint: disable=invalid-name
 RDP_REPLACE_ACCOUNTANT = functools.partial(
     dp_accounting.rdp.RdpAccountant,
-    neighboring_relation=dp_accounting.privacy_accountant.NeighboringRelation.REPLACE_ONE,
+    neighboring_relation=(
+        dp_accounting.privacy_accountant.NeighboringRelation.REPLACE_ONE
+    ),
 )
 
 
