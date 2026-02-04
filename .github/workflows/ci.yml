@@ -31,6 +31,9 @@ jobs:
       - name: Run flake
         run: |
           flake8 jax_privacy tests examples
+      - name: Check formatting with Pyink
+        run: |
+          pyink --check --diff jax_privacy tests examples || { echo -e "\n---> Formatting check failed. To fix, run `pip install pyink pyink[jupyter] && pyink jax_privacy tests examples` locally and commit the changes." >&2; exit 1; }
       - name: Run pydocstyle
         run: |
           pydocstyle --convention=google --add-ignore=D101,D102,D103,D105,D202,D402 jax_privacy/

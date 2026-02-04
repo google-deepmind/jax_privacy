@@ -18,6 +18,7 @@
 This library provides functions for estimating the privacy of a model,
 based on attack scores of held-in and held-out canaries.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence

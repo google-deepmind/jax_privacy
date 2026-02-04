@@ -43,6 +43,7 @@ RngType = np.random.Generator | int | None
 
 class PartitionType(enum.Enum):
   """An enum specifying how examples should be assigned to groups."""
+
   INDEPENDENT = enum.auto()
   """Each example will be assigned to a group independently at random."""
   EQUAL_SPLIT = enum.auto()
@@ -53,7 +54,7 @@ def _independent_partition(
     num_examples: int,
     num_groups: int,
     rng: np.random.Generator,
-    dtype: np.typing.DTypeLike
+    dtype: np.typing.DTypeLike,
 ) -> list[np.ndarray]:
   sizes = rng.multinomial(num_examples, np.ones(num_groups) / num_groups)
   boundaries = np.cumsum(sizes)[:-1]
@@ -65,7 +66,7 @@ def _equal_split_partition(
     num_examples: int,
     num_groups: int,
     rng: np.random.Generator,
-    dtype: np.typing.DTypeLike
+    dtype: np.typing.DTypeLike,
 ) -> list[np.ndarray]:
   indices = rng.permutation(num_examples).astype(dtype)
   group_size = num_examples // num_groups
@@ -221,8 +222,8 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       sampling.
     partition_type: How to partition the examples into groups for before Poisson
       sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
-      and replace-one adjacency notions, while INDEPENDENT is compatible
-      with the add-remove adjacency notion.
+      and replace-one adjacency notions, while INDEPENDENT is compatible with
+      the add-remove adjacency notion.
   """
 
   sampling_prob: float

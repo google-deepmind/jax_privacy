@@ -77,6 +77,7 @@ class StreamingMatrix(Generic[State]):
     multiply_next: A function that returns (next_slice, updated_state) from
       (next_input, current_state).
   """
+
   init_multiply: Callable[[chex.ArrayTree], State]
   multiply_next: Callable[[chex.ArrayTree, State], tuple[chex.ArrayTree, State]]
 
@@ -279,7 +280,7 @@ def diagonal(diag: jax.Array) -> StreamingMatrix:
   """
   return StreamingMatrix.from_array_implementation(
       lambda _: jnp.array(0),
-      lambda value, i: (value * diag.at[i].get(mode='clip'), i + 1)
+      lambda value, i: (value * diag.at[i].get(mode='clip'), i + 1),
   )
 
 

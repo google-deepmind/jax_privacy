@@ -55,7 +55,7 @@ class BoundedSensitivityCallable:
 
   def sensitivity(
       self,
-      neighboring_relation: dp_accounting.NeighboringRelation = _REPLACE_SPECIAL
+      neighboring_relation: dp_accounting.NeighboringRelation = _REPLACE_SPECIAL,  # pylint: disable=line-too-long
   ):
     """Returns the L2 sensitivity of the Callable.
 
@@ -84,7 +84,7 @@ def clip_pytree(
     clip_norm: float,
     rescale_to_unit_norm: bool = False,
     nan_safe: bool = True,
-    return_zero: bool = False
+    return_zero: bool = False,
 ):
   """Clips a PyTree of jax arrays based on its global L2 norm.
 
@@ -107,7 +107,7 @@ def clip_pytree(
   Case                    rescale_to_unit_norm Output
   ======================= ==================== =================================
   clip_norm = 0           False                Zero
-  clip_norm = 0           True                 Input / norm (limit as clip_norm -> 0)  # pylint: disable=line-too-long
+  clip_norm = 0           True                 Input / norm, as clip_norm -> 0
   clip_norm = inf         False                Unchanged
   clip_norm = inf         True                 Zero
   clip_norm < 0 (static)  -                    Raises ValueError
@@ -357,7 +357,7 @@ def clipped_fun(
         microbatch_size=microbatch_size,
         accumulator=(sum_, concat, concat),
         num_real_microbatches=num_real_mb,
-        vmap_fn=functools.partial(jax.vmap, spmd_axis_name=spmd_axis_name)
+        vmap_fn=functools.partial(jax.vmap, spmd_axis_name=spmd_axis_name),
     )
 
     clipped_values, aux, norms = microbatched_vmap_fun(*args, **kwargs)

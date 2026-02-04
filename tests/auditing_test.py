@@ -82,9 +82,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_bootstrap_params_confidence_interval_illegal_confidence(self):
     for confidence in [-1, 0, 1, 2]:
       with self.assertRaisesRegex(ValueError, 'confidence must be in'):
-        auditing.BootstrapParams.confidence_interval(
-            confidence=confidence
-        )
+        auditing.BootstrapParams.confidence_interval(confidence=confidence)
 
   @parameterized.named_parameters(
       ('95_percent', 0.95, [0.025, 0.975]),
@@ -95,9 +93,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       confidence,
       expected_quantiles,
   ):
-    params = auditing.BootstrapParams.confidence_interval(
-        confidence=confidence
-    )
+    params = auditing.BootstrapParams.confidence_interval(confidence=confidence)
     np.testing.assert_almost_equal(params.quantiles, expected_quantiles)
 
   @parameterized.product(
@@ -140,16 +136,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   )
   def test_pareto_frontier_bad_shape(self, shape):
     points = np.zeros(shape, dtype=np.int64)
-    with self.assertRaisesRegex(
-        ValueError, 'Expected at least two 2D points'
-    ):
+    with self.assertRaisesRegex(ValueError, 'Expected at least two 2D points'):
       auditing._pareto_frontier(points)
 
   def test_pareto_frontier_unsorted(self):
     points = np.array([[1, 0], [0, 1]])
-    with self.assertRaisesRegex(
-        ValueError, 'Expected points to be sorted'
-    ):
+    with self.assertRaisesRegex(ValueError, 'Expected points to be sorted'):
       auditing._pareto_frontier(points)
 
   def test_pareto_frontier_two_points(self):
@@ -421,9 +413,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     out_samples = int(in_samples * out_samples_ratio)
     in_canary_scores = np.full(in_samples, 0.0)
     out_canary_scores = np.full(out_samples, 1.0)
-    auditor = auditing.CanaryScoreAuditor(
-        in_canary_scores, out_canary_scores
-    )
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     fprs = np.linspace(0, 1, 10)
     if vectorized:
       tprs = auditor.tpr_at_given_fpr(fprs)

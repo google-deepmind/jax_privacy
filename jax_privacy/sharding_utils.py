@@ -47,7 +47,7 @@ def _ceiling_to_multiple(size: int, multiple: int) -> int:
 
 
 def flatten_with_zero_redundancy(
-    abstract_array: jax.ShapeDtypeStruct | jax.Array
+    abstract_array: jax.ShapeDtypeStruct | jax.Array,
 ) -> jax.ShapeDtypeStruct:
   """Return a flattened, padded, and ZeRo-sharded abstract version of x.
 

@@ -136,7 +136,7 @@ class KerasApiTest(parameterized.TestCase):
         train_steps=20,
         train_size=500,
         noise_multiplier=10.0,
-        microbatch_size=1
+        microbatch_size=1,
     )
 
     keras_api._add_dp_sgd_attributes(model, params)
@@ -235,8 +235,8 @@ class KerasApiTest(parameterized.TestCase):
     # grad(f) = (2*x0*(a0*x0+a1*x1-4), 2*x1*(a0*x0+a1*x1-4)) =
     # (2*(3-4-4), 4*(3-4-4)) = (-10, -20).
     trainable_variables = [jnp.array([3.0, -2.0])]
-    x = jnp.array([[1.0, 2.0]]*batch_size)
-    y = jnp.array([4.0]*batch_size)
+    x = jnp.array([[1.0, 2.0]] * batch_size)
+    y = jnp.array([4.0] * batch_size)
 
     # Generate sample.
     sample = []
@@ -275,6 +275,7 @@ class KerasApiTest(parameterized.TestCase):
     ):
       keras_api._validate_optimizer(model, dp_params)
 
+  # pylint: disable=g-bad-todo
   # TODO: Add test when input is tf batched dataset dict
   # (as in Gemma), try to make a test as similar as possible to Gemma.
   # Also good to add tests for all possible setups we know (especially for all

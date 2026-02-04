@@ -78,7 +78,7 @@ class BatchSelectionTest(parameterized.TestCase):
   @parameterized.product(
       partition_type=[
           batch_selection.PartitionType.EQUAL_SPLIT,
-          batch_selection.PartitionType.INDEPENDENT
+          batch_selection.PartitionType.INDEPENDENT,
       ],
       num_examples=[10],
       cycle_length=[3],

@@ -40,7 +40,6 @@ Example Usage:
    )
    private_model = keras_api.make_private(model, params)
    private_model.get_noise_multiplier()
-
 """
 
 import dataclasses
@@ -111,20 +110,20 @@ class DPKerasConfig:
       seed: The seed for the random number generator. If None, a random seed is
         used. It must be an int64. Useful for reproducibility.
       microbatch_size: The size of each microbatch. The device batch size will
-        be split up into microbatches of this size and processed sequentially
-        on the forward/backward pass. By setting microbatch_size=batch_size,
-        the forward/backward pass is performed once on the entire batch using
+        be split up into microbatches of this size and processed sequentially on
+        the forward/backward pass. By setting microbatch_size=batch_size, the
+        forward/backward pass is performed once on the entire batch using
         jax.vmap. By setting microbatch_size=1, the forward/backward pass is
         performed on each batch element individually, with the gradients
-        accumulated sequentially using jax.lax.scan. Setting to batch_size
-        gives the largest degree of parllelism, while setting to 1 gives the
-        least memory consumption. Any value in between can be used to trade-off
-        memory consumption vs. parallel computation. This parameter is similar
-        to `gradient_accumulation_steps`, but it works fully inside of device
+        accumulated sequentially using jax.lax.scan. Setting to batch_size gives
+        the largest degree of parllelism, while setting to 1 gives the least
+        memory consumption. Any value in between can be used to trade-off memory
+        consumption vs. parallel computation. This parameter is similar to
+        `gradient_accumulation_steps`, but it works fully inside of device
         memory under a single jitted function, while
-        `gradient_accumulation_steps` operates outside of the jit boundary.
-        The default value is None, which means that no microbatching is used,
-        and is equivalent to microbatch_size=batch_size.
+        `gradient_accumulation_steps` operates outside of the jit boundary. The
+        default value is None, which means that no microbatching is used, and is
+        equivalent to microbatch_size=batch_size.
   """
 
   epsilon: float
@@ -526,13 +525,14 @@ def _dp_train_step(
     # because the check is based on the static values, i.e. they won't
     # change between invocations, and if the condition is violated, it will
     # always fail during the tracing (first invocation) of this function.
-    raise ValueError(
+    error_message = (
         'The batch size in the DP parameters is not equal to the batch size of'
         f' the actual data: {dp_batch_size=} !='
         f' actual_batch_size={actual_batch_size}. Please make sure that the'
         ' batch size in the DP parameters is equal to the batch size of the'
         ' data you supplied in the fit() call.'
-    )  # pylint: disable=protected-access
+    )
+    raise ValueError(error_message)
 
   (_, aux), grads = _noised_clipped_grads(
       self.compute_loss_and_updates,
@@ -591,8 +591,7 @@ def _resolve_noise_multiplier(
   """Returns a cached noise multiplier or calibrates it once.
 
   Args:
-    dp_params: DP configuration to read or calibrate the noise multiplier
-      from.
+    dp_params: DP configuration to read or calibrate the noise multiplier from.
     model: Optional Keras model used to cache/reuse the calibrated value.
 
   Returns:
