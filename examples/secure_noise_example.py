@@ -29,7 +29,7 @@ import jax.numpy as jnp
 from jax_privacy import noise_addition
 import numpy as np
 from numpy.random import Generator
-from randomgen import AESCounter
+from randomgen import AESCounter  # pytype: disable=import-error
 
 
 _USE_SECURE_RNG = flags.DEFINE_boolean(
