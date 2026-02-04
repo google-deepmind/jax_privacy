@@ -22,7 +22,6 @@ jobs:
         with:
             python-version: "${{ matrix.python-version }}"
       - name: Install example requirements
-        run: pip install -r examples/requirements.txt
+        run: pip install -e ".[test,examples]"
       - name: Run CI tests
-        run: bash test.sh
-        shell: bash
+        run: pytest -n auto tests/
