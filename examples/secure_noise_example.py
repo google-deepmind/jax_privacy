@@ -21,14 +21,16 @@ framework (e.g., from a hardware security module).
 """
 
 import time
+
 from absl import app
 from absl import flags
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax_privacy import noise_addition
+import numpy as np
 from numpy.random import Generator
 from randomgen import AESCounter
+
 
 _USE_SECURE_RNG = flags.DEFINE_boolean(
     'use_secure_rng', True, 'Whether to use secure random number generation.'
@@ -38,6 +40,7 @@ _STEPS = flags.DEFINE_integer(
 )
 _STDDEV = flags.DEFINE_float('stddev', 1.0, 'Noise standard deviation.')
 
+
 def toy_model_params():
   """Returns a PyTree of model parameters for a toy model."""
   return {
@@ -45,9 +48,11 @@ def toy_model_params():
       'layer2': jnp.zeros((1024, 512)),
   }
 
-def loss_fn(params, batch):
+
+def loss_fn(params, _batch):  # pylint: disable=invalid-name
   """A dummy loss function."""
   return sum(jnp.sum(p) for p in jax.tree.leaves(params))
+
 
 # WARNING: This function must never be called inside a @jax.jit context.
 # Doing so would cause the "random" noise to be statically compiled into the
@@ -60,6 +65,7 @@ def generate_secure_noise(stddev, params, generators):
       generators,
   )
 
+
 def main(_):
   params = toy_model_params()
   privatizer = noise_addition.gaussian_privatizer(
@@ -69,13 +75,22 @@ def main(_):
   privatizer_state = privatizer.init(params)
 
   @jax.jit
-  def train_step(params, batch, privatizer_state, secure_noise):
-    """
-    Computes gradients and adds noise.
+  def train_step(params, _batch, privatizer_state, secure_noise):  # pylint: disable=invalid-name
+    """Computes gradients and adds noise.
+
     If `secure_noise` is provided, it's used for noising. Otherwise, the
     privatizer generates the noise.
+
+    Args:
+      params: Model parameters.
+      _batch: The input batch (unused).
+      privatizer_state: The current state of the privatizer.
+      secure_noise: The noise tree to add to gradients, or None.
+
+    Returns:
+      A tuple of (noisy_grads, new_privatizer_state).
     """
-    grads = jax.grad(loss_fn)(params, batch)
+    grads = jax.grad(loss_fn)(params, _batch)
 
     if secure_noise is not None:
       noisy_grads = jax.tree_util.tree_map(jnp.add, grads, secure_noise)
@@ -88,12 +103,13 @@ def main(_):
       )
     return noisy_grads, new_privatizer_state
 
-  print(f"Running {_STEPS.value} steps with use_secure_rng={_USE_SECURE_RNG.value}")
+  print(f'Running {_STEPS.value} steps with '
+        f'use_secure_rng={_USE_SECURE_RNG.value}')
   start_time = time.time()
 
   # Dummy batch
   batch = None
-  
+
   # Create a pytree of generators, one for each parameter.
   keys = jax.tree.map(
       lambda p: np.random.randint(2**63, size=2, dtype=np.uint64),
@@ -101,7 +117,7 @@ def main(_):
   )
   generators = jax.tree.map(lambda k: Generator(AESCounter(k)), keys)
 
-  for step in range(_STEPS.value):
+  for _step in range(_STEPS.value):  # pylint: disable=unused-variable, invalid-name
     secure_noise_tree = None
     if _USE_SECURE_RNG.value:
       secure_noise_tree = generate_secure_noise(
@@ -118,8 +134,9 @@ def main(_):
   total_time = end_time - start_time
   avg_step_time = total_time / _STEPS.value
 
-  print(f"Total time for {_STEPS.value} steps: {total_time:.4f} seconds")
-  print(f"Average Step Time: {avg_step_time:.4f} seconds")
+  print(f'Total time for {_STEPS.value} steps: {total_time:.4f} seconds')
+  print(f'Average Step Time: {avg_step_time:.4f} seconds')
+
 
 if __name__ == '__main__':
   app.run(main)
