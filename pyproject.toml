@@ -30,11 +30,14 @@ lint = [
     "pylint",
     "pylint-exit",
     "pytype",
+    "pyink",
+    "pyink[jupyter]",
 ]
 
 test = [
     "pytest",
     "pytest-xdist",
+    "pytest-cov",
     "hypothesis",
     "crc32c",
     "keras",
@@ -49,6 +52,23 @@ examples = [
     "keras",
     "tensorflow",
     "flax",
+]
+
+docs = [
+    "sphinx<9.0.0",
+    "sphinx-rtd-theme",
+    "myst-nb",
+    "sphinx-collections",
+    "ipykernel",
+    "sphinx_autodoc_typehints",
+    "tensorflow",
+    "keras",
+]
+
+dev = [
+    "jax_privacy[lint,test,examples,docs]",
+    "build",
+    "wheel",
 ]
 
 docs = [
@@ -86,8 +106,19 @@ testpaths = [
 # We include pyink to allow external contributors to optionally, but easily,
 # pass google internal formatting checks.
 [tool.pyink]
-pyink = true
-pyink-use-majority-quotes = true
-pyink-indentation = 2
 line-length = 80
-include = '\.pyi?$'
+unstable = true
+target-version = []
+pyink-indentation = 2
+pyink-ipynb-indentation = 2
+pyink-use-majority-quotes = true
+pyink-annotation-pragmas = [
+  "noqa",
+  "pylint:",
+  "type: ignore",
+  "pytype:",
+  "mypy:",
+  "pyright:",
+  "pyre-",
+]
+

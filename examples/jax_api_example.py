@@ -133,7 +133,7 @@ def main(_):
     grads, aux_outputs = grad_and_value_fn(model_params, batch_x, batch_y)
     loss = aux_outputs.values.mean()
     mean_grads = jax.tree.map(lambda x: x / batch_size, grads)
-    (noisy_grads, noise_state) = privatizer.update(mean_grads, noise_state)
+    noisy_grads, noise_state = privatizer.update(mean_grads, noise_state)
     updated_params = updated_model_params(model_params, noisy_grads)
     return updated_params, loss, noise_state
 

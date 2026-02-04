@@ -112,7 +112,7 @@ def bert_model_params(hidden_size: int) -> Any:
       is_leaf=lambda x: isinstance(x, tuple),
   )
 
-  return reshard(model_params, jax.sharding.PartitionSpec())
+  return jax.sharding.reshard(model_params, jax.sharding.PartitionSpec())
 
 
 def toy_model_params(hidden_size: int) -> jax.Array:
@@ -120,7 +120,9 @@ def toy_model_params(hidden_size: int) -> jax.Array:
   # This is a toy example where the model is just a 2D array of size (H, H^2).
   leaf_shape = (hidden_size, hidden_size**2)
 
-  return reshard(jnp.zeros(leaf_shape), jax.sharding.PartitionSpec('x', 'y'))
+  return jax.sharding.reshard(
+      jnp.zeros(leaf_shape), jax.sharding.PartitionSpec('x', 'y')
+  )
 
 
 def generate_noise(
@@ -155,7 +157,8 @@ def generate_noise(
       # In real applications, pass in the actual clipped gradient here.
       # For benchmarking, we just pass in something that has the same structure.
       noisy_grad, state = privatizer.update(
-          pytree_like_model_params, state,
+          pytree_like_model_params,
+          state,
       )
     return state, noisy_grad
 

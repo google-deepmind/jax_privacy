@@ -148,14 +148,16 @@ class GradientClippingTest(parameterized.TestCase):
     clip_norm = 2.5
     rescale = True
 
-    clipped_grad_fn = jax.jit(gradient_clipping.clipped_grad(
-        mean_quadratic_loss,
-        argnums=0,
-        batch_argnums=1,
-        l2_clip_norm=clip_norm,
-        rescale_to_unit_norm=rescale,
-        microbatch_size=microbatch_size,
-    ))
+    clipped_grad_fn = jax.jit(
+        gradient_clipping.clipped_grad(
+            mean_quadratic_loss,
+            argnums=0,
+            batch_argnums=1,
+            l2_clip_norm=clip_norm,
+            rescale_to_unit_norm=rescale,
+            microbatch_size=microbatch_size,
+        )
+    )
     sum_grads = clipped_grad_fn(
         params, x, is_padding_example=jnp.array([False, False, False])
     )
@@ -302,7 +304,7 @@ class GradientClippingTest(parameterized.TestCase):
         rescale_to_unit_norm=False,
         return_values=True,
     )(params, x)
-    (sum_grads, aux_output) = output
+    sum_grads, aux_output = output
     value = aux_output.values.mean(axis=0)
     aux = jax.tree.map(lambda x: x.mean(axis=0), aux_output.aux)
 
