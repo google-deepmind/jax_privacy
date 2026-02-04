@@ -37,9 +37,9 @@ jobs:
       - name: Run pylint
         shell: bash
         run: |
-          pylint jax_privacy || pylint-exit -efail -wfail -cfail -rfail $?
-          pylint examples || pylint-exit -efail -wfail -cfail -rfail $?
-          pylint tests -d W0101,W0212,C0114 || pylint-exit -efail -wfail -cfail -rfail $?
+          pylint --rcfile=.pylintrc jax_privacy || pylint-exit -efail -wfail -cfail -rfail $?
+          pylint --rcfile=.pylintrc examples || pylint-exit -efail -wfail -cfail -rfail $?
+          pylint --rcfile=.pylintrc tests -d W0101,W0212,C0114 || pylint-exit -efail -wfail -cfail -rfail $?
       - name: Run pytype
         run: |
           pytype jax_privacy -k

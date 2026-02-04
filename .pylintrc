@@ -4,15 +4,32 @@
 #
 # Its canonical open-source location is:
 #   https://google.github.io/styleguide/pylintrc
+#
+# Differences from the canonical open-source version:
+# - indent-string is set to 2 spaces, not 4.
+# - unnecessary-lambda-assignment is disabled.
 
-[MASTER]
+# Copyright 2018 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-# Add files or directories to the blacklist. They should be base names, not
-# paths.
+[MAIN]
+
+# Files or directories to be skipped. They should be base names, not paths.
 ignore=third_party
 
-# Add files or directories matching the regex patterns to the blacklist. The
-# regex matches against base names, not paths.
+# Files or directories matching the regex patterns are skipped. The regex
+# matches against base names, not paths.
 ignore-patterns=
 
 # Pickle collected data for later comparisons.
@@ -29,17 +46,6 @@ jobs=4
 # active Python interpreter and may run arbitrary code.
 unsafe-load-any-extension=no
 
-# A comma-separated list of package or module names from where C extensions may
-# be loaded. Extensions are loading into the active Python interpreter and may
-# run arbitrary code
-extension-pkg-whitelist=
-
-
-[STRING]
-
-# This flag controls whether inconsistent-quotes generates a warning when the
-# character used as a quote delimiter is used inconsistently within a module.
-check-quote-consistency=yes
 
 [MESSAGES CONTROL]
 
@@ -62,19 +68,23 @@ confidence=
 # --enable=similarities". If you want to run only the classes checker, but have
 # no Warning level messages displayed, use"--disable=all --enable=classes
 # --disable=W"
-disable=apply-builtin,
+disable=R,
+        abstract-method,
+        apply-builtin,
+        arguments-differ,
         attribute-defined-outside-init,
         backtick,
         bad-option-value,
+        basestring-builtin,
         buffer-builtin,
         c-extension-no-member,
+        consider-using-enumerate,
         cmp-builtin,
         cmp-method,
         coerce-builtin,
         coerce-method,
         delslice-method,
         div-method,
-        duplicate-code,
         eq-without-hash,
         execfile-builtin,
         file-builtin,
@@ -84,27 +94,26 @@ disable=apply-builtin,
         global-statement,
         hex-method,
         idiv-method,
-        implicit-str-concat-in-sequence,
+        implicit-str-concat,
         import-error,
         import-self,
         import-star-module-level,
         input-builtin,
         intern-builtin,
         invalid-str-codec,
-        invalid-unary-operand-type,
         locally-disabled,
         long-builtin,
         long-suffix,
         map-builtin-not-iterating,
+        misplaced-comparison-constant,
+        missing-function-docstring,
         metaclass-assignment,
         next-method-called,
         next-method-defined,
         no-absolute-import,
-        no-else-break,
-        no-else-continue,
-        no-else-raise,
-        no-else-return,
+        no-init,  # added
         no-member,
+        no-name-in-module,
         no-self-use,
         nonzero-method,
         oct-method,
@@ -127,29 +136,18 @@ disable=apply-builtin,
         standarderror-builtin,
         suppressed-message,
         sys-max-int,
-        too-few-public-methods,
-        too-many-ancestors,
-        too-many-arguments,
-        too-many-boolean-expressions,
-        too-many-branches,
-        too-many-instance-attributes,
-        too-many-locals,
-        too-many-positional-arguments,
-        too-many-public-methods,
-        too-many-return-statements,
-        too-many-statements,
         trailing-newlines,
         unichr-builtin,
         unicode-builtin,
         unnecessary-lambda-assignment,
+        unnecessary-pass,
         unpacking-in-except,
         useless-else-on-loop,
         useless-suppression,
         using-cmp-argument,
-        xrange-builtin,
         wrong-import-order,
+        xrange-builtin,
         zip-builtin-not-iterating,
-        g-bad-todo,
 
 
 [REPORTS]
@@ -161,6 +159,9 @@ output-format=text
 
 # Tells whether to display a full report or only the messages
 reports=no
+
+# Activate the evaluation score.
+score=no
 
 # Python expression which should return a note less than 10 (10 is the highest
 # note). You have access to the variables errors warning, statement which
@@ -229,7 +230,7 @@ no-docstring-rgx=(__.*__|main|test.*|.*test|.*Test)$
 
 # Minimum line length for functions/classes that require docstrings, shorter
 # ones are exempt.
-docstring-min-length=10
+docstring-min-length=12
 
 
 [TYPECHECK]
@@ -238,10 +239,6 @@ docstring-min-length=10
 # contextlib.contextmanager. Add to this list to register other decorators that
 # produce valid context managers.
 contextmanager-decorators=contextlib.contextmanager,contextlib2.contextmanager
-
-# Tells whether missing members accessed in mixin class should be ignored. A
-# mixin class is detected if its name ends with "mixin" (case insensitive).
-ignore-mixin-members=yes
 
 # List of module names for which member attributes should not be checked
 # (useful for modules/projects where namespaces are manipulated during runtime
@@ -259,8 +256,6 @@ ignored-classes=optparse.Values,thread._local,_thread._local
 # expressions are accepted.
 generated-members=
 
-# List of decorators that change the signature of a decorated function.
-signature-mutators=toolz.functoolz.curry
 
 [FORMAT]
 
@@ -284,8 +279,8 @@ max-module-lines=99999
 
 # String used as indentation unit.  The internal Google style guide mandates 2
 # spaces.  Google's externaly-published style guide says 4, consistent with
-# PEP 8.  Here, we use 2 spaces, for conformity with many open-sourced Google
-# projects (like TensorFlow).
+# PEP 8.
+# We use the internal Google style guide.
 indent-string='  '
 
 # Number of spaces of indent required inside a hanging  or continued line.
@@ -299,6 +294,13 @@ expected-line-ending-format=
 
 # List of note tags to take in consideration, separated by a comma.
 notes=TODO
+
+
+[STRING]
+
+# This flag controls whether inconsistent-quotes generates a warning when the
+# character used as a quote delimiter is used inconsistently within a module.
+check-quote-consistency=yes
 
 
 [VARIABLES]
@@ -327,7 +329,7 @@ redefining-builtins-modules=six,six.moves,past.builtins,future.builtins,functool
 
 # Logging modules to check that the string format arguments are in logging
 # function parameter format
-logging-modules=logging,absl.logging
+logging-modules=logging,absl.logging,tensorflow.io.logging
 
 
 [SIMILARITIES]
