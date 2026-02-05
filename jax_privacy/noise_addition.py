@@ -174,7 +174,7 @@ def matrix_factorization_privatizer(
       prng_key=prng_key,
       stddev=stddev,
       strategy=intermediate_strategy.value,
-      dtype=dtype
+      dtype=dtype,
   )
 
 
@@ -244,7 +244,7 @@ def _dense_matrix_factorization_privatizer(
         rng_key=prng_key,
         target_tree=target,
         sampler=functools.partial(_gaussian_linear_combination, matrix_row),
-        dtype=dtype
+        dtype=dtype,
     )
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, noise)
     return noisy_grads, index + 1
@@ -258,7 +258,7 @@ def _iid_normal_noise(prng_key, target_tree, stddev, dtype=None):
       rng_key=prng_key,
       target_tree=target_tree,
       sampler=jax.random.normal,
-      dtype=dtype
+      dtype=dtype,
   )
   return optax.tree.scale(stddev, standard_normal)
 

@@ -18,6 +18,7 @@
 import collections
 from collections.abc import Sequence
 import dataclasses
+import functools
 import numbers
 from typing import Any, Callable, TypeAlias
 
@@ -26,7 +27,6 @@ import dp_accounting
 import jax
 import jax.numpy as jnp
 import optax
-from optax.experimental import microbatching
 
 
 PyTree: TypeAlias = chex.ArrayTree
@@ -55,7 +55,7 @@ class BoundedSensitivityCallable:
 
   def sensitivity(
       self,
-      neighboring_relation: dp_accounting.NeighboringRelation = _REPLACE_SPECIAL
+      neighboring_relation: dp_accounting.NeighboringRelation = _REPLACE_SPECIAL,  # pylint: disable=line-too-long
   ):
     """Returns the L2 sensitivity of the Callable.
 
@@ -84,7 +84,7 @@ def clip_pytree(
     clip_norm: float,
     rescale_to_unit_norm: bool = False,
     nan_safe: bool = True,
-    return_zero: bool = False
+    return_zero: bool = False,
 ):
   """Clips a PyTree of jax arrays based on its global L2 norm.
 
@@ -107,7 +107,7 @@ def clip_pytree(
   Case                    rescale_to_unit_norm Output
   ======================= ==================== =================================
   clip_norm = 0           False                Zero
-  clip_norm = 0           True                 Input / norm (limit as clip_norm -> 0)  # pylint: disable=line-too-long
+  clip_norm = 0           True                 Input / norm, as clip_norm -> 0
   clip_norm = inf         False                Unchanged
   clip_norm = inf         True                 Zero
   clip_norm < 0 (static)  -                    Raises ValueError
@@ -218,7 +218,7 @@ def _num_real_microbatches(
   """
   if microbatch_size is None:
     return is_padding_example.shape[0]
-  reshaped = microbatching.reshape_batch_axis(
+  reshaped = optax.microbatching.reshape_batch_axis(
       is_padding_example, microbatch_size
   )
   # Ensure there is at least one True in the array.
@@ -329,6 +329,7 @@ def clipped_fun(
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
+      value = optax.tree.cast(value, dtype)
       clipped_value, l2_norm = clip_pytree(
           value,
           clip_norm=l2_clip_norm,
@@ -340,8 +341,8 @@ def clipped_fun(
       return clipped_value, aux, l2_norm
 
     num_real_mb = _num_real_microbatches(is_padding_example, microbatch_size)
-    sum_ = microbatching.AccumulationType.SUM
-    concat = microbatching.AccumulationType.CONCAT
+    sum_ = optax.microbatching.AccumulationType.SUM
+    concat = optax.microbatching.AccumulationType.CONCAT
     axes = [0 if i in batch_argnums else None for i in range(len(args))]
     if prng_argnum is not None:
       args = list(args)
@@ -349,33 +350,29 @@ def clipped_fun(
       split_rngs = jax.tree.map(lambda x: jax.random.split(x, batch_size), rngs)
       args[prng_argnum] = split_rngs
       axes[prng_argnum] = 0
-      batch_argnums_with_prng = tuple(batch_argnums) + (prng_argnum,)
-    else:
-      batch_argnums_with_prng = batch_argnums
-    microbatched_vmap_fun = microbatching.microbatch(
-        jax.vmap(clipped_fun_one_group, axes, spmd_axis_name=spmd_axis_name),
-        argnums=batch_argnums_with_prng,
-        argnames='is_padding_example',
+
+    microbatched_vmap_fun = optax.microbatching.micro_vmap(
+        clipped_fun_one_group,
+        in_axes=axes,
         microbatch_size=microbatch_size,
         accumulator=(sum_, concat, concat),
-        num_real_microbatches=num_real_mb
+        num_real_microbatches=num_real_mb,
+        vmap_fn=functools.partial(jax.vmap, spmd_axis_name=spmd_axis_name),
     )
 
     clipped_values, aux, norms = microbatched_vmap_fun(*args, **kwargs)
-    # It would save flops to call this after vmap but before the microbatching.
-    result = jax.tree.map(lambda x: jnp.sum(x, 0, dtype), clipped_values)
     if normalize_by != 1.0:
-      result = jax.tree.map(lambda x: x / normalize_by, result)
+      clipped_values = jax.tree.map(lambda x: x / normalize_by, clipped_values)
 
     match has_aux, return_norms:
       case False, False:
-        return result
+        return clipped_values
       case False, True:
-        return result, norms
+        return clipped_values, norms
       case True, False:
-        return result, aux
+        return clipped_values, aux
       case True, True:
-        return result, (aux, norms)
+        return clipped_values, (aux, norms)
 
   norm_bound = (1.0 if rescale_to_unit_norm else l2_clip_norm) / normalize_by
   if keep_batch_dim:

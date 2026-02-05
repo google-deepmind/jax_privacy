@@ -18,6 +18,7 @@
 This library provides functions for estimating the privacy of a model,
 based on attack scores of held-in and held-out canaries.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -257,15 +258,24 @@ class BootstrapParams:
   estimate quantiles. This class configures the number of resamples, the
   quantiles to report, and the seed for the random number generator.
 
+  Optionally performs bias correction and acceleration for the bootstrap
+  [B. Efron, "Bootstrap Confidence Intervals", Statist. Sci. 2(3), 189-228
+  (1987)]. Be aware that acceleration requires jackknife resampling, which
+  computes the function n times for n total canaries.
+
   Attributes:
     num_samples: The number of times to resample the canary scores.
     quantiles: An array-like of quantiles to report. E.g., for a 95% confidence
       interval, use (0.025, 0.975).
+    bias_correction: Whether to use bias correction.
+    acceleration: Whether to use acceleration.
     seed: The seed for the random number generator.
   """
 
   num_samples: int = 1000
   quantiles: np.typing.ArrayLike = (0.025, 0.975)
+  bias_correction: bool = True
+  acceleration: bool = False
   seed: int | None = None
 
   def __post_init__(self):
@@ -274,6 +284,8 @@ class BootstrapParams:
       raise ValueError('quantiles cannot be empty.')
     if not np.all((0 < quantile_arr) & (quantile_arr < 1)):
       raise ValueError(f'quantiles must be in (0, 1), got {self.quantiles}.')
+    if self.acceleration and not self.bias_correction:
+      raise ValueError('Cannot use acceleration without bias correction.')
 
   @classmethod
   def confidence_interval(
@@ -538,8 +550,8 @@ class CanaryScoreAuditor:
       in_canary_scores: Attack scores of held-in canaries.
       out_canary_scores: Attack scores of held-out canaries.
     """
-    self._in_canary_scores = np.array(in_canary_scores)
-    self._out_canary_scores = np.array(out_canary_scores)
+    self._in_canary_scores = np.asarray(in_canary_scores)
+    self._out_canary_scores = np.asarray(out_canary_scores)
     if self._in_canary_scores.size == 0:
       raise ValueError('in_canary_scores must be non-empty.')
     if self._out_canary_scores.size == 0:
@@ -564,7 +576,7 @@ class CanaryScoreAuditor:
       fn: Callable[['CanaryScoreAuditor'], float],
       params: BootstrapParams,
   ) -> np.ndarray:
-    """Computes bootstrapped quantiles for a function.
+    """Computes bootstrapped quantiles for a function, optionally applying BCa.
 
     Args:
       fn: A function of a CanaryScoreAuditor returning a scalar.
@@ -576,20 +588,54 @@ class CanaryScoreAuditor:
     rng = np.random.default_rng(seed=params.seed)
     seeds = rng.integers(np.iinfo(np.int64).max, size=params.num_samples)
 
+    # Alias for readability.
+    in_scores = self._in_canary_scores
+    out_scores = self._out_canary_scores
+
     def get_value(seed):
       inner_rng = np.random.default_rng(seed=seed)
-      in_samples = inner_rng.choice(
-          self._in_canary_scores, size=self._in_canary_scores.size
-      )
-      out_samples = inner_rng.choice(
-          self._out_canary_scores, size=self._out_canary_scores.size
-      )
+      in_samples = inner_rng.choice(in_scores, size=in_scores.size)
+      out_samples = inner_rng.choice(out_scores, size=out_scores.size)
       return fn(CanaryScoreAuditor(in_samples, out_samples))
 
     with futures.ThreadPoolExecutor() as pool:
       values = list(pool.map(get_value, seeds))
 
-    return np.quantile(values, params.quantiles)
+    if not params.bias_correction:
+      return np.quantile(values, params.quantiles, method='linear')
+
+    full_estimate = fn(self)
+    # Use Laplace smoothing here to avoid computing ppf of 0 or 1.
+    prop_less = (np.sum(values < full_estimate) + 1) / (params.num_samples + 2)
+    z0 = _norm.ppf(prop_less)
+
+    if params.acceleration:
+
+      def eval_delete_in(i):
+        return fn(CanaryScoreAuditor(np.delete(in_scores, i), out_scores))
+
+      def eval_delete_out(i):
+        return fn(CanaryScoreAuditor(in_scores, np.delete(out_scores, i)))
+
+      with futures.ThreadPoolExecutor() as pool:
+        jackknife_estimates = list(
+            pool.map(eval_delete_in, range(len(in_scores)))
+        )
+        jackknife_estimates.extend(
+            pool.map(eval_delete_out, range(len(out_scores)))
+        )
+      jackknife_mean = np.mean(jackknife_estimates)
+      num = np.sum((jackknife_mean - jackknife_estimates) ** 3)
+      denom = 6 * (np.sum((jackknife_mean - jackknife_estimates) ** 2)) ** 1.5
+      accel = 0 if denom == 0 else num / denom
+    else:
+      accel = 0
+
+    z_quantiles = _norm.ppf(params.quantiles)
+    num = z0 + z_quantiles
+    denom = 1 - accel * num
+    corrected_quantiles = _norm.cdf(z0 + num / denom)
+    return np.quantile(values, corrected_quantiles, method='linear')
 
   def _epsilon_clopper_pearson_all_thresholds(
       self,

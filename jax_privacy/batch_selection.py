@@ -43,6 +43,7 @@ RngType = np.random.Generator | int | None
 
 class PartitionType(enum.Enum):
   """An enum specifying how examples should be assigned to groups."""
+
   INDEPENDENT = enum.auto()
   """Each example will be assigned to a group independently at random."""
   EQUAL_SPLIT = enum.auto()
@@ -53,11 +54,11 @@ def _independent_partition(
     num_examples: int,
     num_groups: int,
     rng: np.random.Generator,
-    dtype: np.typing.DTypeLike
+    dtype: np.typing.DTypeLike,
 ) -> list[np.ndarray]:
   sizes = rng.multinomial(num_examples, np.ones(num_groups) / num_groups)
   boundaries = np.cumsum(sizes)[:-1]
-  indices = np.random.permutation(num_examples).astype(dtype)
+  indices = rng.permutation(num_examples).astype(dtype)
   return np.split(indices, boundaries)
 
 
@@ -65,7 +66,7 @@ def _equal_split_partition(
     num_examples: int,
     num_groups: int,
     rng: np.random.Generator,
-    dtype: np.typing.DTypeLike
+    dtype: np.typing.DTypeLike,
 ) -> list[np.ndarray]:
   indices = rng.permutation(num_examples).astype(dtype)
   group_size = num_examples // num_groups
@@ -221,8 +222,8 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       sampling.
     partition_type: How to partition the examples into groups for before Poisson
       sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
-      and replace-one adjacency notions, while INDEPENDENT is compatible
-      with the add-remove adjacency notion.
+      and replace-one adjacency notions, while INDEPENDENT is compatible with
+      the add-remove adjacency notion.
   """
 
   sampling_prob: float
@@ -291,6 +292,46 @@ class BallsInBinsSampling(BatchSelectionStrategy):
 
     for i in range(self.iterations):
       yield groups[i % self.cycle_length]
+
+
+@dataclasses.dataclass(frozen=True)
+class FixedBatchSampling(BatchSelectionStrategy):
+  """Implements fixed-size batch sampling.
+
+  Each batch is sampled uniformly at random from the dataset. By default,
+  batches are sampled without replacement within a batch, and with replacement
+  across batches (i.e., the same example can appear in multiple iterations).
+
+  References: https://arxiv.org/abs/1807.01647 and
+  https://arxiv.org/abs/1908.10530
+
+  Attributes:
+    batch_size: The number of examples per batch.
+    iterations: The number of total iterations / batches to generate.
+    replace: Whether to sample with replacement within each batch.
+  """
+
+  batch_size: int
+  iterations: int
+  replace: bool = False
+
+  def batch_iterator(
+      self, num_examples: int, rng: RngType = None
+  ) -> Iterator[np.ndarray]:
+    if self.batch_size < 0:
+      raise ValueError(f'batch_size must be >= 0, got {self.batch_size}.')
+    if not self.replace and self.batch_size > num_examples:
+      raise ValueError(
+          'batch_size must be <= num_examples when replace is False.'
+      )
+    rng = np.random.default_rng(rng)
+    dtype = np.min_scalar_type(-num_examples)
+    for _ in range(self.iterations):
+      yield rng.choice(
+          num_examples,
+          size=self.batch_size,
+          replace=self.replace,
+      ).astype(dtype, copy=False)
 
 
 @dataclasses.dataclass(frozen=True)

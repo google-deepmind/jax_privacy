@@ -194,14 +194,14 @@ class DenseTest(parameterized.TestCase):
     )
 
   # pylint:disable=bad-whitespace
-  # pyformat:disable
+  # fmt:off
   @parameterized.named_parameters(
       ('single_epoch', 1,  None, False),
       ('full_batch',   16, None, False),
       ('multi_epoch',  4,  None, False),
       ('banded',       4,  4,    False),
       ('equal_norm',   4,  None, True))
-  # pyformat:enable
+  # fmt:on
   # pylint:enable=bad-whitespace
   def test_optimization_worked(self, epochs, bands, equal_norm):
     A = np.tri(16)

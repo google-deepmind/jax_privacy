@@ -1,25 +1,29 @@
 name: ci
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: ["main"]
+    paths-ignore: ["README.md"]
   pull_request:
     branches: ["main"]
+    paths-ignore: ["README.md"]
 
 jobs:
   lint:
-    name: "Lint: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        python-version: ["3.11"]
-        os: [ubuntu-latest]
+    name: "Lint: Python 3.11"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: "actions/checkout@v6"
       - uses: "actions/setup-python@v6"
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: pyproject.toml
       - name: Install Linting Tools
         run: |
           python -m pip install --upgrade pip
@@ -27,15 +31,18 @@ jobs:
       - name: Run flake
         run: |
           flake8 jax_privacy tests examples
+      - name: Check formatting with Pyink
+        run: |
+          pyink --check --diff jax_privacy tests examples || { echo -e "\n---> Formatting check failed. To fix, run `pip install pyink pyink[jupyter] && pyink jax_privacy tests examples` locally and commit the changes." >&2; exit 1; }
       - name: Run pydocstyle
         run: |
           pydocstyle --convention=google --add-ignore=D101,D102,D103,D105,D202,D402 jax_privacy/
       - name: Run pylint
         shell: bash
         run: |
-          pylint jax_privacy || pylint-exit -efail -wfail -cfail -rfail $?
-          pylint examples || pylint-exit -efail -wfail -cfail -rfail $?
-          pylint tests -d W0101,W0212,C0114 || pylint-exit -efail -wfail -cfail -rfail $?
+          pylint --rcfile=.pylintrc jax_privacy || pylint-exit -efail -wfail -cfail -rfail $?
+          pylint --rcfile=.pylintrc examples || pylint-exit -efail -wfail -cfail -rfail $?
+          pylint --rcfile=.pylintrc tests -d W0101,W0212,C0114 || pylint-exit -efail -wfail -cfail -rfail $?
       - name: Run pytype
         run: |
           pytype jax_privacy -k
@@ -45,67 +52,94 @@ jobs:
   test:
     name: "Unit Test: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11"]
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: "actions/checkout@v6"
       - uses: "actions/setup-python@v6"
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
+          cache-dependency-path: pyproject.toml
       - name: Install Test Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[test,examples]"
-      - name: Run Doctests
+
+      # 1. Linux: Full Power (Parallel + Coverage)
+      - name: Run Doctests (Linux)
+        if: runner.os == 'Linux'
         run: |
           pytest --doctest-modules jax_privacy
-      - name: Run Standard Tests
+      - name: Run Standard Tests (Linux)
+        if: runner.os == 'Linux'
         run: |
-          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test"
-          pytest -n auto tests/ -k "distributed_noise_generation_test"
-          pytest -n auto tests/ -k "sharding_utils_test"
+          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
+          pytest -n auto tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml --cov=jax_privacy --cov-report=xml --cov-append
+          pytest -n auto tests/ -k "sharding_utils_test" --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
+
+      # 2. Windows: Fast Mode (Sequential + No Coverage)
+      - name: Run Standard Tests (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pytest tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test" --junitxml=report1.xml
+          pytest tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml
+          pytest tests/ -k "sharding_utils_test" --junitxml=report3.xml
+      - name: Upload pytest reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-reports-${{ matrix.os }}
+          path: report*.xml
+       
+      - name: Upload coverage to Codecov
+        if: runner.os == 'Linux'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
 
   matrix-tests:
-    name: "Matrix Tests: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
+    name: "Heavy Tests: Linux Only"
     needs: lint
-    runs-on: "${{ matrix.os }}"
-    strategy:
-      matrix:
-        python-version: ["3.11"]
-        os: [ubuntu-latest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: "actions/checkout@v6"
       - uses: "actions/setup-python@v6"
         with:
-          python-version: "${{ matrix.python-version }}"
+          python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[test]"
       - name: Run Heavy Tests
+        env:
+          HYPOTHESIS_PROFILE: dpftrl_default
         run: |
-          export HYPOTHESIS_PROFILE=dpftrl_default
           pytest -n auto tests/ -k "matrix_factorization" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
         shell: bash
 
+
   docs:
-    name: "Docs: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
+    name: "Docs: Python 3.11"
     needs: lint
-    runs-on: "${{ matrix.os }}"
-    strategy:
-      matrix:
-        python-version: ["3.11"]
-        os: [ubuntu-latest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: "actions/checkout@v6"
       - uses: "actions/setup-python@v6"
         with:
-          python-version: "${{ matrix.python-version }}"
+          python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: pyproject.toml
       - name: Install Docs Dependencies
         run: |
           python -m pip install --upgrade pip
