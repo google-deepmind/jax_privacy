@@ -80,8 +80,8 @@ def init_model_params(
             'proj': random.normal(layer_key[3], (embed_dim, embed_dim)) * 0.1,
         },
         'mlp': {
-          'fc1': (
-              random.normal(layer_key[4], (embed_dim, 4 * embed_dim)) * 0.1
+            'fc1': (
+                random.normal(layer_key[4], (embed_dim, 4 * embed_dim)) * 0.1
             ),
             'fc2': (
                 random.normal(layer_key[5], (4 * embed_dim, embed_dim)) * 0.1
