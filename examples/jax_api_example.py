@@ -104,9 +104,7 @@ def updated_model_params(
   return jax.tree.map(lambda p, g: p - lr * g, model_params, noisy_grads)
 
 
-def main(argv: Sequence[str]) -> None:
-  if len(argv) > 1:
-    raise app.UsageError("Too many command-line arguments.")
+def main(_):
 
   true_w = 2.0
   true_b = 1.0

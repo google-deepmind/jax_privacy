@@ -75,9 +75,7 @@ def create_benchmark(
   return params, feature_matrix, labels
 
 
-def main(argv: Sequence[str]) -> None:
-  if len(argv) > 1:
-    raise app.UsageError('Too many command-line arguments.')
+def main(_):
 
   true_params, feature_matrix, labels = create_benchmark(USERS, FEATURES)
   params = jax.tree.map(jnp.zeros_like, true_params)
