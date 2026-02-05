@@ -25,11 +25,67 @@ i.e. the add-remove adjacency, but this is equivalent to the zero-out adjacency
 as of now for all methods in this library.
 """
 
+import warnings
+
 from jax_privacy import batch_selection
 import numpy as np
 import scipy as sp
 
 Seed = int | np.random.Generator | None
+
+
+class _MaybeJit:
+  """Jit a function with numba, if it is available.
+
+  We don't want to take a hard dependency on numba, especially since not all
+  methods in this library invoke it and it is only needed for efficiency. So,
+  we should jit if available, and otherwise use the unjitted function rather
+  than raise an error.
+  """
+
+  def __init__(self, func):
+    self._func = func
+    self._jitted_func = None
+    self._numba = None
+    self._tried_import = False
+
+  def _maybe_try_import(self):
+    """If we haven't already tried to import numba, do so."""
+    if not self._tried_import:
+      try:
+        import numba  # pylint: disable=g-import-not-at-top, import-outside-toplevel
+
+        self._numba = numba
+      except ImportError:
+        self._numba = None
+        warnings.warn(
+            'numba is not available. Functions may be very slow.',
+            ImportWarning,
+        )
+      finally:
+        self._tried_import = True
+
+  def __call__(self, *args, **kwargs):
+    if self._jitted_func is None:
+      self._maybe_try_import()
+      if self._numba:
+        self._jitted_func = self._numba.jit(self._func)
+      else:
+        self._jitted_func = self._func
+
+    return self._jitted_func(*args, **kwargs)
+
+
+def maybe_jit(func):
+  """Applies numba.jit only if numba is available.
+
+  Args:
+    func: The function to potentially JIT compile.
+
+  Returns:
+    The function, jitted if numba is available and unmodified otherwise.
+  """
+  return _MaybeJit(func)
 
 
 def _validate_c_col(c_col: np.ndarray) -> None:
@@ -114,6 +170,74 @@ def _generate_balls_in_bins_sample(
   return rng.normal(loc=mode, scale=noise_multiplier)
 
 
+def _generate_b_min_sep_sample(
+    strategy: batch_selection.BMinSepSampling,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+    seed: Seed = None,
+    positive_sample: bool = True,
+) -> np.ndarray:
+  """Generates a sample from the dominating pair for DP-BandMF using b-min-sep sampling.
+
+  See https://arxiv.org/abs/2602.09338 for details.
+
+  Args:
+    strategy: The b-min-sep sampling strategy to use.
+    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
+      clip norm, not accounting for the norm of c_col.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D. It is assumed that the length of c_col is the same as the minimum
+      separation parameter in the sampling scheme.
+    seed: The rng or seed to use for sampling.
+    positive_sample: If True, we sample from the distribution in the dominating
+      pair corresponding to the case where the sensitive example is included.
+      Otherwise, we sample from the other case in the dominating pair, where the
+      sensitive example is not included.
+
+  Returns:
+    A sample from the dominating PLD for DP-BandMF using b-min-sep sampling.
+  """
+  # Aliases for readability of math.
+  p = strategy.sampling_prob
+  b = strategy.min_sep
+  if strategy.iterations <= 0:
+    raise ValueError('iterations must be positive.')
+  if noise_multiplier <= 0:
+    raise ValueError('noise_multiplier must be positive.')
+  if not (0 < strategy.sampling_prob < 1):
+    raise ValueError('sampling_prob must be in (0, 1).')
+  _validate_c_col(c_col)
+  if c_col.size > strategy.min_sep:
+    raise ValueError('c_col must have length less than or equal to min_sep.')
+  if c_col.size > strategy.iterations:
+    c_col = c_col[: strategy.iterations]
+  rng = np.random.default_rng(seed)
+  if positive_sample:
+    pre_filter_x = rng.binomial(1, p, size=strategy.iterations)
+    x = np.zeros(strategy.iterations, dtype=np.float32)
+    if strategy.warm_start:
+      # We use a 'warm-start' such that each example is only available in the
+      # first iteration w.p. 1 / (1 + (b - 1) * p), and otherwise is first
+      # available in a uniformly random iteration from the next b - 1
+      # iterations.
+      i = rng.choice(
+          range(b),
+          p=[1 / (1 + (b - 1) * p)] + [p / (1 + (b - 1) * p)] * (b - 1),
+      )
+    else:
+      i = 0
+    while i < strategy.iterations:
+      if pre_filter_x[i] == 1:
+        x[i] = 1.0
+        i += b
+      else:
+        i += 1
+    mode = _banded_c_times_x(c_col, x)
+  else:
+    mode = np.zeros(strategy.iterations)
+  return rng.normal(loc=mode, scale=noise_multiplier)
+
+
 def generate_sample(
     strategy: batch_selection.BatchSelectionStrategy,
     noise_multiplier: float,
@@ -145,6 +269,18 @@ def generate_sample(
     return _generate_balls_in_bins_sample(
         strategy.iterations,
         strategy.cycle_length,
+        noise_multiplier,
+        c_col,
+        seed,
+        positive_sample,
+    )
+  elif isinstance(strategy, batch_selection.BMinSepSampling):
+    if strategy.truncated_batch_size:
+      raise ValueError(
+          'Truncated batch size is not supported for sample generation.'
+      )
+    return _generate_b_min_sep_sample(
+        strategy,
         noise_multiplier,
         c_col,
         seed,
@@ -205,6 +341,90 @@ def _compute_balls_in_bins_privacy_loss(
   return sp.special.logsumexp(per_mode_privacy_loss) - np.log(epoch_length)
 
 
+@maybe_jit
+def _compute_b_min_sep_privacy_loss_numba(
+    min_sep: int,
+    sampling_prob: float,
+    sample: np.ndarray,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+    dot_products: np.ndarray,
+) -> np.ndarray:
+  """Computes the privacy loss for a sample from b-min-sep sampling with njit."""
+  # Aliases to make the math more readable / terse.
+  b = min_sep
+  n = sample.size
+  p = sampling_prob
+
+  suffix_losses = np.zeros(n)
+  squared_norms = np.ones(sample.size) * (np.linalg.norm(c_col) ** 2)
+  for i in range(1, c_col.size):
+    squared_norms[-i] = np.linalg.norm(c_col[:i]) ** 2
+  normal_llrs = (2 * dot_products - squared_norms) / (2 * noise_multiplier**2)
+  suffix_losses[-1] = np.logaddexp(np.log1p(-p), np.log(p) + normal_llrs[-1])
+  for i in range(n - 2, n - b - 1, -1):
+    suffix_losses[i] = np.logaddexp(
+        np.log1p(-p) + suffix_losses[i + 1], np.log(p) + normal_llrs[i]
+    )
+  for i in range(n - b - 1, -1, -1):
+    suffix_losses[i] = np.logaddexp(
+        np.log1p(-p) + suffix_losses[i + 1],
+        np.log(p) + normal_llrs[i] + suffix_losses[i + b],
+    )
+  return suffix_losses
+
+
+def _compute_b_min_sep_privacy_loss(
+    strategy: batch_selection.BMinSepSampling,
+    sample: np.ndarray,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+) -> float:
+  """Computes the privacy loss for a sample from b-min-sep sampling.
+
+  See https://arxiv.org/abs/2602.09338 for details. Note that the dynamic
+  program in the paper returns the likelihood ratio, while we return the privacy
+  loss which is a log-likelihood ratio.
+
+  Args:
+    strategy: The probability an example is sampled in a given iteration, given
+      that it was not sampled in any of the previous b-1 iterations. Note that
+      it will participate in 1 / (b - 1 + 1 / sampling_prob) fraction of the
+      iterations on average, not sampling_prob fraction of the iterations as in
+      Poisson sampling.
+    sample: The sample, generated by _generate_b_min_sep_sample.
+    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
+      clip norm, not accounting for the norm of c_col.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D.
+
+  Returns:
+    The privacy loss of the sample, assuming we sample from the distribution in
+    the dominating pair where the sensitive example is included.
+  """
+  # numba can't compile scipy operations, so scipy operations are done outside
+  # the jitted function.
+  dot_products = sp.signal.convolve(c_col[::-1], sample)[c_col.size - 1 :]
+  suffix_losses = _compute_b_min_sep_privacy_loss_numba(
+      strategy.min_sep,
+      strategy.sampling_prob,
+      sample,
+      noise_multiplier,
+      c_col,
+      dot_products,
+  )
+  if strategy.warm_start:
+    scaled_suffix_losses = (
+        np.log(strategy.sampling_prob) + suffix_losses[1 : strategy.min_sep]
+    )
+    log_summands = np.concatenate([[suffix_losses[0]], scaled_suffix_losses])
+    return sp.special.logsumexp(log_summands) - np.log(
+        1 + (strategy.min_sep - 1) * strategy.sampling_prob
+    )
+  else:
+    return suffix_losses[0]
+
+
 def compute_privacy_loss(
     strategy: batch_selection.BatchSelectionStrategy,
     sample: np.ndarray,
@@ -215,8 +435,8 @@ def compute_privacy_loss(
 
   This method reports the privacy loss assuming we sample from the distribution
   in the dominating pair where the sensitive example is included. To get the
-  privacy loss for when the other example is excluded, we simply negate the
-  privacy loss for the positive sample.
+  privacy loss for when the example is excluded, we simply negate the privacy
+  loss for the positive sample.
 
   Args:
     strategy: The batch selection strategy used to generate the sample.
@@ -237,6 +457,21 @@ def compute_privacy_loss(
       )
     return _compute_balls_in_bins_privacy_loss(
         strategy.cycle_length,
+        sample,
+        noise_multiplier,
+        c_col,
+    )
+  elif isinstance(strategy, batch_selection.BMinSepSampling):
+    if sample.size != strategy.iterations:
+      raise ValueError(
+          'Sample size must match the number of iterations of the strategy.'
+      )
+    if strategy.truncated_batch_size:
+      raise ValueError(
+          'Truncated batch size is not supported for privacy loss computation.'
+      )
+    return _compute_b_min_sep_privacy_loss(
+        strategy,
         sample,
         noise_multiplier,
         c_col,
