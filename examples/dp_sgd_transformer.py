@@ -58,7 +58,7 @@ def init_model_params(
     vocab_size: int = 256,
     embed_dim: int = 128,
     num_layers: int = 2,
-    max_len: int = 128
+    max_len: int = 128,
 ) -> Mapping[str, Any]:
   """Initializes Transformer parameters."""
   keys = random.split(key, 5)
@@ -71,26 +71,24 @@ def init_model_params(
   }
   layer_keys = random.split(keys[2], num_layers * 6)
   for i in range(num_layers):
-    layer_key = layer_keys[i*6:(i+1)*6]
+    layer_key = layer_keys[i * 6 : (i + 1) * 6]
     layer = {
-      'attn': {
-          'q': random.normal(layer_key[0], (embed_dim, embed_dim)) * 0.1,
-          'k': random.normal(layer_key[1], (embed_dim, embed_dim)) * 0.1,
-          'v': random.normal(layer_key[2], (embed_dim, embed_dim)) * 0.1,
-          'proj': random.normal(layer_key[3], (embed_dim, embed_dim)) * 0.1,
-      },
-      'mlp': {
-          'fc1': random.normal(
-            layer_key[4],
-            (embed_dim, 4 * embed_dim)
-          ) * 0.1,
-          'fc2': random.normal(
-            layer_key[5],
-            (4 * embed_dim, embed_dim)
-          ) * 0.1,
-      },
-      'ln1': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
-      'ln2': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
+        'attn': {
+            'q': random.normal(layer_key[0], (embed_dim, embed_dim)) * 0.1,
+            'k': random.normal(layer_key[1], (embed_dim, embed_dim)) * 0.1,
+            'v': random.normal(layer_key[2], (embed_dim, embed_dim)) * 0.1,
+            'proj': random.normal(layer_key[3], (embed_dim, embed_dim)) * 0.1,
+        },
+        'mlp': {
+            'fc1': (
+                random.normal(layer_key[4], (embed_dim, 4 * embed_dim)) * 0.1
+              ),
+              'fc2': (
+                  random.normal(layer_key[5], (4 * embed_dim, embed_dim)) * 0.1
+              ),
+        },
+        'ln1': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
+        'ln2': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
     }
     model_params['layers'].append(layer)
   return model_params
@@ -107,31 +105,20 @@ def transformer_block(
 
   num_heads = 4
   head_dim = q.shape[-1] // num_heads
-  q = q.reshape(
-    q.shape[0],
-    q.shape[1],
-    num_heads,
-    head_dim
-  ).transpose(0, 2, 1, 3)
-  k = k.reshape(
-    k.shape[0],
-    k.shape[1],
-    num_heads,
-    head_dim
-  ).transpose(0, 2, 1, 3)
-  v = v.reshape(
-    v.shape[0],
-    v.shape[1],
-    num_heads,
-    head_dim
-  ).transpose(0, 2, 1, 3)
+  q = q.reshape(q.shape[0], q.shape[1], num_heads, head_dim).transpose(
+      0, 2, 1, 3
+  )
+  k = k.reshape(k.shape[0], k.shape[1], num_heads, head_dim).transpose(
+      0, 2, 1, 3
+  )
+  v = v.reshape(v.shape[0], v.shape[1], num_heads, head_dim).transpose(
+      0, 2, 1, 3
+  )
 
   out = jax.nn.dot_product_attention(q, k, v, mask=mask)
 
   out = out.transpose(0, 2, 1, 3).reshape(
-    batch_x.shape[0],
-    batch_x.shape[1],
-    -1
+    batch_x.shape[0], batch_x.shape[1], -1
   )
   out = jnp.dot(out, model_params['attn']['proj'])
 
@@ -154,10 +141,8 @@ def layer_norm(
   mean = jnp.mean(batch_x, axis=-1, keepdims=True)
   var = jnp.var(batch_x, axis=-1, keepdims=True)
   return (
-    model_params['scale']
-    * (batch_x - mean)
-    / jnp.sqrt(var + 1e-5)
-    + model_params['bias']
+      model_params['scale'] * (batch_x - mean) / jnp.sqrt(var + 1e-5)
+      + model_params['bias']
   )
 
 
@@ -165,8 +150,8 @@ def model(model_params: Mapping[str, Any], batch_x: jax.Array) -> jax.Array:
   """Transformer forward pass."""
   seq_len = batch_x.shape[1]
   batch_x = (
-    model_params['embedding'][batch_x]
-    + model_params['pos_embedding'][:seq_len]
+      model_params['embedding'][batch_x]
+      + model_params['pos_embedding'][:seq_len]
   )
 
   mask = jnp.tri(seq_len)
@@ -197,8 +182,7 @@ def load_text_data(
   # Use tiny Shakespeare dataset
   ds = tfds.load('tiny_shakespeare', split='train')
   text = ''.join(
-    example['text'].numpy().decode('utf-8')
-    for example in ds.take(100)
+      example['text'].numpy().decode('utf-8') for example in ds.take(100)
   )
 
   chars = sorted(list(set(text)))
@@ -211,7 +195,7 @@ def load_text_data(
 
   seqs = []
   for i in range(0, len(data) - max_len - 1, max_len // 2):
-    seq = data[i:i+max_len+1]  # +1 for target
+    seq = data[i : i + max_len + 1]  # +1 for target
     seqs.append(seq)
 
   seqs = jnp.array(seqs)
@@ -225,8 +209,8 @@ def generate_text(
     max_len: int,
     length: int = 50,
     char_to_idx: Mapping[str, int] | None = None,
-    idx_to_char: Mapping[int, str] | None = None
-  ) -> str:
+    idx_to_char: Mapping[int, str] | None = None,
+) -> str:
   """Generates text using the trained model."""
   if char_to_idx is None or idx_to_char is None:
     return 'Generation not available without vocab'
@@ -294,14 +278,11 @@ def main(argv: Sequence[str]) -> None:
       batch_data: Tuple[jax.Array, jax.Array],
       is_padding_example: jax.Array,
       noise_state: Any,
-      opt_state: Any
+      opt_state: Any,
   ) -> Tuple[Mapping[str, Any], Any, jax.Array, Any]:
     batch_x, batch_y = batch_data
     grads, aux = grad_fn(
-      model_params,
-      batch_x,
-      batch_y,
-      is_padding_example=is_padding_example
+        model_params, batch_x, batch_y, is_padding_example=is_padding_example
     )
     loss = aux.values.mean()
     noisy_grads, noise_state = privatizer.update(grads, noise_state)
@@ -316,7 +297,7 @@ def main(argv: Sequence[str]) -> None:
 
   for step, batch_idx in enumerate(
       plan.batch_selection_strategy.batch_iterator(train_size)
-    ):
+  ):
 
     idx = batch_selection.pad_to_multiple_of(batch_idx, padding_multiple)
     is_padding_example = idx == -1
@@ -340,12 +321,12 @@ def main(argv: Sequence[str]) -> None:
   # Generate sample text with a seed from Shakespeare
   seed_text = 'ROMEO:'
   generated = generate_text(
-    model_params,
-    seed_text,
-    max_len=max_len,
-    length=100,
-    char_to_idx=char_to_idx,
-    idx_to_char=idx_to_char,
+      model_params,
+      seed_text,
+      max_len=max_len,
+      length=100,
+      char_to_idx=char_to_idx,
+      idx_to_char=idx_to_char,
 )
   print(f'\nGenerated text: {generated}')
   print('\nTraining complete!')
