@@ -80,12 +80,12 @@ def init_model_params(
             'proj': random.normal(layer_key[3], (embed_dim, embed_dim)) * 0.1,
         },
         'mlp': {
-            'fc1': (
-                random.normal(layer_key[4], (embed_dim, 4 * embed_dim)) * 0.1
-              ),
-              'fc2': (
-                  random.normal(layer_key[5], (4 * embed_dim, embed_dim)) * 0.1
-              ),
+          'fc1': (
+              random.normal(layer_key[4], (embed_dim, 4 * embed_dim)) * 0.1
+            ),
+            'fc2': (
+                random.normal(layer_key[5], (4 * embed_dim, embed_dim)) * 0.1
+            ),
         },
         'ln1': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
         'ln2': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
@@ -118,7 +118,7 @@ def transformer_block(
   out = jax.nn.dot_product_attention(q, k, v, mask=mask)
 
   out = out.transpose(0, 2, 1, 3).reshape(
-    batch_x.shape[0], batch_x.shape[1], -1
+      batch_x.shape[0], batch_x.shape[1], -1
   )
   out = jnp.dot(out, model_params['attn']['proj'])
 
@@ -327,7 +327,7 @@ def main(argv: Sequence[str]) -> None:
       length=100,
       char_to_idx=char_to_idx,
       idx_to_char=idx_to_char,
-)
+  )
   print(f'\nGenerated text: {generated}')
   print('\nTraining complete!')
 
