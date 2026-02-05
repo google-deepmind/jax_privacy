@@ -49,19 +49,12 @@ def init_model_params() -> Mapping[str, jax.Array]:
   return {"w": w, "b": b}
 
 
-def model(
-    params: Mapping[str, jax.Array],
-    x: int
-  ) -> int:
+def model(params: Mapping[str, jax.Array], x: int) -> int:
   """Defines the linear regression model."""
   return params["w"] * x + params["b"]
 
 
-def loss_fn(
-    params: Mapping[str, jax.Array],
-    x: int,
-    y: int
-  ) -> jax.Array:
+def loss_fn(params: Mapping[str, jax.Array], x: int, y: int) -> jax.Array:
   """Calculates the mean squared error loss."""
   predictions = model(params, x)
   return jnp.mean((predictions - y) ** 2)
@@ -71,7 +64,7 @@ def load_data(
     num_samples: Any,
     true_w: float = 2,
     true_b: float = 1,
-    noise_std: float = 0.1
+    noise_std: float = 0.1,
 ) -> Tuple[jax.Array, jax.Array]:
   """Generates synthetic linear regression data."""
   key = random.key(3)
@@ -150,10 +143,10 @@ def main(_):
 
   @jax.jit
   def dp_update_step(
-    model_params: Mapping[str, jax.Array],
-    batch_x: jax.Array,
-    batch_y: jax.Array,
-    noise_state: Any,
+      model_params: Mapping[str, jax.Array],
+      batch_x: jax.Array,
+      batch_y: jax.Array,
+      noise_state: Any,
   ) -> Tuple[Mapping[str, jax.Array], jax.Array, Any]:
     """Updates the model parameters using DP-SGD."""
     grads, aux_outputs = grad_and_value_fn(model_params, batch_x, batch_y)
@@ -167,9 +160,9 @@ def main(_):
 
   @jax.jit
   def update_step(
-    model_params: Mapping[str, jax.Array],
-    batch_x: jax.Array,
-    batch_y: jax.Array,
+      model_params: Mapping[str, jax.Array],
+      batch_x: jax.Array,
+      batch_y: jax.Array,
   ) -> Tuple[Mapping[str, jax.Array], jax.Array]:
     """Updates the model parameters without DP."""
     loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(
