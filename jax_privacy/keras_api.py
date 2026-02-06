@@ -42,11 +42,12 @@ Example Usage:
    private_model.get_noise_multiplier()
 """
 
+from collections.abc import Callable
 import dataclasses
 import functools
 import inspect
 import types
-import typing
+from typing import Any
 
 import chex
 import jax
@@ -72,8 +73,8 @@ class DPKerasConfig:
         privacy guarantees you have to achieve. You should not increase the
         epsilon only because of poor model performance.
       delta: The delta that defines the differential-privacy budget. The value
-        of it means the probablility of full disclosure, no-privacy. It should
-        be in (0, 1] and be as small as possible (e.g. 1e-5, smaller value more
+        of it means the probability of full disclosure, no-privacy. It should be
+        in (0, 1] and be as small as possible (e.g. 1e-5, smaller value more
         noise). You should set this value before training and only based on the
         privacy guarantees you have to achieve. You should not increase the
         delta only because of poor model performance.
@@ -356,9 +357,9 @@ _FitFnReturnType = keras.callbacks.History
 
 
 def _create_fit_fn_with_validation(
-    original_fit_fn: typing.Callable[..., _FitFnReturnType],
+    original_fit_fn: Callable[..., _FitFnReturnType],
     params: DPKerasConfig,
-) -> typing.Callable[..., _FitFnReturnType]:
+) -> Callable[..., _FitFnReturnType]:
   """Creates a fit function with validation for DP-SGD training.
 
    It validates that:
@@ -582,7 +583,7 @@ def _dp_train_step(
   return logs, state
 
 
-LossFn = typing.Callable[..., tuple[chex.Numeric, _AuxType]]
+LossFn = Callable[..., tuple[chex.Numeric, _AuxType]]
 
 
 def _resolve_noise_multiplier(
@@ -716,7 +717,7 @@ def _get_param(
     param_name: str,
     *args,
     **kwargs,
-) -> typing.Any:
+) -> Any:
   """Returns the value of the parameter in the method call.
 
   This function is used to get the value of the parameter in the method
