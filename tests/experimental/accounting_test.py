@@ -74,13 +74,18 @@ def _make_test_case(event_fn, accountant):
   return {"event_fn": event_fn, "accountant": accountant}
 
 
-TEST_CASES = tuple(
-    _make_test_case(ev, PLD_ACCOUNTANT) for ev in MAKE_EVENT_FNS + PLD_EVENT_FNS
-) + tuple(
-    _make_test_case(event_fn, RDP_ACCOUNTANT) for event_fn in MAKE_EVENT_FNS
-) + tuple(
-    _make_test_case(event_fn, RDP_REPLACE_ACCOUNTANT)
-    for event_fn in RDP_REPLACE_EVENT_FNS
+TEST_CASES = (
+    tuple(
+        _make_test_case(ev, PLD_ACCOUNTANT)
+        for ev in MAKE_EVENT_FNS + PLD_EVENT_FNS
+    )
+    + tuple(
+        _make_test_case(event_fn, RDP_ACCOUNTANT) for event_fn in MAKE_EVENT_FNS
+    )
+    + tuple(
+        _make_test_case(event_fn, RDP_REPLACE_ACCOUNTANT)
+        for event_fn in RDP_REPLACE_EVENT_FNS
+    )
 )
 
 
