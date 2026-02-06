@@ -74,7 +74,7 @@ class _NoiseAdder(Protocol):
   """Protocol specifying the semantics of _IntermediateStrategy.add.
 
   Will be called as add(value, noise), where the first argument represents the
-  input and can have abritrary shape/sharding while the second arguments
+  input and can have arbitrary shape/sharding while the second arguments
   represents the noise and will have shape/sharding
   specified by get_noise_structure (subject to the formal guarantees above).
 
@@ -102,7 +102,7 @@ class _IntermediateStrategy(NamedTuple):
 
 
 # Our public API expects an Enum to prevent users from passing in a custom
-# implementation that breaks the formal guarantees. Custom implementatations
+# implementation that breaks the formal guarantees. Custom implementations
 # can be used, but should checked in and reviewed by JAX Privacy authors.
 class SupportedStrategies(enum.Enum):
   """Supported strategies for generating intermediate noise."""
