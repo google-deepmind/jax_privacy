@@ -453,9 +453,7 @@ def _create_fit_fn_with_validation(
     )
     x = _get_param(fit_signature, 'x', *args, **kwargs)
     y = _get_param(fit_signature, 'y', *args, **kwargs)
-    sample_weight = _get_param(
-        fit_signature, 'sample_weight', *args, **kwargs
-    )
+    sample_weight = _get_param(fit_signature, 'sample_weight', *args, **kwargs)
     validation_split = _get_param(
         fit_signature, 'validation_split', *args, **kwargs
     )
@@ -552,7 +550,7 @@ def _validate_random_access_training_data(
   x_size = _leading_batch_size(x, name='x')
   if x_size != train_size:
     raise ValueError(
-        f'Training data size must match DPKerasConfig.train_size. Got'
+        'Training data size must match DPKerasConfig.train_size. Got'
         f' x.shape[0]={x_size} and train_size={train_size}.'
     )
   if y is not None:
