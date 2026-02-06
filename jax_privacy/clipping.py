@@ -39,7 +39,7 @@ class BoundedSensitivityCallable:
   """Callable with a sensitivity property.
 
   If has_aux is False, the sensitivity guarantee holds for the entire output
-  which may be an arbitrary pyree of JAX Arrays.  If has_aux is False, the
+  which may be an arbitrary PyTree of JAX Arrays.  If has_aux is False, the
   output of the function is a pair `(value, aux)` and the sensitivity guarantee
   only holds for `value` PyTree. The aux PyTree is returned on a per-example
   basis (i.e., as a PyTree of arrays having a batch axis).  The caller should
@@ -204,7 +204,7 @@ def _num_real_microbatches(
 ) -> int | jax.Array:
   """Calculates the number of non-padding microbatches.
 
-  The returned  result is 1 + the index of the last microbatch that contains at
+  The returned result is 1 + the index of the last microbatch that contains at
   least one non-padding example.  This means that microbatches consisting of
   all-padding examples that do not appear at the end will be treated as a real
   microbatch.
@@ -294,12 +294,12 @@ def clipped_fun(
     nan_safe: If True, the formal guarantees of the returned Callable still
       holds in the presence of NaNs and infs. See `clip_pytree` for more details
       on this argument.
-    dtype: Optional dtype for the clipped+aggregated pytree. If None, the dtype
+    dtype: Optional dtype for the clipped+aggregated PyTree. If None, the dtype
       will be the same as the dtypes of the function output. Can be useful to
       avoid overflow issues when using low-precision dtypes as the transformed
       function computes a sum over a potentially large batch.
-    prng_argnum: If set, specifies which argument of `fun` is a prng key. The
-      prng will be split to have a batch dimension and vmapped over.
+    prng_argnum: If set, specifies which argument of `fun` is a PRNG key. The
+      PRNG will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap.
 
   Returns:
@@ -501,8 +501,8 @@ def clipped_grad(
     batch_argnums: Specifies which argument(s) of `fun` contain the batch
       dimension (usually the data and labels). Can be an integer or a sequence
       of integers. All arguments specified here must have the same size along
-      their first dimension (the batch dimension) the default value of 1 assumes
-      the signature of fun is `fun(params, batch)`.
+      their first dimension (the batch dimension). The default value of 1
+      assumes the signature of fun is `fun(params, batch)`.
     keep_batch_dim: If True, batch inputs will be passed to `fun` with a leading
       batch axis of size 1.  If False, this size 1 axis will be dropped
       (reducing the rank of the batch args by 1 before passing to `fun`). The
@@ -536,8 +536,8 @@ def clipped_grad(
       the same as the dtypes of the gradient function. Can be useful to avoid
       overflow issues when using low-precision dtypes as the returned function
       computes a sum over a potentially large batch.
-    prng_argnum: If set, specifies which argumnet of `fun` is a prng key. The
-      prng will be split to have a batch dimension and vmapped over.
+    prng_argnum: If set, specifies which argument of `fun` is a PRNG key. The
+      PRNG will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap. Only relevant in distributed settings.
 
   Returns:
