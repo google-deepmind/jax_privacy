@@ -1,0 +1,20 @@
+name: Auto Assign PR Reviewer
+
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: wow-actions/auto-assign@v3
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Option 1: Specify reviewers directly
+          reviewers: |
+            ryan112358
+            RamSaw
+            arunganesh
+          addAssignees: false
+          numberOfReviewers: 1
