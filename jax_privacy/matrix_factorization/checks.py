@@ -14,6 +14,7 @@
 # limitations under the License.
 
 """Utilities for confirming various sybmols are used correctly."""
+
 from typing import Optional
 import jax
 import jax.numpy as jnp

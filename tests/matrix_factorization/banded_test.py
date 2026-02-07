@@ -102,7 +102,7 @@ class BandedTest(parameterized.TestCase):
     params = jnp.array([[1, 4], [2, 5], [3, 6]])
     C = banded.ColumnNormalizedBanded(params=params)
     actual = C.materialize()
-    # pyformat: disable
+    # fmt: off
     # pylint: disable=bad-whitespace
     expected = jnp.array([
         [1 / jnp.sqrt(17), 0,                0],
@@ -110,7 +110,7 @@ class BandedTest(parameterized.TestCase):
         [0,                5 / jnp.sqrt(29), 1],
     ])
     # pylint: enable=bad-whitespace
-    # pyformat: enable
+    # fmt: on
     assert_allclose(actual, expected)
 
   def test_toeplitz_constructor(self):

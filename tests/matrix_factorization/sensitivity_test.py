@@ -239,14 +239,14 @@ class GetSensitivityBandedTest(parameterized.TestCase):
     )
 
   def test_banded(self):
-    # pyformat: disable, pylint: disable=bad-whitespace
+    # fmt: off, pylint: disable=bad-whitespace
     C = jnp.array([
         [1.0, 0.0, 0.0, 0.0],
         [2.0, 1.0, 0.0, 0.0],
         [0.0, 1.0, 1.0, 0.0],
         [0.0, 0.0, 1.0, -6.0],
     ])
-    # pyformat: enable, pylint: enable=bad-whitespace
+    # fmt: on, pylint: enable=bad-whitespace
 
     with self.assertRaisesRegex(ValueError, 'must be orthogonal'):
       sensitivity_lib.get_sensitivity_banded(C, min_sep=1)
@@ -266,14 +266,14 @@ class GetSensitivityBandedTest(parameterized.TestCase):
 class SensitivityUpperBoundTest(absltest.TestCase):
 
   def test_matches_banded_sensitivity(self):
-    # pyformat: disable, pylint: disable=bad-whitespace
+    # fmt: off, pylint: disable=bad-whitespace
     C = jnp.array([
         [1.0, 0.0, 0.0, 0.0],
         [2.0, 1.0, 0.0, 0.0],
         [0.0, 1.0, 1.0, 0.0],
         [0.0, 0.0, 1.0, -6.0],
     ])
-    # pyformat: enable, pylint: enable=bad-whitespace
+    # fmt: on, pylint: enable=bad-whitespace
     # 1 participation
     sensitivity = sensitivity_lib.get_min_sep_sensitivity_upper_bound(
         C, min_sep=2, max_participations=1
@@ -286,14 +286,14 @@ class SensitivityUpperBoundTest(absltest.TestCase):
       self.assertAlmostEqual(sensitivity, np.sqrt(5.0 + 36.0), places=5)
 
   def test_dense_X(self):
-    # pyformat: disable, pylint: disable=bad-whitespace
+    # fmt: off, pylint: disable=bad-whitespace
     C = jnp.array([
         [1.0, 0.0, 0.0, 0.0],
         [2.0, 1.0, 0.0, 0.0],
         [0.5, 1.0, 1.0, 0.0],
         [0.4, 0.0, 1.0, -6.0],
     ])
-    # pyformat: enable, pylint: enable=bad-whitespace
+    # fmt: on, pylint: enable=bad-whitespace
     X = C.T @ C
     upper = sensitivity_lib.get_min_sep_sensitivity_upper_bound_for_X(X, 1)
     expected = jnp.sqrt(jnp.abs(X).sum())

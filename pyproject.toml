@@ -1,3 +1,106 @@
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "jax_privacy"
+version = "1.1.0"
+description = "Algorithms for Privacy-Preserving Machine Learning in JAX."
+authors = [
+  { name="Google DeepMind", email="jax-privacy-dev@google.com" },
+]
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "absl-py",
+    "dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting",
+    "jax>=0.7.1",
+    "jaxlib>=0.7.1",
+    "pydantic",
+    "numpy",
+    "optax @ git+https://github.com/google-deepmind/optax.git",
+    "scipy",
+    "chex",
+]
+
+[project.optional-dependencies]
+lint = [
+    "flake8",
+    "pydocstyle",
+    "pylint",
+    "pylint-exit",
+    "pytype",
+    "pyink",
+    "pyink[jupyter]",
+]
+
+test = [
+    "pytest",
+    "pytest-xdist",
+    "pytest-cov",
+    "hypothesis",
+    "crc32c",
+    "keras",
+]
+
+examples = [
+    "dinosaur",
+    "equinox",
+    "orbax",
+    "scikit-learn==1.5.0",
+    "grain",
+    "keras",
+    "tensorflow",
+]
+
+docs = [
+    "sphinx<9.0.0",
+    "sphinx-rtd-theme",
+    "myst-nb",
+    "sphinx-collections",
+    "ipykernel",
+    "sphinx_autodoc_typehints",
+    "tensorflow",
+    "keras",
+]
+
+dev = [
+    "jax_privacy[lint,test,examples,docs]",
+    "build",
+    "wheel",
+]
+
+[project.urls]
+Homepage = "https://github.com/google-deepmind/jax_privacy"
+
+[tool.setuptools.packages.find]
+exclude = ["*_test.py", "examples*", "experiments*"]
+namespaces = true
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+
+# We include pyink to allow external contributors to optionally, but easily,
+# pass google internal formatting checks.
+[tool.pyink]
+line-length = 80
+unstable = true
+target-version = []
+pyink-indentation = 2
+pyink-ipynb-indentation = 2
+pyink-use-majority-quotes = true
+pyink-annotation-pragmas = [
+  "noqa",
+  "pylint:",
+  "type: ignore",
+  "pytype:",
+  "mypy:",
+  "pyright:",
+  "pyre-",
+]
+

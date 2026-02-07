@@ -36,8 +36,6 @@ from absl import app
 from absl import flags
 import jax
 import jax.numpy as jnp
-# pylint: disable=g-importing-member
-from jax.experimental.shard import reshard
 from jax_privacy import noise_addition
 from jax_privacy.matrix_factorization import toeplitz
 
@@ -112,7 +110,7 @@ def bert_model_params(hidden_size: int) -> Any:
       is_leaf=lambda x: isinstance(x, tuple),
   )
 
-  return reshard(model_params, jax.sharding.PartitionSpec())
+  return jax.sharding.reshard(model_params, jax.sharding.PartitionSpec())
 
 
 def toy_model_params(hidden_size: int) -> jax.Array:
@@ -120,7 +118,9 @@ def toy_model_params(hidden_size: int) -> jax.Array:
   # This is a toy example where the model is just a 2D array of size (H, H^2).
   leaf_shape = (hidden_size, hidden_size**2)
 
-  return reshard(jnp.zeros(leaf_shape), jax.sharding.PartitionSpec('x', 'y'))
+  return jax.sharding.reshard(
+      jnp.zeros(leaf_shape), jax.sharding.PartitionSpec('x', 'y')
+  )
 
 
 def generate_noise(
@@ -155,17 +155,18 @@ def generate_noise(
       # In real applications, pass in the actual clipped gradient here.
       # For benchmarking, we just pass in something that has the same structure.
       noisy_grad, state = privatizer.update(
-          pytree_like_model_params, state,
+          pytree_like_model_params,
+          state,
       )
     return state, noisy_grad
 
   t0 = time.time()
   compiled_run = run.lower(model_params).compile()
   t1 = time.time()
-  print('[BandMF] Compilation time: %.3f seconds' % (t1 - t0))
+  print(f'[BandMF] Compilation time: {t1-t0:.3f} seconds')
   state, noisy_grad = jax.block_until_ready(compiled_run(model_params))
   t2 = time.time()
-  print('[BandMF] Per-step run time: %.3f seconds' % ((t2 - t1) / steps))
+  print(f'[BandMF] Per-step run time: {(t2-t1)/steps:.3f} seconds')
 
   return state, noisy_grad
 

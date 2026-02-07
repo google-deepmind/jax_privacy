@@ -13,13 +13,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""API for adding DP-SGD to a Keras model."""
+"""API for adding DP-SGD to a Keras model.
 
+Example Usage:
+
+.. code-block:: python
+
+   import os
+   os.environ["KERAS_BACKEND"] = "jax"
+   import keras
+   from jax_privacy import keras_api
+
+   model = keras.Sequential([
+       keras.Input(shape=(1,)),
+       keras.layers.Dense(1),
+   ])
+   params = keras_api.DPKerasConfig(
+       epsilon=1.0,
+       delta=1e-5,
+       clipping_norm=1.0,
+       batch_size=8,
+       gradient_accumulation_steps=1,
+       train_steps=10,
+       train_size=80,
+       noise_multiplier=1.0,
+   )
+   private_model = keras_api.make_private(model, params)
+   private_model.get_noise_multiplier()
+"""
+
+from collections.abc import Callable
 import dataclasses
 import functools
 import inspect
 import types
-import typing
+from typing import Any
 
 import chex
 import jax
@@ -46,13 +74,12 @@ class DPKerasConfig:
         privacy guarantees you have to achieve. You should not increase the
         epsilon only because of poor model performance.
       delta: The delta that defines the differential-privacy budget. The value
-        of it means the probablility of full disclosure, no-privacy. It should
-        be in (0, 1] and be as small as possible (e.g. 1e-5, smaller value more
+        of it means the probability of full disclosure, no-privacy. It should be
+        in (0, 1] and be as small as possible (e.g. 1e-5, smaller value more
         noise). You should set this value before training and only based on the
         privacy guarantees you have to achieve. You should not increase the
         delta only because of poor model performance.
-      clipping_norm: The clipping norm for the gradients. TODO: how to choose
-        it?
+      clipping_norm: The clipping norm for the per-example gradients.
       batch_size: The batch size for the training.
       gradient_accumulation_steps: The number of gradient accumulation steps.
         This is the number of batches to accumulate before adding noise and
@@ -85,16 +112,16 @@ class DPKerasConfig:
       seed: The seed for the random number generator. If None, a random seed is
         used. It must be an int64. Useful for reproducibility.
       microbatch_size: The size of each microbatch. The device batch size will
-        be split up into microbatches of this size and processed sequentially
-        on the forward/backward pass. By setting microbatch_size=batch_size,
-        the forward/backward pass is performed once on the entire batch using
+        be split up into microbatches of this size and processed sequentially on
+        the forward/backward pass. By setting microbatch_size=batch_size, the
+        forward/backward pass is performed once on the entire batch using
         jax.vmap. By setting microbatch_size=1, the forward/backward pass is
         performed on each batch element individually, with the gradients
-        accumulated sequentially using jax.lax.scan. Setting to batch_size
-        gives the largest degree of parllelism, while setting to 1 gives the
-        least memory consumption. Any value in between can be used to trade-off
-        memory consumption vs. parallel computation. This parameter is similar
-        to `gradient_accumulation_steps`, but it works fully inside of device
+        accumulated sequentially using jax.lax.scan. Setting to batch_size gives
+        the largest degree of parllelism, while setting to 1 gives the least
+        memory consumption. Any value in between can be used to trade-off memory
+        consumption vs. parallel computation. This parameter is similar to
+        `gradient_accumulation_steps`, but it works fully inside of device
         memory under a single jitted function, while
         `gradient_accumulation_steps` operates outside of the jit boundary.
         The default value is None, which means that no microbatching is used,
@@ -252,6 +279,7 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   #    that updates the metrics variables for DP-SGD training.
 
   _add_dp_sgd_attributes(model, params)
+  model.get_noise_multiplier = types.MethodType(get_noise_multiplier, model)
   model.fit = types.MethodType(
       _create_fit_fn_with_validation(model.fit, params), model
   )
@@ -267,12 +295,34 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   return model
 
 
+def get_noise_multiplier(model: keras.Model) -> float:
+  """Returns the noise multiplier used for DP-SGD training.
+
+  If the noise multiplier is not set in DPKerasConfig, this will calibrate it
+  once and cache the value on the model.
+
+  Args:
+    model: A Keras model previously wrapped with make_private().
+
+  Returns:
+    The configured or calibrated noise multiplier.
+  """
+  if not hasattr(model, '_dp_params'):
+    raise ValueError(
+        'Model does not appear to be a DP-SGD Keras model. '
+        'Call make_private() first.'
+    )
+  return _resolve_noise_multiplier(
+      model._dp_params, model  # pylint: disable=protected-access
+  )
+
+
 def _validate_model(model: keras.Model) -> None:
   if not isinstance(model, keras.Model):
     raise ValueError(f'Model {model} is not a Keras model.')
   if keras.config.backend() != 'jax':
     raise ValueError(f'Model {model} must use Jax backend.')
-  # TODO: Add validation that the model does not contain layers
+  # TODO: b/415360727 - Add validation that the model does not contain layers
   # that are not compatible with DP-SGD, e.g. batch norm.
 
 
@@ -296,6 +346,7 @@ def _validate_optimizer(model: keras.Model, params: DPKerasConfig) -> None:
 def _add_dp_sgd_attributes(model: keras.Model, params: DPKerasConfig) -> None:
   """Adds DP-SGD training attributes to the Keras model."""
   model._dp_params = params  # pylint: disable=protected-access
+  model._dp_noise_multiplier = params.noise_multiplier  # pylint: disable=protected-access
   seed = _get_random_int64() if params.seed is None else params.seed
   model.add_weight(
       name='_rng',
@@ -317,9 +368,9 @@ _FitFnReturnType = keras.callbacks.History
 
 
 def _create_fit_fn_with_validation(
-    original_fit_fn: typing.Callable[..., _FitFnReturnType],
+    original_fit_fn: Callable[..., _FitFnReturnType],
     params: DPKerasConfig,
-) -> typing.Callable[..., _FitFnReturnType]:
+) -> Callable[..., _FitFnReturnType]:
   """Creates a fit function with validation for DP-SGD training.
 
    It validates that:
@@ -555,19 +606,21 @@ def _dp_train_step(
     # because the check is based on the static values, i.e. they won't
     # change between invocations, and if the condition is violated, it will
     # always fail during the tracing (first invocation) of this function.
-    raise ValueError(
+    error_message = (
         'The batch size in the DP parameters is not equal to the batch size of'
         f' the actual data: {dp_batch_size=} !='
         f' actual_batch_size={actual_batch_size}. Please make sure that the'
         ' batch size in the DP parameters is equal to the batch size of the'
         ' data you supplied in the fit() call.'
-    )  # pylint: disable=protected-access
+    )
+    raise ValueError(error_message)
 
   (_, aux), grads = _noised_clipped_grads(
       self.compute_loss_and_updates,
       self._dp_params,  # pylint: disable=protected-access
       state,
       data,
+      model=self,
   )
   (
       unscaled_loss,
@@ -582,7 +635,7 @@ def _dp_train_step(
   ) = self.optimizer.stateless_apply(
       optimizer_variables, grads, trainable_variables
   )
-  # TODO: access it and update it by name.
+  # TODO: b/415360727 - access it and update it by name.
   non_trainable_variables[1] = non_trainable_variables[1] + 1
 
   logs, metrics_variables = self._update_metrics_variables(  # pylint: disable=protected-access
@@ -610,7 +663,32 @@ def _dp_train_step(
   return logs, state
 
 
-LossFn = typing.Callable[..., tuple[chex.Numeric, _AuxType]]
+LossFn = Callable[..., tuple[chex.Numeric, _AuxType]]
+
+
+def _resolve_noise_multiplier(
+    dp_params: DPKerasConfig, model: keras.Model | None = None
+) -> float:
+  """Returns a cached noise multiplier or calibrates it once.
+
+  Args:
+    dp_params: DP configuration to read or calibrate the noise multiplier from.
+    model: Optional Keras model used to cache/reuse the calibrated value.
+
+  Returns:
+    The configured or calibrated noise multiplier.
+  """
+  if dp_params.noise_multiplier is not None:
+    return dp_params.noise_multiplier
+  if model is not None:
+    cached = getattr(model, '_dp_noise_multiplier', None)
+    if cached is not None:
+      return cached
+  calibrated = dp_params.update_with_calibrated_noise_multiplier()
+  noise_multiplier = calibrated.noise_multiplier
+  if model is not None:
+    model._dp_noise_multiplier = noise_multiplier  # pylint: disable=protected-access
+  return noise_multiplier
 
 
 def _noised_clipped_grads(
@@ -618,6 +696,7 @@ def _noised_clipped_grads(
     dp_params: DPKerasConfig,
     state: _StateType,
     data: _KerasInputsDataType,
+    model: keras.Model | None = None,
 ) -> tuple[tuple[chex.Numeric, _AuxType], chex.ArrayTree]:
   """Computes noised and clipped gradients.
 
@@ -628,6 +707,7 @@ def _noised_clipped_grads(
     state: The state of the model.
     data: The data for the model: triple of x, y (can be None), sample_weight
       (can be None).
+    model: Optional Keras model used to cache the calibrated noise multiplier.
 
   Returns:
     (loss, aux), grads
@@ -638,7 +718,7 @@ def _noised_clipped_grads(
       optimizer_variables,
       metrics_variables,
   ) = state
-  # TODO: access it and update it by name.
+  # TODO: b/415360727 - access it and update it by name.
   noise_state = non_trainable_variables[0], ()
   x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
 
@@ -664,11 +744,7 @@ def _noised_clipped_grads(
       optimizer_variables,
   )
 
-  noise_multiplier = (
-      dp_params.noise_multiplier
-      if dp_params.noise_multiplier is not None
-      else dp_params.update_with_calibrated_noise_multiplier().noise_multiplier
-  )
+  noise_multiplier = _resolve_noise_multiplier(dp_params, model)
   l2_sensitivity = clipped_grad_fn.l2_norm_bound
   accumulation_factor = np.sqrt(dp_params.gradient_accumulation_steps)
   stddev = noise_multiplier * l2_sensitivity / accumulation_factor
@@ -676,12 +752,10 @@ def _noised_clipped_grads(
 
   noisy_grads, new_noise_state = privatizer.update(clipped_grad, noise_state)
 
-  # TODO: Investigate whether we should return mean or sum here.
   loss = per_example_aux.values.mean()
   unscaled_loss = per_example_aux.aux[0].mean()
   y_pred = per_example_aux.aux[1]
   non_trainable_variables = [new_noise_state[0]] + non_trainable_variables[1:]
-  # TODO: Determine the correct way to aggregate metrics.
   new_metrics = jax.tree.map(lambda x: x.mean(axis=0), per_example_aux.aux[3])
 
   aux = (unscaled_loss, y_pred, non_trainable_variables, new_metrics)
@@ -723,7 +797,7 @@ def _get_param(
     param_name: str,
     *args,
     **kwargs,
-) -> typing.Any:
+) -> Any:
   """Returns the value of the parameter in the method call.
 
   This function is used to get the value of the parameter in the method

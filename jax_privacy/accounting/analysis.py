@@ -47,6 +47,7 @@ class SamplingMethod(enum.Enum):
     adjacency, but replace adjacency is considered stronger so this is not
     recommended.
   """
+
   POISSON = enum.auto()
   FIXED_BATCH_SIZE = enum.auto()
 

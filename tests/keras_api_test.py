@@ -136,13 +136,32 @@ class KerasApiTest(parameterized.TestCase):
         train_steps=20,
         train_size=500,
         noise_multiplier=10.0,
-        microbatch_size=1
+        microbatch_size=1,
     )
 
     keras_api._add_dp_sgd_attributes(model, params)
 
     self.assertTrue(hasattr(model, "_dp_params"))
     self.assertEqual(model._dp_params, params)
+    self.assertEqual(model._dp_noise_multiplier, params.noise_multiplier)
+
+  def test_get_noise_multiplier_uses_config_value(self):
+    model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
+    params = dataclasses.replace(self._get_params(), noise_multiplier=2.5)
+    private_model = keras_api.make_private(model, params)
+
+    self.assertEqual(private_model.get_noise_multiplier(), 2.5)
+
+  def test_get_noise_multiplier_calibrates_once(self):
+    model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
+    params = self._get_params()
+    private_model = keras_api.make_private(model, params)
+
+    noise_multiplier = private_model.get_noise_multiplier()
+    self.assertIsNotNone(noise_multiplier)
+    self.assertGreater(noise_multiplier, 0.0)
+    self.assertEqual(private_model._dp_noise_multiplier, noise_multiplier)
+    self.assertEqual(private_model.get_noise_multiplier(), noise_multiplier)
 
   @parameterized.named_parameters(
       ("no_rescale_no_clip", 100.0, 1, False, [-10.0, -20.0]),
@@ -216,8 +235,8 @@ class KerasApiTest(parameterized.TestCase):
     # grad(f) = (2*x0*(a0*x0+a1*x1-4), 2*x1*(a0*x0+a1*x1-4)) =
     # (2*(3-4-4), 4*(3-4-4)) = (-10, -20).
     trainable_variables = [jnp.array([3.0, -2.0])]
-    x = jnp.array([[1.0, 2.0]]*batch_size)
-    y = jnp.array([4.0]*batch_size)
+    x = jnp.array([[1.0, 2.0]] * batch_size)
+    y = jnp.array([4.0] * batch_size)
 
     # Generate sample.
     sample = []
@@ -256,6 +275,7 @@ class KerasApiTest(parameterized.TestCase):
     ):
       keras_api._validate_optimizer(model, dp_params)
 
+  # pylint: disable=g-bad-todo
   # TODO: Add test when input is tf batched dataset dict
   # (as in Gemma), try to make a test as similar as possible to Gemma.
   # Also good to add tests for all possible setups we know (especially for all
