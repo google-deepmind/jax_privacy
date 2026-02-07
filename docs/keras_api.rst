@@ -14,6 +14,12 @@ model. For example, call `fit` to train it and get a DP model. Refer to
 the API Reference section to see the meaning of each DP parameter. The
 example below shows that.
 
+.. note::
+   DP training in this API uses Poisson sampling internally. To support this,
+   `fit` expects random-access array-like data (NumPy / JAX arrays or pytrees
+   of arrays) for training inputs. `validation_split` is not supported in DP
+   mode; use explicit `validation_data` instead.
+
 .. _keras_api_example:
 
 ***************
