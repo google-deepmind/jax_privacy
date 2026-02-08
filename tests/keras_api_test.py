@@ -104,15 +104,24 @@ class KerasApiTest(parameterized.TestCase):
 
     with self.assertRaisesRegex(
         ValueError,
-        "sampling_prob must be in \\(0, 1\\]",
+        "gradient_accumulation_steps must be 1 when"
+        " use_poisson_sampling is True",
     ):
-      dataclasses.replace(valid_params, sampling_prob=1.1)
+      dataclasses.replace(
+          valid_params,
+          use_poisson_sampling=True,
+          gradient_accumulation_steps=4,
+      )
 
     with self.assertRaisesRegex(
         ValueError,
         "batch_size \\(2000\\) must be <= train_size \\(1000\\)",
     ):
-      dataclasses.replace(valid_params, batch_size=2000)
+      dataclasses.replace(
+          valid_params,
+          use_poisson_sampling=True,
+          batch_size=2000,
+      )
 
     with self.assertRaisesRegex(
         ValueError,
@@ -137,11 +146,13 @@ class KerasApiTest(parameterized.TestCase):
     params2 = dataclasses.replace(params1, gradient_accumulation_steps=10)
     self.assertEqual(params2.effective_batch_size, 50)
 
-  def test_poisson_sampling_prob(self):
+  def test_poisson_sampling_prob_derived_from_batch_size(self):
     params = self._get_params()
-    self.assertAlmostEqual(params.poisson_sampling_prob, 0.01)
-    params = dataclasses.replace(params, sampling_prob=0.1)
-    self.assertEqual(params.poisson_sampling_prob, 0.1)
+    self.assertAlmostEqual(
+        params.poisson_sampling_prob, params.batch_size / params.train_size
+    )
+    params = dataclasses.replace(params, batch_size=100)
+    self.assertAlmostEqual(params.poisson_sampling_prob, 0.1)
 
   def test_dp_params_calculates_noise_multiplier(self):
     params = keras_api.DPKerasConfig(
@@ -461,6 +472,7 @@ class KerasApiTest(parameterized.TestCase):
         clipping_norm=1.0,
         train_steps=28,
         train_size=200,
+        use_poisson_sampling=True,
     )
     model = keras_api.make_private(model, dp_params)
 
@@ -486,6 +498,7 @@ class KerasApiTest(parameterized.TestCase):
         clipping_norm=1.0,
         train_steps=28,
         train_size=200,
+        use_poisson_sampling=True,
     )
     model = keras_api.make_private(model, dp_params)
     model.compile()
@@ -507,6 +520,7 @@ class KerasApiTest(parameterized.TestCase):
         clipping_norm=1.0,
         train_steps=2,
         train_size=train_size,
+        use_poisson_sampling=True,
     )
     model = keras_api.make_private(model, dp_params)
     model.compile()
@@ -533,7 +547,7 @@ class KerasApiTest(parameterized.TestCase):
         gradient_accumulation_steps=1,
         train_steps=4,
         train_size=train_size,
-        sampling_prob=0.05,
+        use_poisson_sampling=True,
         padding_multiple=8,
     )
     iterator = keras_api._create_poisson_data_iterator(
@@ -622,6 +636,57 @@ class KerasApiTest(parameterized.TestCase):
         epochs=1,
     )
     self.assertIn("loss", history.history)
+
+  def test_non_poisson_train_step_rejects_batch_size_mismatch(self):
+    train_size = 200
+    batch_size = 100
+    x, y = np.random.uniform(0, 1, (train_size, 4)), np.random.uniform(
+        0, 1, train_size
+    )
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=1,
+        train_steps=10,
+        train_size=train_size,
+        use_poisson_sampling=False,
+    )
+    model = keras_api.make_private(model, dp_params)
+    model.compile(loss="mse", optimizer="adam")
+    with self.assertRaisesRegex(
+        ValueError,
+        "The batch size in the DP parameters is not equal to the batch size"
+        " passed to fit()",
+    ):
+      model.fit(x, y, epochs=1, batch_size=50)  # pylint: disable=not-callable
+
+  def test_dp_training_e2e_poisson(self):
+    np.random.seed(42)
+    train_size = 200
+    batch_size = 100
+    epochs = 5
+    train_steps = 10
+    x, y = np.random.uniform(0, 1, (train_size, 4)), np.random.uniform(
+        0, 1, train_size
+    )
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=1,
+        train_steps=train_steps,
+        train_size=train_size,
+        use_poisson_sampling=True,
+    )
+    model = keras_api.make_private(model, dp_params)
+    model.compile(loss="mse", optimizer="adam")
+    model.fit(x, y, epochs=epochs, batch_size=batch_size)  # pylint: disable=not-callable
+    self.assertAlmostEqual(model.evaluate(x, y), 2, delta=2)
 
   def test_train_step_call_noised_clipped_grads(self):
     train_size = 200

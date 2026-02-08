@@ -15,10 +15,13 @@ the API Reference section to see the meaning of each DP parameter. The
 example below shows that.
 
 .. note::
-   DP training in this API uses Poisson sampling internally. To support this,
-   `fit` expects random-access array-like data (NumPy / JAX arrays or pytrees
-   of arrays) for training inputs. `validation_split` is not supported in DP
-   mode; use explicit `validation_data` instead.
+   Set ``use_poisson_sampling=True`` in ``DPKerasConfig`` to enable Poisson
+   sub-sampling during training.  When enabled, ``fit`` expects random-access
+   array-like data (NumPy / JAX arrays or pytrees of arrays) for training
+   inputs, ``validation_split`` is not supported (use explicit
+   ``validation_data`` instead), and ``gradient_accumulation_steps`` must be 1.
+   When ``use_poisson_sampling=False`` (the default), training uses the
+   standard Keras fixed-batch ``fit`` path.
 
 .. _keras_api_example:
 

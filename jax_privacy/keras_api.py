@@ -41,8 +41,11 @@ Example Usage:
    private_model = keras_api.make_private(model, params)
    private_model.get_noise_multiplier()
 
-This API performs Poisson sampling internally and therefore expects training
-inputs passed to `fit` to be random-access array-like pytrees.
+When ``use_poisson_sampling=True``, this API performs Poisson sampling
+internally and therefore expects training inputs passed to ``fit`` to be
+random-access array-like pytrees.  When ``use_poisson_sampling=False``
+(the default), training follows the standard Keras ``fit`` path with
+fixed-size batches.
 """
 
 import dataclasses
@@ -128,10 +131,12 @@ class DPKerasConfig:
         `gradient_accumulation_steps` operates outside of the jit boundary. The
         default value is None, which means that no microbatching is used, and is
         equivalent to microbatch_size=batch_size.
-      sampling_prob: Probability that each training example is selected on each
-        step under Poisson sampling. If unset (recommended), this defaults to
-        batch_size / train_size, so batch_size is interpreted as expected batch
-        size.
+      use_poisson_sampling: Whether to use Poisson sub-sampling during
+        training.  When True, each training example is independently included
+        in every batch with probability ``batch_size / train_size``.  This
+        requires ``gradient_accumulation_steps == 1`` and random-access
+        array-like training data passed to ``fit``.  When False (default),
+        training uses the standard Keras fixed-batch ``fit`` path.
       padding_multiple: Optional multiple used to pad sampled batches with dummy
         examples. This reduces JIT recompilation from variable-size Poisson
         batches. Set to None to disable padding. If microbatch_size is set, then
@@ -149,7 +154,7 @@ class DPKerasConfig:
   rescale_to_unit_norm: bool = True
   microbatch_size: int | None = None
   seed: int | None = None
-  sampling_prob: float | None = None
+  use_poisson_sampling: bool = False
   padding_multiple: int | None = 32
 
   _accountant = analysis.DpsgdTrainingAccountant(
@@ -170,8 +175,6 @@ class DPKerasConfig:
   @property
   def poisson_sampling_prob(self) -> float:
     """Probability of selecting each example in a Poisson-sampled step."""
-    if self.sampling_prob is not None:
-      return self.sampling_prob
     return self.batch_size / self.train_size
 
   def update_with_calibrated_noise_multiplier(self) -> 'DPKerasConfig':
@@ -224,17 +227,19 @@ class DPKerasConfig:
           f'Gradient accumulation steps {self.gradient_accumulation_steps} must'
           ' be positive.'
       )
-    if self.sampling_prob is not None and (
-        self.sampling_prob <= 0 or self.sampling_prob > 1
-    ):
-      raise ValueError(
-          f'sampling_prob must be in (0, 1], got {self.sampling_prob}.'
-      )
-    if self.sampling_prob is None and self.batch_size > self.train_size:
-      raise ValueError(
-          f'batch_size ({self.batch_size}) must be <= train_size'
-          f' ({self.train_size}) when sampling_prob is not set.'
-      )
+    if self.use_poisson_sampling:
+      if self.gradient_accumulation_steps != 1:
+        raise ValueError(
+            'gradient_accumulation_steps must be 1 when'
+            ' use_poisson_sampling is True, got'
+            f' {self.gradient_accumulation_steps}.'
+        )
+      if self.batch_size > self.train_size:
+        raise ValueError(
+            f'batch_size ({self.batch_size}) must be <= train_size'
+            f' ({self.train_size}) when use_poisson_sampling is True'
+            ' (sampling probability would exceed 1).'
+        )
     if self.padding_multiple is not None and self.padding_multiple <= 0:
       raise ValueError(
           'padding_multiple must be a positive integer or None, got '
@@ -451,18 +456,6 @@ def _create_fit_fn_with_validation(
     steps_per_epoch = _get_param(
         fit_signature, 'steps_per_epoch', *args, **kwargs
     )
-    x = _get_param(fit_signature, 'x', *args, **kwargs)
-    y = _get_param(fit_signature, 'y', *args, **kwargs)
-    sample_weight = _get_param(fit_signature, 'sample_weight', *args, **kwargs)
-    validation_split = _get_param(
-        fit_signature, 'validation_split', *args, **kwargs
-    )
-    if validation_split:
-      raise ValueError(
-          'validation_split is not supported for DP Poisson sampling. '
-          'Please pass explicit validation_data instead.'
-      )
-
     # Note accessing self._dp_params is safe because it's added in
     # _add_dp_sgd_attributes, but requires disabling pylint because this
     # function is not a method within a class.
@@ -501,6 +494,22 @@ def _create_fit_fn_with_validation(
     if optimizer_steps_to_perform == 0:
       return original_fit_fn(*args, **kwargs)
 
+    if not params.use_poisson_sampling:
+      return original_fit_fn(*args, **kwargs)
+
+    # Poisson sampling path: requires random-access data and no
+    # validation_split.
+    x = _get_param(fit_signature, 'x', *args, **kwargs)
+    y = _get_param(fit_signature, 'y', *args, **kwargs)
+    sample_weight = _get_param(fit_signature, 'sample_weight', *args, **kwargs)
+    validation_split = _get_param(
+        fit_signature, 'validation_split', *args, **kwargs
+    )
+    if validation_split:
+      raise ValueError(
+          'validation_split is not supported for DP Poisson sampling. '
+          'Please pass explicit validation_data instead.'
+      )
     _validate_random_access_training_data(
         x,
         y,
@@ -789,6 +798,14 @@ def _dp_train_step(
   actual_batch_size = jax.tree_util.tree_leaves(x)[0].shape[0]
   if actual_batch_size <= 0:
     raise ValueError('Received an empty batch in DP train_step.')
+  dp_params = self._dp_params  # pylint: disable=protected-access
+  if not dp_params.use_poisson_sampling:
+    if actual_batch_size != dp_params.batch_size:
+      raise ValueError(
+          'Batch size mismatch: the actual batch size'
+          f' ({actual_batch_size}) does not match'
+          f' DPKerasConfig.batch_size ({dp_params.batch_size}).'
+      )
   is_padding_example = None
   if sample_weight is not None:
     sample_weight_arr = jnp.asarray(sample_weight)
