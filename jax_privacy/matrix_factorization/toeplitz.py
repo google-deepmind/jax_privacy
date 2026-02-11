@@ -112,7 +112,7 @@ def inverse_as_streaming_matrix(
     dtype = jnp.promote_types(abstract_yi.dtype, coef.dtype)
     # *_like preserves shape, dtype, and (if possible) sharding.
     zero = jnp.zeros_like(abstract_yi, dtype=dtype)
-    return jnp.broadcast_to(zero, (bands-1,) + zero.shape)
+    return jnp.broadcast_to(zero, (bands - 1,) + zero.shape)
 
   def _next(yi, state):
     if bands == 1:

@@ -238,7 +238,7 @@ class StreamingMatrixTest(parameterized.TestCase):
     abstract_value = jax.ShapeDtypeStruct((3,), jnp.float32)
     chex.assert_trees_all_equal_shapes_and_dtypes(
         A.init_multiply(abstract_value),
-        jax.jit(A.init_multiply, static_argnums=0)(abstract_value)
+        jax.jit(A.init_multiply, static_argnums=0)(abstract_value),
     )
 
 

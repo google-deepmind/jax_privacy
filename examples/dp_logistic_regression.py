@@ -63,7 +63,7 @@ def create_benchmark(
 
   params = {
       'weights': jax.random.normal(params_key, (features,)),
-      'bias': jnp.array(0.0)
+      'bias': jnp.array(0.0),
   }
 
   feature_matrix = jax.random.normal(data_key, (samples, features))

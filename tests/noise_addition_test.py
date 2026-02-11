@@ -45,9 +45,7 @@ _PARAM_SHAPES = {
 def gaussian_privatizer_fn(prng_key: jax.Array | None = None):
   if prng_key is None:
     prng_key = jax.random.key(_SEED)
-  return noise_addition.gaussian_privatizer(
-      prng_key=prng_key, stddev=_STDDEV
-  )
+  return noise_addition.gaussian_privatizer(prng_key=prng_key, stddev=_STDDEV)
 
 
 def dense_matrix_factorization_privatizer_fn(
@@ -60,7 +58,9 @@ def dense_matrix_factorization_privatizer_fn(
   if noising_matrix is None:
     noising_matrix = jnp.eye(_ITERATIONS) + 0.1
   return noise_addition.matrix_factorization_privatizer(
-      noising_matrix, prng_key=prng_key, stddev=stddev,
+      noising_matrix,
+      prng_key=prng_key,
+      stddev=stddev,
   )
 
 
@@ -73,7 +73,9 @@ def streaming_matrix_factorization_privatizer_fn(
   if prng_key is None:
     prng_key = jax.random.key(_SEED)
   return noise_addition.matrix_factorization_privatizer(
-      noising_matrix, prng_key=prng_key, stddev=_STDDEV,
+      noising_matrix,
+      prng_key=prng_key,
+      stddev=_STDDEV,
   )
 
 
@@ -151,7 +153,8 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     grads = optax.tree.zeros_like(example_params)
     for _ in range(_ITERATIONS):
       result, state = maybe_jit(privatizer.update)(
-          sum_of_clipped_grads=grads, noise_state=state,
+          sum_of_clipped_grads=grads,
+          noise_state=state,
       )
       chex.assert_trees_all_equal_shapes_and_dtypes(result, example_params)
       chex.assert_trees_all_equal_shapes_and_dtypes(state, state0)
@@ -177,9 +180,11 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
 
     mf_noise = tree_stack(correlated_noise_vectors)
     sgd_noise = tree_stack(uncorrelated_noise_vectors)
+
     def matrix_multiply(x):
       Cinv = noising_matrix  # pylint: disable=invalid-name
       return (Cinv @ x.reshape(x.shape[0], -1)).reshape(x.shape).astype(x.dtype)
+
     expected_noise = jax.tree.map(matrix_multiply, sgd_noise)
     chex.assert_trees_all_close(mf_noise, expected_noise, atol=1e-7)
 
@@ -232,7 +237,7 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
       ('dense_scaled_shifted', np.eye(_ITERATIONS) + 0.1),
       ('dense_random', np.random.rand(_ITERATIONS, _ITERATIONS)),
       ('streaming_prefix', streaming_matrix.prefix_sum()),
-      ('streaming_identity', streaming_matrix.identity())
+      ('streaming_identity', streaming_matrix.identity()),
   )
   def test_scale_invariance(self, noising_matrix):
     # Test equivalence between modifying stddev or noising_matrix.
@@ -260,10 +265,9 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     if name == 'banded':
       noising_matrix = toeplitz.inverse_as_streaming_matrix(jnp.array([1]))
     else:
-      noising_matrix = (
-          buffered_toeplitz.BufferedToeplitz.build([], [], dtype=jnp.float32)
-          .inverse_as_streaming_matrix()
-      )
+      noising_matrix = buffered_toeplitz.BufferedToeplitz.build(
+          [], [], dtype=jnp.float32
+      ).inverse_as_streaming_matrix()
 
     def get_noise_sample(noising_matrix):
       privatizer = noise_addition.matrix_factorization_privatizer(
@@ -276,12 +280,13 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
 
     # We expect the noise to be the same, not just statistically similar.
     chex.assert_trees_all_close(
-        get_noise_sample(identity), get_noise_sample(noising_matrix),
+        get_noise_sample(identity),
+        get_noise_sample(noising_matrix),
     )
 
   @parameterized.named_parameters(
       ('dense_identity', np.eye(_ITERATIONS)),
-      ('streaming_identity', streaming_matrix.identity())
+      ('streaming_identity', streaming_matrix.identity()),
   )
   def test_optax_chain(self, noising_matrix):
     key = jax.random.key(_SEED)

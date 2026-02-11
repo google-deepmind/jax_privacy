@@ -24,6 +24,7 @@ import numpy as np
 import optax
 
 
+# pylint: disable=g-bad-todo
 # TODO: Improve test coverage, including correctness of the
 # privacy guarantees.
 class ExecutionPlanTest(parameterized.TestCase):
@@ -32,6 +33,7 @@ class ExecutionPlanTest(parameterized.TestCase):
       {"epsilon": None, "delta": None, "noise_multiplier": None},
       {"epsilon": 1.0, "delta": 1e-06, "noise_multiplier": 2.0},
       {"num_bands": 0},
+      {"truncated_batch_size": 5, "num_examples": None},
   )
   def test_bandmf_validation(self, **kwargs):
     default_kwargs = {
@@ -64,9 +66,7 @@ class ExecutionPlanTest(parameterized.TestCase):
 
     iterations = 20
     config = execution_plan.BandMFExecutionPlanConfig(
-        num_bands=10,
-        iterations=iterations,
-        **privacy_kwargs
+        num_bands=10, iterations=iterations, **privacy_kwargs
     )
 
     gradient_fn = clipping.clipped_grad(jnp.mean, l2_clip_norm=1.0)

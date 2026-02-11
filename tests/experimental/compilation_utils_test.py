@@ -69,7 +69,7 @@ class OptimalBatchSizesTest(parameterized.TestCase):
 
     prng = np.random.default_rng(seed)
     batch_sizes = prng.choice(16, size=5, replace=False) + 1
-    num_compilations = prng.choice(np.arange(5)+1)
+    num_compilations = prng.choice(np.arange(5) + 1)
 
     actual_batch_sizes = compilation_utils.optimal_physical_batch_sizes(
         batch_sizes, num_compilations=num_compilations

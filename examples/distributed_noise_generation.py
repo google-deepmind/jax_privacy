@@ -155,7 +155,8 @@ def generate_noise(
       # In real applications, pass in the actual clipped gradient here.
       # For benchmarking, we just pass in something that has the same structure.
       noisy_grad, state = privatizer.update(
-          pytree_like_model_params, state,
+          pytree_like_model_params,
+          state,
       )
     return state, noisy_grad
 

@@ -53,7 +53,7 @@ def optimal_physical_batch_sizes(
     # optimal list of compiled batch sizes and its cost.
     if C == 1:
       solution = [unique[p]]
-      cost = unique[p] * (p+1)
+      cost = unique[p] * (p + 1)
       return solution, cost
 
     best_cost = np.inf
@@ -66,4 +66,4 @@ def optimal_physical_batch_sizes(
         best_solution = [unique[p]] + new_solution
     return best_solution, best_cost
 
-  return set(solve(num_compilations, len(unique)-1)[0])
+  return set(solve(num_compilations, len(unique) - 1)[0])

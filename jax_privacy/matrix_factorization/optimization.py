@@ -65,9 +65,7 @@ def jax_enable_x64(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 @jax_enable_x64
 def optimize(
-    loss_fn: Callable[
-        [ParamT], jnp.ndarray | tuple[jnp.ndarray, ParamT]
-    ],
+    loss_fn: Callable[[ParamT], jnp.ndarray | tuple[jnp.ndarray, ParamT]],
     params: ParamT,
     *,
     max_optimizer_steps: int = 250,
