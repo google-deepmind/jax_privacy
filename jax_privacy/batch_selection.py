@@ -391,7 +391,7 @@ class UserSelectionStrategy:
       same selected user.
     """
     rng = np.random.default_rng(rng)
-    # inverse contains cleaned ids in the range [0, ..., nunique-1].
+    # inverse contains cleaned ids in the range [0, ..., num_users - 1].
     unique, inverse = np.unique(user_ids, return_inverse=True)
     num_users = unique.size
     num_examples = user_ids.size
