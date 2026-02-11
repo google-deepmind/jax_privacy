@@ -18,6 +18,7 @@
 import collections
 from collections.abc import Sequence
 import dataclasses
+import functools
 import numbers
 from typing import Any, Callable, TypeAlias
 
@@ -25,7 +26,6 @@ import chex
 import dp_accounting
 import jax
 import jax.numpy as jnp
-from jax_privacy.experimental import microbatching
 import optax
 
 
@@ -39,7 +39,7 @@ class BoundedSensitivityCallable:
   """Callable with a sensitivity property.
 
   If has_aux is False, the sensitivity guarantee holds for the entire output
-  which may be an arbitrary pyree of JAX Arrays.  If has_aux is False, the
+  which may be an arbitrary PyTree of JAX Arrays.  If has_aux is False, the
   output of the function is a pair `(value, aux)` and the sensitivity guarantee
   only holds for `value` PyTree. The aux PyTree is returned on a per-example
   basis (i.e., as a PyTree of arrays having a batch axis).  The caller should
@@ -55,7 +55,7 @@ class BoundedSensitivityCallable:
 
   def sensitivity(
       self,
-      neighboring_relation: dp_accounting.NeighboringRelation = _REPLACE_SPECIAL
+      neighboring_relation: dp_accounting.NeighboringRelation = _REPLACE_SPECIAL,  # pylint: disable=line-too-long
   ):
     """Returns the L2 sensitivity of the Callable.
 
@@ -84,7 +84,7 @@ def clip_pytree(
     clip_norm: float,
     rescale_to_unit_norm: bool = False,
     nan_safe: bool = True,
-    return_zero: bool = False
+    return_zero: bool = False,
 ):
   """Clips a PyTree of jax arrays based on its global L2 norm.
 
@@ -107,7 +107,7 @@ def clip_pytree(
   Case                    rescale_to_unit_norm Output
   ======================= ==================== =================================
   clip_norm = 0           False                Zero
-  clip_norm = 0           True                 Input / norm (limit as clip_norm -> 0)  # pylint: disable=line-too-long
+  clip_norm = 0           True                 Input / norm, as clip_norm -> 0
   clip_norm = inf         False                Unchanged
   clip_norm = inf         True                 Zero
   clip_norm < 0 (static)  -                    Raises ValueError
@@ -198,6 +198,36 @@ def _normalize_fun_to_return_aux(fun, has_aux):
     return lambda *args, **kwargs: (fun(*args, **kwargs), ())
 
 
+def _num_real_microbatches(
+    is_padding_example: jax.Array,
+    microbatch_size: int | None,
+) -> int | jax.Array:
+  """Calculates the number of non-padding microbatches.
+
+  The returned result is 1 + the index of the last microbatch that contains at
+  least one non-padding example.  This means that microbatches consisting of
+  all-padding examples that do not appear at the end will be treated as a real
+  microbatch.
+
+  Args:
+    is_padding_example: A 1D array of shape (num_examples,).
+    microbatch_size: Argument passed to `microbatch`.
+
+  Returns:
+    The `true` batch size, as a scalar jax array.
+  """
+  if microbatch_size is None:
+    return is_padding_example.shape[0]
+  reshaped = optax.microbatching.reshape_batch_axis(
+      is_padding_example, microbatch_size
+  )
+  # Ensure there is at least one True in the array.
+  is_real_batch = jnp.append(True, ~reshaped.all(axis=1))
+  # We want the last real microbatch, argmax returns the first True value,
+  # so we add increasing numbers from 0 to 1 to each index.
+  return jnp.argmax(is_real_batch + jnp.linspace(0, 1, is_real_batch.size))
+
+
 def clipped_fun(
     fun: Callable,
     has_aux: bool = False,
@@ -264,12 +294,12 @@ def clipped_fun(
     nan_safe: If True, the formal guarantees of the returned Callable still
       holds in the presence of NaNs and infs. See `clip_pytree` for more details
       on this argument.
-    dtype: Optional dtype for the clipped+aggregated pytree. If None, the dtype
+    dtype: Optional dtype for the clipped+aggregated PyTree. If None, the dtype
       will be the same as the dtypes of the function output. Can be useful to
       avoid overflow issues when using low-precision dtypes as the transformed
       function computes a sum over a potentially large batch.
-    prng_argnum: If set, specifies which argument of `fun` is a prng key. The
-      prng will be split to have a batch dimension and vmapped over.
+    prng_argnum: If set, specifies which argument of `fun` is a PRNG key. The
+      PRNG will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap.
 
   Returns:
@@ -294,10 +324,12 @@ def clipped_fun(
     is_padding_example = kwargs.get('is_padding_example', None)
     batch_size = jax.tree.leaves(args[batch_argnums[0]])[0].shape[0]
     if is_padding_example is None:
-      kwargs['is_padding_example'] = jnp.zeros(batch_size, dtype=jnp.bool_)
+      is_padding_example = jnp.zeros(batch_size, dtype=jnp.bool_)
+      kwargs['is_padding_example'] = is_padding_example
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
+      value = optax.tree.cast(value, dtype)
       clipped_value, l2_norm = clip_pytree(
           value,
           clip_norm=l2_clip_norm,
@@ -308,8 +340,9 @@ def clipped_fun(
       )
       return clipped_value, aux, l2_norm
 
-    sum_ = microbatching.AccumulationType.SUM
-    concat = microbatching.AccumulationType.CONCAT
+    num_real_mb = _num_real_microbatches(is_padding_example, microbatch_size)
+    sum_ = optax.microbatching.AccumulationType.SUM
+    concat = optax.microbatching.AccumulationType.CONCAT
     axes = [0 if i in batch_argnums else None for i in range(len(args))]
     if prng_argnum is not None:
       args = list(args)
@@ -317,31 +350,29 @@ def clipped_fun(
       split_rngs = jax.tree.map(lambda x: jax.random.split(x, batch_size), rngs)
       args[prng_argnum] = split_rngs
       axes[prng_argnum] = 0
-      batch_argnums_with_prng = tuple(batch_argnums) + (prng_argnum,)
-    else:
-      batch_argnums_with_prng = batch_argnums
-    microbatched_vmap_fun = microbatching.microbatch(
-        jax.vmap(clipped_fun_one_group, axes, spmd_axis_name=spmd_axis_name),
-        batch_argnums=batch_argnums_with_prng,
+
+    microbatched_vmap_fun = optax.microbatching.micro_vmap(
+        clipped_fun_one_group,
+        in_axes=axes,
         microbatch_size=microbatch_size,
-        accumulation_type=(sum_, concat, concat),
+        accumulator=(sum_, concat, concat),
+        num_real_microbatches=num_real_mb,
+        vmap_fn=functools.partial(jax.vmap, spmd_axis_name=spmd_axis_name),
     )
 
     clipped_values, aux, norms = microbatched_vmap_fun(*args, **kwargs)
-    # It would save flops to call this after vmap but before the microbatching.
-    result = jax.tree.map(lambda x: jnp.sum(x, 0, dtype), clipped_values)
     if normalize_by != 1.0:
-      result = jax.tree.map(lambda x: x / normalize_by, result)
+      clipped_values = jax.tree.map(lambda x: x / normalize_by, clipped_values)
 
     match has_aux, return_norms:
       case False, False:
-        return result
+        return clipped_values
       case False, True:
-        return result, norms
+        return clipped_values, norms
       case True, False:
-        return result, aux
+        return clipped_values, aux
       case True, True:
-        return result, (aux, norms)
+        return clipped_values, (aux, norms)
 
   norm_bound = (1.0 if rescale_to_unit_norm else l2_clip_norm) / normalize_by
   if keep_batch_dim:
@@ -470,8 +501,8 @@ def clipped_grad(
     batch_argnums: Specifies which argument(s) of `fun` contain the batch
       dimension (usually the data and labels). Can be an integer or a sequence
       of integers. All arguments specified here must have the same size along
-      their first dimension (the batch dimension) the default value of 1 assumes
-      the signature of fun is `fun(params, batch)`.
+      their first dimension (the batch dimension). The default value of 1
+      assumes the signature of fun is `fun(params, batch)`.
     keep_batch_dim: If True, batch inputs will be passed to `fun` with a leading
       batch axis of size 1.  If False, this size 1 axis will be dropped
       (reducing the rank of the batch args by 1 before passing to `fun`). The
@@ -505,8 +536,8 @@ def clipped_grad(
       the same as the dtypes of the gradient function. Can be useful to avoid
       overflow issues when using low-precision dtypes as the returned function
       computes a sum over a potentially large batch.
-    prng_argnum: If set, specifies which argumnet of `fun` is a prng key. The
-      prng will be split to have a batch dimension and vmapped over.
+    prng_argnum: If set, specifies which argument of `fun` is a PRNG key. The
+      PRNG will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap. Only relevant in distributed settings.
 
   Returns:

@@ -74,7 +74,7 @@ class _NoiseAdder(Protocol):
   """Protocol specifying the semantics of _IntermediateStrategy.add.
 
   Will be called as add(value, noise), where the first argument represents the
-  input and can have abritrary shape/sharding while the second arguments
+  input and can have arbitrary shape/sharding while the second arguments
   represents the noise and will have shape/sharding
   specified by get_noise_structure (subject to the formal guarantees above).
 
@@ -102,7 +102,7 @@ class _IntermediateStrategy(NamedTuple):
 
 
 # Our public API expects an Enum to prevent users from passing in a custom
-# implementation that breaks the formal guarantees. Custom implementatations
+# implementation that breaks the formal guarantees. Custom implementations
 # can be used, but should checked in and reviewed by JAX Privacy authors.
 class SupportedStrategies(enum.Enum):
   """Supported strategies for generating intermediate noise."""
@@ -174,7 +174,7 @@ def matrix_factorization_privatizer(
       prng_key=prng_key,
       stddev=stddev,
       strategy=intermediate_strategy.value,
-      dtype=dtype
+      dtype=dtype,
   )
 
 
@@ -244,7 +244,7 @@ def _dense_matrix_factorization_privatizer(
         rng_key=prng_key,
         target_tree=target,
         sampler=functools.partial(_gaussian_linear_combination, matrix_row),
-        dtype=dtype
+        dtype=dtype,
     )
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, noise)
     return noisy_grads, index + 1
@@ -258,7 +258,7 @@ def _iid_normal_noise(prng_key, target_tree, stddev, dtype=None):
       rng_key=prng_key,
       target_tree=target_tree,
       sampler=jax.random.normal,
-      dtype=dtype
+      dtype=dtype,
   )
   return optax.tree.scale(stddev, standard_normal)
 

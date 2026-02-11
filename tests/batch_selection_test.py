@@ -78,7 +78,7 @@ class BatchSelectionTest(parameterized.TestCase):
   @parameterized.product(
       partition_type=[
           batch_selection.PartitionType.EQUAL_SPLIT,
-          batch_selection.PartitionType.INDEPENDENT
+          batch_selection.PartitionType.INDEPENDENT,
       ],
       num_examples=[10],
       cycle_length=[3],
@@ -226,6 +226,19 @@ class BatchSelectionTest(parameterized.TestCase):
     _check_no_repeated_indices(batches[:cycle_length])
     _check_cyclic_property(batches, cycle_length)
 
+  def test_cyclic_poisson_sampling_independent_is_deterministic(self):
+    """CyclicPoissonSampling should respect the provided RNG."""
+    strategy = batch_selection.CyclicPoissonSampling(
+        sampling_prob=0.3,
+        iterations=5,
+        cycle_length=3,
+        partition_type=batch_selection.PartitionType.INDEPENDENT,
+    )
+    batches_a = list(strategy.batch_iterator(50, rng=0))
+    batches_b = list(strategy.batch_iterator(50, rng=0))
+    for batch_a, batch_b in zip(batches_a, batches_b, strict=True):
+      np.testing.assert_array_equal(batch_a, batch_b)
+
   def test_user_selection_strategy(self):
     """Tests for UserSelectionStrategy."""
     base_strategy = batch_selection.CyclicPoissonSampling(
@@ -244,6 +257,59 @@ class BatchSelectionTest(parameterized.TestCase):
         _check_all_equal(user_ids[row])
       user_batch = user_ids[batch[:, 0]]
       self.assertLen(set(user_batch), user_batch.shape[0])
+
+  def test_user_selection_preserves_example_order_without_shuffle(self):
+    """UserSelectionStrategy keeps per-user example order when not shuffled."""
+
+    class _FixedBatchStrategy(batch_selection.BatchSelectionStrategy):
+
+      def batch_iterator(self, num_examples: int, rng=None):
+        del num_examples, rng
+        yield np.array([2, 0, 1], dtype=np.int32)
+
+    strategy = batch_selection.UserSelectionStrategy(
+        _FixedBatchStrategy(),
+        examples_per_user_per_batch=2,
+        shuffle_per_user=False,
+    )
+    user_ids = np.array([10, 10, 20, 20, 20, 30])
+    batch = next(strategy.batch_iterator(user_ids, rng=0))
+    np.testing.assert_array_equal(batch[0], np.array([5, 5]))
+    np.testing.assert_array_equal(batch[1], np.array([0, 1]))
+    np.testing.assert_array_equal(batch[2], np.array([2, 3]))
+
+  def test_fixed_batch_sampling(self):
+    """Tests for FixedBatchSampling."""
+    strategy = batch_selection.FixedBatchSampling(
+        batch_size=4,
+        iterations=6,
+    )
+    batches = list(strategy.batch_iterator(10, rng=0))
+    self.assertLen(batches, 6)
+    _check_batch_sizes_equal(batches, 4, 4)
+    _check_element_range(batches, 10)
+    _check_signed_indices(batches)
+    for batch in batches:
+      self.assertEqual(len(batch), len(set(batch)))
+
+  def test_fixed_batch_sampling_rejects_oversized(self):
+    strategy = batch_selection.FixedBatchSampling(
+        batch_size=11,
+        iterations=1,
+    )
+    with self.assertRaises(ValueError):
+      list(strategy.batch_iterator(10, rng=0))
+
+  def test_fixed_batch_sampling_with_replacement(self):
+    strategy = batch_selection.FixedBatchSampling(
+        batch_size=10,
+        iterations=2,
+        replace=True,
+    )
+    batches = list(strategy.batch_iterator(5, rng=0))
+    self.assertLen(batches, 2)
+    _check_batch_sizes_equal(batches, 10, 10)
+    _check_element_range(batches, 5)
 
 
 class BatchPaddingTest(parameterized.TestCase):

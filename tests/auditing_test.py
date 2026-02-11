@@ -82,9 +82,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_bootstrap_params_confidence_interval_illegal_confidence(self):
     for confidence in [-1, 0, 1, 2]:
       with self.assertRaisesRegex(ValueError, 'confidence must be in'):
-        auditing.BootstrapParams.confidence_interval(
-            confidence=confidence
-        )
+        auditing.BootstrapParams.confidence_interval(confidence=confidence)
 
   @parameterized.named_parameters(
       ('95_percent', 0.95, [0.025, 0.975]),
@@ -95,9 +93,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       confidence,
       expected_quantiles,
   ):
-    params = auditing.BootstrapParams.confidence_interval(
-        confidence=confidence
-    )
+    params = auditing.BootstrapParams.confidence_interval(confidence=confidence)
     np.testing.assert_almost_equal(params.quantiles, expected_quantiles)
 
   @parameterized.product(
@@ -140,16 +136,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   )
   def test_pareto_frontier_bad_shape(self, shape):
     points = np.zeros(shape, dtype=np.int64)
-    with self.assertRaisesRegex(
-        ValueError, 'Expected at least two 2D points'
-    ):
+    with self.assertRaisesRegex(ValueError, 'Expected at least two 2D points'):
       auditing._pareto_frontier(points)
 
   def test_pareto_frontier_unsorted(self):
     points = np.array([[1, 0], [0, 1]])
-    with self.assertRaisesRegex(
-        ValueError, 'Expected points to be sorted'
-    ):
+    with self.assertRaisesRegex(ValueError, 'Expected points to be sorted'):
       auditing._pareto_frontier(points)
 
   def test_pareto_frontier_two_points(self):
@@ -421,9 +413,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     out_samples = int(in_samples * out_samples_ratio)
     in_canary_scores = np.full(in_samples, 0.0)
     out_canary_scores = np.full(out_samples, 1.0)
-    auditor = auditing.CanaryScoreAuditor(
-        in_canary_scores, out_canary_scores
-    )
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     fprs = np.linspace(0, 1, 10)
     if vectorized:
       tprs = auditor.tpr_at_given_fpr(fprs)
@@ -617,31 +607,33 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     true_eps = dp_accounting.get_epsilon_gaussian(1 / mu, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=0.05)
 
-  @parameterized.named_parameters(
-      ('left', 0.025),
-      ('right', 0.975),
-      ('two_sided', (0.025, 0.975)),
-      ('two_sided_with_median', (0.025, 0.5, 0.975)),
+  @parameterized.product(
+      quantiles=(0.025, 0.975, (0.025, 0.975), (0.025, 0.5, 0.975)),
+      bootstrap_type=('quantile', 'bias_correction', 'acceleration'),
   )
-  def test_bootstrap(self, quantiles):
-    n = 5000
+  def test_bootstrap(self, quantiles, bootstrap_type):
+    n = 3000
 
     # Compute interval for mean of scores, which we can also get exactly with
-    # the central limit theorem. Use any crazy distribution for the data.
+    # the central limit theorem. Use any strange distribution for the data.
     in_canary_scores = _deterministic_normal(np.e, np.pi, n // 2)
     out_canary_scores = np.linspace(0, 1, n // 2)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
 
     def mean_score(a: auditing.CanaryScoreAuditor):
-      return np.mean([a._in_canary_scores, a._out_canary_scores])
+      return np.mean(
+          np.concatenate([a._in_canary_scores, a._out_canary_scores])
+      )
 
     bootstrap_params = auditing.BootstrapParams(
         quantiles=quantiles,
+        bias_correction=(bootstrap_type != 'quantile'),
+        acceleration=(bootstrap_type == 'acceleration'),
         seed=0xBAD5EED,
     )
     interval = auditor._bootstrap(mean_score, bootstrap_params)
-    mu_hat = np.mean([in_canary_scores, out_canary_scores])
-    sigma_hat = np.std([in_canary_scores, out_canary_scores])
+    all_scores = np.concatenate([in_canary_scores, out_canary_scores])
+    mu_hat, sigma_hat = np.mean(all_scores), np.std(all_scores)
     expected_interval = auditing._norm.ppf(
         q=quantiles,
         loc=mu_hat,
@@ -660,18 +652,27 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     ):
       auditor.tpr_at_given_fpr(fpr, bootstrap_params=bootstrap_params)
 
-  @parameterized.named_parameters(
-      ('epsilon_raw_counts', 'epsilon_raw_counts', ()),
-      ('tpr_at_given_fpr', 'tpr_at_given_fpr', (0.1,)),
-      ('attack_auroc', 'attack_auroc', ()),
+  @parameterized.product(
+      metric_and_args=(
+          ('epsilon_raw_counts', ()),
+          ('tpr_at_given_fpr', (0.1,)),
+          ('attack_auroc', ()),
+      ),
+      bootstrap_type=('quantile', 'bias_correction', 'acceleration'),
+      mu=(0, 1, 10),
   )
-  def test_auditing_metric_bootstrap(self, metric_fn_name, args):
+  def test_auditing_metric_bootstrap(self, metric_and_args, bootstrap_type, mu):
     # Test that bootstrapped metrics run and return basically reasonable values.
+    metric_fn_name, args = metric_and_args
     rng = np.random.default_rng(seed=0xBAD5EED)
-    in_canary_scores = rng.normal(size=356)
+    in_canary_scores = rng.normal(mu, size=356)
     out_canary_scores = rng.normal(size=432)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
-    bootstrap_params = auditing.BootstrapParams(seed=0xBAD5EED)
+    bootstrap_params = auditing.BootstrapParams(
+        bias_correction=(bootstrap_type != 'quantile'),
+        acceleration=(bootstrap_type == 'acceleration'),
+        seed=0xBAD5EED,
+    )
     metric_fn = getattr(auditor, metric_fn_name)
     value = metric_fn(*args)
     interval = metric_fn(*args, bootstrap_params=bootstrap_params)

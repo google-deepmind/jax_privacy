@@ -99,11 +99,11 @@ class ToeplitzTest(parameterized.TestCase):
         jnp.array([[1]]), toeplitz.materialize_lower_triangular(jnp.array([1]))
     )
     np.testing.assert_allclose(
-        # pyformat: disable
+        # fmt: off
         jnp.array([[2, 0, 0],
                    [1, 2, 0],
                    [3, 1, 2]]),
-        # pyformat: enable
+        # fmt: on
         toeplitz.materialize_lower_triangular(jnp.array([2, 1, 3])),
     )
 
@@ -116,11 +116,11 @@ class ToeplitzTest(parameterized.TestCase):
 
     # n > len(coef)
     np.testing.assert_allclose(
-        # pyformat: disable
+        # fmt: off
         jnp.array([[2, 0, 0],
                    [1, 2, 0],
                    [0, 1, 2]]),
-        # pyformat: enable
+        # fmt: on
         toeplitz.materialize_lower_triangular(jnp.array([2, 1]), n=3),
     )
 

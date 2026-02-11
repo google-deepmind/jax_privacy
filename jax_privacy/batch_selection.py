@@ -34,7 +34,7 @@ import enum
 import itertools
 from typing import Iterator
 
-from jax_privacy.experimental import microbatching
+from jax_privacy import sharding_utils
 import numpy as np
 
 
@@ -43,6 +43,7 @@ RngType = np.random.Generator | int | None
 
 class PartitionType(enum.Enum):
   """An enum specifying how examples should be assigned to groups."""
+
   INDEPENDENT = enum.auto()
   """Each example will be assigned to a group independently at random."""
   EQUAL_SPLIT = enum.auto()
@@ -53,11 +54,11 @@ def _independent_partition(
     num_examples: int,
     num_groups: int,
     rng: np.random.Generator,
-    dtype: np.typing.DTypeLike
+    dtype: np.typing.DTypeLike,
 ) -> list[np.ndarray]:
   sizes = rng.multinomial(num_examples, np.ones(num_groups) / num_groups)
   boundaries = np.cumsum(sizes)[:-1]
-  indices = np.random.permutation(num_examples).astype(dtype)
+  indices = rng.permutation(num_examples).astype(dtype)
   return np.split(indices, boundaries)
 
 
@@ -65,7 +66,7 @@ def _equal_split_partition(
     num_examples: int,
     num_groups: int,
     rng: np.random.Generator,
-    dtype: np.typing.DTypeLike
+    dtype: np.typing.DTypeLike,
 ) -> list[np.ndarray]:
   indices = rng.permutation(num_examples).astype(dtype)
   group_size = num_examples // num_groups
@@ -109,7 +110,7 @@ def split_and_pad_global_batch(
   minibatch_shape = (minibatch_size,) + indices.shape[1:]
   last_minibatch = np.full(minibatch_shape, -1, dtype=indices.dtype)
   last_minibatch[: minibatches[-1].shape[0]] = minibatches[-1]
-  permutation = microbatching.compute_early_stopping_order(
+  permutation = sharding_utils.compute_early_stopping_order(
       minibatch_size, microbatch_size
   )
   minibatches[-1] = last_minibatch[permutation]
@@ -221,8 +222,8 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       sampling.
     partition_type: How to partition the examples into groups for before Poisson
       sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
-      and replace-one adjacency notions, while INDEPENDENT is compatible
-      with the add-remove adjacency notion.
+      and replace-one adjacency notions, while INDEPENDENT is compatible with
+      the add-remove adjacency notion.
   """
 
   sampling_prob: float
@@ -248,6 +249,8 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
 
     for i in range(self.iterations):
       current_group = partition[i % self.cycle_length]
+      # See Lemma 1 of https://arxiv.org/abs/2406.17298v3 for a proof this
+      # is equivalent to Poisson sampling.
       sample_size = rng.binomial(n=len(current_group), p=self.sampling_prob)
       if self.truncated_batch_size is not None:
         sample_size = min(sample_size, self.truncated_batch_size)
@@ -289,6 +292,46 @@ class BallsInBinsSampling(BatchSelectionStrategy):
 
     for i in range(self.iterations):
       yield groups[i % self.cycle_length]
+
+
+@dataclasses.dataclass(frozen=True)
+class FixedBatchSampling(BatchSelectionStrategy):
+  """Implements fixed-size batch sampling.
+
+  Each batch is sampled uniformly at random from the dataset. By default,
+  batches are sampled without replacement within a batch, and with replacement
+  across batches (i.e., the same example can appear in multiple iterations).
+
+  References: https://arxiv.org/abs/1807.01647 and
+  https://arxiv.org/abs/1908.10530
+
+  Attributes:
+    batch_size: The number of examples per batch.
+    iterations: The number of total iterations / batches to generate.
+    replace: Whether to sample with replacement within each batch.
+  """
+
+  batch_size: int
+  iterations: int
+  replace: bool = False
+
+  def batch_iterator(
+      self, num_examples: int, rng: RngType = None
+  ) -> Iterator[np.ndarray]:
+    if self.batch_size < 0:
+      raise ValueError(f'batch_size must be >= 0, got {self.batch_size}.')
+    if not self.replace and self.batch_size > num_examples:
+      raise ValueError(
+          'batch_size must be <= num_examples when replace is False.'
+      )
+    rng = np.random.default_rng(rng)
+    dtype = np.min_scalar_type(-num_examples)
+    for _ in range(self.iterations):
+      yield rng.choice(
+          num_examples,
+          size=self.batch_size,
+          replace=self.replace,
+      ).astype(dtype, copy=False)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -348,25 +391,23 @@ class UserSelectionStrategy:
       same selected user.
     """
     rng = np.random.default_rng(rng)
-    # inverse contains cleaned ids in the range [0, ..., nunique-1].
+    # inverse contains cleaned ids in the range [0, ..., num_users - 1].
     unique, inverse = np.unique(user_ids, return_inverse=True)
     num_users = unique.size
     num_examples = user_ids.size
     dtype = np.min_scalar_type(-num_examples)
 
-    # Precompute sorted indices and starts to avoid O(n) per user_id
-    # in np.where.
-    sorted_indices = np.argsort(inverse)
+    # Group example indices by user once to avoid an O(n) scan per user.
+    order = np.argsort(inverse, kind='stable').astype(dtype, copy=False)
     counts = np.bincount(inverse, minlength=num_users)
-    starts = np.r_[0, np.cumsum(counts)]
+    grouped_examples = np.split(order, np.cumsum(counts)[:-1])
 
     def create_user_generator(user_id):
-      start = starts[user_id]
-      end = starts[user_id + 1]
-      owned_examples = sorted_indices[start:end].astype(dtype)
+      owned_examples = grouped_examples[user_id]
       if self.shuffle_per_user:
+        owned_examples = owned_examples.copy()
         rng.shuffle(owned_examples)
-      return itertools.cycle(owned_examples)
+      return itertools.cycle(owned_examples.tolist())
 
     user_generators = [create_user_generator(i) for i in range(num_users)]
 

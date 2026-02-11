@@ -41,13 +41,15 @@ PYTREE_STRUCTS = [
 
 class ClipPyTreeTest(parameterized.TestCase):
 
-  @parameterized.parameters(*cartesian_product(
-      pytree=PYTREE_STRUCTS,
-      clip_norm=[0.0, 1.0, 2.0, jnp.inf],
-      rescale_to_unit_norm=[True, False],
-      nan_safe=[True, False],
-      return_zero=[True, False],
-  ))
+  @parameterized.parameters(
+      *cartesian_product(
+          pytree=PYTREE_STRUCTS,
+          clip_norm=[0.0, 1.0, 2.0, jnp.inf],
+          rescale_to_unit_norm=[True, False],
+          nan_safe=[True, False],
+          return_zero=[True, False],
+      )
+  )
   def test_clip_pytree_output_dtype_matches_input(self, pytree, **kwargs):
     pytree = optax.tree.random_like(jax.random.key(0), pytree)
     clipped, _ = clipping.clip_pytree(pytree, **kwargs)
@@ -56,13 +58,15 @@ class ClipPyTreeTest(parameterized.TestCase):
     clipped2, _ = jitted(pytree, **kwargs)
     chex.assert_trees_all_equal_shapes_and_dtypes(pytree, clipped, clipped2)
 
-  @parameterized.parameters(*cartesian_product(
-      pytree=PYTREE_STRUCTS,
-      clip_norm=[0.0, 1.0, 2.0, jnp.inf],
-      rescale_to_unit_norm=[True, False],
-      nan_safe=[True, False],
-      return_zero=[True, False],
-  ))
+  @parameterized.parameters(
+      *cartesian_product(
+          pytree=PYTREE_STRUCTS,
+          clip_norm=[0.0, 1.0, 2.0, jnp.inf],
+          rescale_to_unit_norm=[True, False],
+          nan_safe=[True, False],
+          return_zero=[True, False],
+      )
+  )
   def test_clip_pytree_has_bounded_norm(self, pytree, **kwargs):
     pytree = optax.tree.random_like(jax.random.key(0), pytree)
     clipped, _ = clipping.clip_pytree(pytree, **kwargs)
@@ -116,11 +120,13 @@ class ClipPyTreeTest(parameterized.TestCase):
     chex.assert_trees_all_close(clipped_rescaled, zero_tree)
     self.assertAlmostEqual(optax.global_norm(clipped_rescaled), 0.0)
 
-  @parameterized.parameters(*cartesian_product(
-      clip_norm=[0.0, 1.0, 2.0, jnp.inf],
-      return_zero=[False, True],
-      rescale_to_unit_norm=[False, True],
-  ))
+  @parameterized.parameters(
+      *cartesian_product(
+          clip_norm=[0.0, 1.0, 2.0, jnp.inf],
+          return_zero=[False, True],
+          rescale_to_unit_norm=[False, True],
+      )
+  )
   def test_nan_safety(self, **kwargs):
     pytree = jnp.array([3.0, 0.0, 1.0, jnp.nan, 2.0])
     clipped, _ = clipping.clip_pytree(pytree, nan_safe=True, **kwargs)

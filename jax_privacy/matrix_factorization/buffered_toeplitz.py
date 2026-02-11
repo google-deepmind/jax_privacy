@@ -84,8 +84,8 @@ class StreamingMatrixBuilder:
   Attributes:
     buf_decay: A numpy array of shape `(num_buffers,)` representing the decay
       factors for each buffer.
-    output_scale: A numpy array of shape `(num_buffers,)` representing the
-      scale factors applied to each buffer when reading the output.
+    output_scale: A numpy array of shape `(num_buffers,)` representing the scale
+      factors applied to each buffer when reading the output.
   """
 
   buf_decay: np.ndarray
@@ -224,8 +224,8 @@ class BufferedToeplitz:
         `jnp.float64`, is storngly recommended for numerical stability. However,
         this requires either the global option
         `jax.config.update('jax_enable_x64', True)` or that build() and
-        subsequent computations occur within a `with
-        jax.enable_x64():` context. See also `check_float64_dtype`.
+        subsequent computations occur within a `with jax.enable_x64():` context.
+        See also `check_float64_dtype`.
 
     Returns:
       A `BufferedToeplitz` with buf_decay in decreasing order.
@@ -1357,11 +1357,11 @@ def _max_error_Gamma_j_series(
   """Taylor series approximation to _max_error_Gamma_j."""
   # Auto-generated via sympy, see colab notebook
   # robust_max_error_for_blts.ipynb.ipynb
-  # pyformat: disable
+  # fmt: off
   x0 = theta - 1
   x1 = omega*(n - 2)*(n - 1)
   return -omega*(1/2 - 1/2*n) + (1/24)*x0**2*x1*(n - 3) + (1/6)*x0*x1
-  # pyformat: enable
+  # fmt: on
 
 
 def robust_max_error_Gamma_j(
@@ -1416,7 +1416,7 @@ def _max_error_Gamma_jk_series_j(
   """Compute _max_error_Gamma_jk with a series approximation for theta1."""
   # Auto-generated via sympy, see colab notebook
   # robust_max_error_for_blts.ipynb
-  # pyformat: disable
+  # fmt: off
   x0 = theta2 - 1
   x1 = theta2**(n + 1)
   x2 = -x1
@@ -1429,7 +1429,7 @@ def _max_error_Gamma_jk_series_j(
       n*x0**3*(3*n + x5*x6*(n - 2) - 3) + n*x3*(x2 + x4) - x3*(theta2 + x2)
       + 3*x6*(n*x0*(-x1*x5 + x4*x5) - 2*n*(x1 - x7)
               + 2*theta2**2 - 2*x7))/(n*x0**4))
-  # pyformat: enable
+  # fmt: on
 
 
 def _max_error_Gamma_jk_series_jk(
@@ -1442,12 +1442,12 @@ def _max_error_Gamma_jk_series_jk(
   """Compute _max_error_Gamma_jk with a series approximation for theta1."""
   # Auto-generated via sympy, see colab notebook
   # robust_max_error_for_blts.ipynb
-  # pyformat: disable
+  # fmt: off
   x0 = n**2
   x1 = 3*n**3 + 9*n - 10*x0 - 2
   return ((1/24)*omega1*omega2*(-12*n + 8*x0 + x1*(theta1 - 1)
                                 + x1*(theta2 - 1) + 4))
-  # pyformat: enable
+  # fmt: on
 
 
 def robust_max_error_Gamma_jk(

@@ -17,8 +17,9 @@ from absl.testing import absltest
 import chex
 import jax
 import jax.numpy as jnp
-from jax_privacy.noise_addition import sharding_utils
+from jax_privacy import sharding_utils
 import numpy as np
+import optax
 
 
 class ShardingTest(absltest.TestCase):
@@ -64,9 +65,7 @@ class ShardingTest(absltest.TestCase):
     sharding = jax.sharding.NamedSharding(
         self.mesh, jax.sharding.PartitionSpec(None, 'y')
     )
-    shaped_value = jax.ShapeDtypeStruct(
-        (2, 6), jnp.float32, sharding=sharding
-    )
+    shaped_value = jax.ShapeDtypeStruct((2, 6), jnp.float32, sharding=sharding)
     flat_value = sharding_utils.flatten_with_zero_redundancy(shaped_value)
     self.assertEqual(
         flat_value.sharding.spec, jax.sharding.PartitionSpec(('x', 'y', 'z'))
@@ -93,6 +92,24 @@ class ShardingTest(absltest.TestCase):
     self.assertEqual(
         zeros.sharding.mesh.axis_names, flattened.sharding.mesh.axis_names
     )
+
+  def test_compute_early_stopping_order(self):
+    is_padding = jnp.array([0, 0, 0, 1, 1, 1])
+
+    # Padding examples should appear at the end after reshaping batch axis.
+    expected_true_microbatches = {
+        1: np.array([[0], [0], [0], [1], [1], [1]]),
+        2: np.array([[0, 0], [0, 1], [1, 1]]),
+        3: np.array([[0, 0, 0], [1, 1, 1]]),
+        6: np.array([[0, 0, 0, 1, 1, 1]]),
+    }
+
+    for microbatch_size, expected in expected_true_microbatches.items():
+      perm = sharding_utils.compute_early_stopping_order(6, microbatch_size)
+      actual = optax.microbatching.reshape_batch_axis(
+          is_padding[perm], microbatch_size
+      )
+      chex.assert_trees_all_equal(actual, expected)
 
 
 if __name__ == '__main__':

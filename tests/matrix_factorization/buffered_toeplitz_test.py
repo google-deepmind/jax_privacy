@@ -687,7 +687,7 @@ class OptimizationTest(parameterized.TestCase):
 
   @hypothesis.given(
       n_nbuf_rtol_tuple=st.sampled_from([
-          # pyformat: disable
+          # fmt: off
           # pylint:disable=bad-whitespace
           # We spot check a range of n and nbuf (both above and below the
           # number of buffers that should be optimal).
@@ -709,7 +709,7 @@ class OptimizationTest(parameterized.TestCase):
           ( 10_000_000, 8, 1.10),
           (100_000_000, 2, 1.60),  # Too few buffers.
           (100_000_000, 7, 1.05),
-          # pyformat: enable
+          # fmt: on
           # pylint:enable=bad-whitespace
       ])
   )
