@@ -71,9 +71,7 @@ def load_data() -> Tuple[
   return (x_train, y_train), (x_test, y_test)
 
 
-def main(argv: Sequence[str]) -> None:
-  if len(argv) > 1:
-    raise app.UsageError("Too many command-line arguments.")
+def main(_):
 
   # Marker to insert the main part of the example into ReadTheDocs.
   # [START example]
