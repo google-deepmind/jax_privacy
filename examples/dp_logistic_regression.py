@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
-from typing import Any, Mapping, Tuple, Sequence
+from typing import Any, Mapping, Tuple
 import numpy as np
 import optax
 

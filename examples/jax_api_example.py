@@ -36,7 +36,7 @@ from jax_privacy import noise_addition
 from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
 from jax_privacy.accounting import calibrate
-from typing import Any, Mapping, Tuple, Sequence
+from typing import Any, Mapping, Tuple
 import tensorflow as tf
 
 
