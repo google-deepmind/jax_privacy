@@ -91,7 +91,7 @@ jobs:
           pytest tests/ -k "sharding_utils_test" --junitxml=report3.xml
       - name: Upload pytest reports on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: pytest-reports-${{ matrix.os }}
           path: report*.xml
