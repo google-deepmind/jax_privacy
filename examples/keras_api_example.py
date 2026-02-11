@@ -27,7 +27,7 @@ os.environ["KERAS_BACKEND"] = "jax"
 from jax_privacy import keras_api
 import keras
 from keras import layers
-from typing import Tuple, Sequence
+from typing import Tuple
 import numpy as np
 
 
