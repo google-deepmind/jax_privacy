@@ -77,13 +77,13 @@ def _flatten_pspec(p: jax.sharding.PartitionSpec) -> jax.sharding.PartitionSpec:
 
   Example Usage:
     >>> p = jax.sharding.PartitionSpec(None, ('x', 'y'), None, 'z')
-    >>> _flatten_pspec(p)
-    PartitionSpec(('x', 'y', 'z'),)
+    >>> tuple(_flatten_pspec(p))
+    (('x', 'y', 'z'),)
 
   Example Usage:
     >>> p = jax.sharding.PartitionSpec('data', None, ('replica', 'mdl'))
-    >>> _flatten_pspec(p)
-    PartitionSpec(('data', 'replica', 'mdl'),)
+    >>> tuple(_flatten_pspec(p))
+    (('data', 'replica', 'mdl'),)
 
   Args:
     p: A PartitionSpec defined over a nD array.
@@ -92,6 +92,7 @@ def _flatten_pspec(p: jax.sharding.PartitionSpec) -> jax.sharding.PartitionSpec:
     A PartitionSpec defined over the same devices / mesh axes as p, but defined
     wrt a flattened version of the original array.
   """
+
   result = []
   for item in p:
     if isinstance(item, tuple):
