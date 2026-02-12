@@ -16,6 +16,7 @@
 """Trains a logistic regression model with DP-BandMF."""
 
 from absl import app
+from collections.abc import Mapping, Sequence
 import jax
 import jax.numpy as jnp
 import jax_privacy
@@ -23,6 +24,7 @@ from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
+from typing import Any
 
 
 USERS = 100_000
@@ -40,14 +42,22 @@ L2_CLIP_NORM = 1.0
 PADDING_MULTIPLE = 32
 
 
-def logistic_loss(params, feature_matrix, labels):
+def logistic_loss(
+    params: Mapping[str, Any],
+    feature_matrix: jax.Array,
+    labels: jax.Array,
+) -> jax.Array:
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
   y_pred = 1 / (1 + jnp.exp(-logits))
   y_pred = jnp.clip(y_pred, a_min=1e-6, a_max=1 - 1e-6)
   return -jnp.mean(labels * jnp.log(y_pred) + (1 - labels) * jnp.log1p(-y_pred))
 
 
-def create_benchmark(samples: int, features: int, seed: int = 0):
+def create_benchmark(
+    samples: int,
+    features: int,
+    seed: int = 0,
+) -> tuple[Mapping[str, Any], jax.Array, jax.Array]:
   """Creates a simple logistic regression model and training data."""
   key = jax.random.key(seed)
   data_key, params_key = jax.random.split(key)
@@ -66,7 +76,7 @@ def create_benchmark(samples: int, features: int, seed: int = 0):
   return params, feature_matrix, labels
 
 
-def main(_):
+def main(_: Sequence[str]) -> None:
 
   true_params, feature_matrix, labels = create_benchmark(USERS, FEATURES)
   params = jax.tree.map(jnp.zeros_like, true_params)
@@ -91,7 +101,13 @@ def main(_):
   privatizer = plan.noise_addition_transform
 
   @jax.jit
-  def update_fn(params, batch, is_padding_example, noise_state, opt_state):
+  def update_fn(
+      params: Mapping[str, Any],
+      batch: tuple[jax.Array, jax.Array],
+      is_padding_example: jax.Array,
+      noise_state: Any,
+      opt_state: Any,
+  ) -> tuple[Mapping[str, Any], Any, Any]:
     x, y = batch
     clipped_grad = grad_fn(params, x, y, is_padding_example=is_padding_example)
 
