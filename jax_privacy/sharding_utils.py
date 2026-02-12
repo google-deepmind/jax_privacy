@@ -147,6 +147,7 @@ def local_reshape_add(x: jax.Array, y: jax.Array) -> jax.Array:
       in_specs=_flatten_pspec(out_sharding.spec),
       out_specs=out_sharding.spec,
   )
+  y = jax.reshard(y, _flatten_pspec(out_sharding.spec))
   return (x + reshape(y)).astype(x.dtype)
 
 
