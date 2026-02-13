@@ -68,6 +68,47 @@ def get_overall_delta(num_samples: int, base_delta: float) -> float:
   return min(overall_delta_from_tau(best_tau), 1.0)
 
 
+def minimum_samples_to_calibrate(base_delta: float, target_delta: float) -> int:
+  """The minimum number of samples needed to calibrate to target_delta.
+
+  While for practical values of delta this method is stable, for very small
+  target_delta (or base_delta very close to target_delta) this may binary search
+  over a number of samples that results in errors due to floats having a maximum
+  representable value.
+
+  Args:
+    base_delta: The base_delta such that we use Monte Carlo verification to
+      check if each mechanism satisfies (epsilon, base_delta)-DP.
+    target_delta: The value such that we want to report the overall mechanism of
+      Monte Carlo verification and then running the best verified mechanism is
+      (epsilon, target_delta)-DP.
+
+  Returns:
+    The minimum number of samples needed to calibrate to target_delta.
+  """
+  if base_delta <= 0 or base_delta > 1:
+    raise ValueError('base_delta must be in (0, 1].')
+  if target_delta <= 0 or target_delta > 1:
+    raise ValueError('target_delta must be in (0, 1].')
+  if target_delta <= base_delta:
+    raise ValueError('target_delta must be > base_delta.')
+  lower_bound = int(1 // target_delta)
+  upper_bound = 2 * lower_bound
+  while get_overall_delta(upper_bound, base_delta) > target_delta:
+    lower_bound, upper_bound = 2 * lower_bound, 2 * upper_bound
+  while lower_bound < upper_bound - 1:
+    mid = (lower_bound + upper_bound) // 2
+    if get_overall_delta(mid, base_delta) > target_delta:
+      lower_bound = mid
+    else:
+      upper_bound = mid
+  # Due to precision issues, upper_bound might be slightly too small. We fix it
+  # post-hoc by increasing it by 1 until it achieves the target_delta.
+  while get_overall_delta(upper_bound, base_delta) > target_delta:
+    upper_bound += 1
+  return upper_bound
+
+
 def get_base_delta(num_samples: int, target_delta: float) -> float:
   """The base_delta for Monte Carlo verification to achieve target_delta.
 

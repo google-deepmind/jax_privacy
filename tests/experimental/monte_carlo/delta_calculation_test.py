@@ -58,6 +58,26 @@ class DeltaCalculationTest(parameterized.TestCase):
     with self.assertRaises(ValueError):
       delta_calculation.get_base_delta(num_samples, target_delta)
 
+  @parameterized.product(
+      base_delta_multiplier=[0.5, 0.8, 0.9],
+      target_delta=[10**-i for i in range(1, 15)],
+  )
+  def test_minimum_samples_to_calibrate(
+      self, base_delta_multiplier, target_delta
+  ):
+    base_delta = base_delta_multiplier * target_delta
+    num_samples = delta_calculation.minimum_samples_to_calibrate(
+        base_delta, target_delta
+    )
+    self.assertLessEqual(
+        delta_calculation.get_overall_delta(num_samples, base_delta),
+        target_delta,
+    )
+    self.assertGreater(
+        delta_calculation.get_overall_delta(num_samples - 1, base_delta),
+        target_delta,
+    )
+
 
 if __name__ == '__main__':
   absltest.main()
