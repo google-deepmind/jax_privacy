@@ -66,3 +66,52 @@ def get_overall_delta(num_samples: int, base_delta: float) -> float:
       overall_delta_from_tau, bounds=(1, 1 / base_delta), method='bounded'
   ).x
   return min(overall_delta_from_tau(best_tau), 1.0)
+
+
+def get_base_delta(num_samples: int, target_delta: float) -> float:
+  """The base_delta for Monte Carlo verification to achieve target_delta.
+
+  In more detail, if we use num_samples samples to verify that a mechanism
+  satisfies (epsilon, base_delta)-DP, then we can formally report that the
+  mechanism satisfies (epsilon, target_delta)-DP.
+
+  This method assumes we are doing many Monte Carlo verifications of different
+  ordered mechanisms, and then picking the highest-utility mechanism that meets
+  our target privacy guarantee. If we are only verifying one mechanism (which
+  requires some chance of an empty output which is usually undesirable in
+  practice), a tighter bound is possible.
+
+  Args:
+    num_samples: The number of samples used in Monte Carlo verification.
+    target_delta: The value such that we want to report the overall mechanism of
+      Monte Carlo verification and then running the best verified mechanism is
+      (epsilon, target_delta)-DP.
+
+  Returns:
+    The base_delta such that we use Monte Carlo verification to check if each
+    mechanism satisfies (epsilon, base_delta)-DP.
+  """
+  if num_samples <= 0:
+    raise ValueError('num_samples must be positive.')
+  if target_delta < 0 or target_delta > 1:
+    raise ValueError('target_delta must be in [0, 1].')
+  tol = 1e-4 * target_delta
+  base_delta = scipy.optimize.minimize_scalar(
+      lambda d: abs(get_overall_delta(num_samples, d) - target_delta),
+      bounds=(0, target_delta),
+      method='bounded',
+      options={'xatol': tol},
+  ).x
+  # Because of the tolerance, we may end up with base_delta that is slightly
+  # too small. We report base_delta if it achieves the target_delta, otherwise
+  # we try base_delta - tol to be conservative. If that also does not achieve
+  # the target_delta, it is possible that the minimum of
+  # |overall_delta - target_delta| may be greater than 0, i.e. we cannot find a
+  # base_delta that is valid.
+  if get_overall_delta(num_samples, base_delta) < target_delta:
+    return base_delta
+  if get_overall_delta(num_samples, base_delta - tol) < target_delta:
+    return base_delta - tol
+  raise ValueError(
+      'Failed to find a valid base_delta. num_samples may be too small.'
+  )

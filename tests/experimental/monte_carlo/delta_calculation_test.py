@@ -46,6 +46,18 @@ class DeltaCalculationTest(parameterized.TestCase):
     self.assertLess(overall_delta_10001, overall_delta_10000)
     self.assertLess(base_delta, overall_delta_10001)
 
+  @parameterized.parameters([(10 ** (i + 2), 10**-i) for i in range(1, 17)])
+  def test_base_delta(self, num_samples, target_delta):
+    base_delta = delta_calculation.get_base_delta(num_samples, target_delta)
+    overall_delta = delta_calculation.get_overall_delta(num_samples, base_delta)
+    self.assertLessEqual(overall_delta, target_delta)
+    self.assertAlmostEqual(overall_delta, target_delta, places=5)
+
+  @parameterized.parameters([(10**i, 10**-i) for i in range(1, 17)])
+  def test_num_samples_too_small(self, num_samples, target_delta):
+    with self.assertRaises(ValueError):
+      delta_calculation.get_base_delta(num_samples, target_delta)
+
 
 if __name__ == '__main__':
   absltest.main()
