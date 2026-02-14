@@ -40,14 +40,6 @@ L2_CLIP_NORM = 1.0
 # PADDING_MULTIPLE > 1 pads batches in range (kP, (k+1)P ] to size (k+1)P
 PADDING_MULTIPLE = 32
 
-
-def logistic_loss(params, feature_matrix, labels):
-  logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
-  y_pred = 1 / (1 + jnp.exp(-logits))
-  y_pred = jnp.clip(y_pred, a_min=1e-6, a_max=1 - 1e-6)
-  return -jnp.mean(labels * jnp.log(y_pred) + (1 - labels) * jnp.log1p(-y_pred))
-
-
 def elementwise_loss(params, feature_matrix, labels):
   """Computes element-wise loss for auditing."""
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
@@ -55,6 +47,8 @@ def elementwise_loss(params, feature_matrix, labels):
   y_pred = jnp.clip(y_pred, a_min=1e-6, a_max=1 - 1e-6)
   return -(labels * jnp.log(y_pred) + (1 - labels) * jnp.log1p(-y_pred))
 
+def logistic_loss(params, feature_matrix, labels):
+  return jnp.mean(elementwise_loss(params, feature_matrix, labels))
 
 def create_benchmark(samples: int, features: int, seed: int = 0):
   """Creates a simple logistic regression model and training data."""
@@ -160,3 +154,4 @@ def main(_):
 
 if __name__ == '__main__':
   app.run(main)
+
