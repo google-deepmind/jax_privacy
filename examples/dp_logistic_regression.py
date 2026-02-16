@@ -50,7 +50,6 @@ def elementwise_loss(params, feature_matrix, labels):
 def logistic_loss(params, feature_matrix, labels):
   return jnp.mean(elementwise_loss(params, feature_matrix, labels))
 
-
 def create_benchmark(samples: int, features: int, seed: int = 0):
   """Creates a simple logistic regression model and training data."""
   key = jax.random.key(seed)
@@ -75,13 +74,14 @@ def main(_):
   total_users = USERS
   train_users = total_users // 2
   
-  true_params, all_feature, all_labels = create_benchmark(total_users, FEATURES)
+  true_params, all_features, all_labels = create_benchmark(total_users, FEATURES)
+  
   # Split dataset
   train_features, train_labels = all_features[:train_users], all_labels[:train_users]
   audit_features, audit_labels = all_features[train_users:], all_labels[train_users:]
-  
+
   params = jax.tree.map(jnp.zeros_like, true_params)
-  print('Initial Loss(Train): ', logistic_loss(params, train_features, train_labels))
+  print('Initial Loss (Train): ', logistic_loss(params, train_features, train_labels))
 
   config = execution_plan.BandMFExecutionPlanConfig(
       iterations=ITERATIONS,
@@ -127,12 +127,12 @@ def main(_):
     )
 
   # loss ~ 0.27 with default parameters.
-  print('Final Loss(Train): ', logistic_loss(params, train_features, train_labels))
-  print('True Loss(Train): ', logistic_loss(true_params, train_features, train_labels))
+  print('Final Loss (Train): ', logistic_loss(params, train_features, train_labels))
+  print('True Loss (Train): ', logistic_loss(true_params, train_features, train_labels))
 
   print('Learned parameters: ', params)
   print('True parameters: ', true_params)
-  
+
   # --- Canary Insertion / Auditing ---
   print('\n--- Privacy Auditing ---')
   
@@ -154,4 +154,3 @@ def main(_):
 
 if __name__ == '__main__':
   app.run(main)
-
