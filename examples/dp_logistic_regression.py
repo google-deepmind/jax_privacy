@@ -19,7 +19,6 @@ from absl import app
 import jax
 import jax.numpy as jnp
 import jax_privacy
-from jax_privacy import auditing
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
@@ -40,15 +39,13 @@ L2_CLIP_NORM = 1.0
 # PADDING_MULTIPLE > 1 pads batches in range (kP, (k+1)P ] to size (k+1)P
 PADDING_MULTIPLE = 32
 
-def elementwise_loss(params, feature_matrix, labels):
-  """Computes element-wise loss for auditing."""
+
+def logistic_loss(params, feature_matrix, labels):
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
   y_pred = 1 / (1 + jnp.exp(-logits))
   y_pred = jnp.clip(y_pred, a_min=1e-6, a_max=1 - 1e-6)
-  return -(labels * jnp.log(y_pred) + (1 - labels) * jnp.log1p(-y_pred))
+  return -jnp.mean(labels * jnp.log(y_pred) + (1 - labels) * jnp.log1p(-y_pred))
 
-def logistic_loss(params, feature_matrix, labels):
-  return jnp.mean(elementwise_loss(params, feature_matrix, labels))
 
 def create_benchmark(samples: int, features: int, seed: int = 0):
   """Creates a simple logistic regression model and training data."""
@@ -70,24 +67,17 @@ def create_benchmark(samples: int, features: int, seed: int = 0):
 
 
 def main(_):
-  # Split data into training set (in-canaries) and audit set (out-canaries)
-  total_users = USERS
-  train_users = total_users // 2
-  
-  true_params, all_features, all_labels = create_benchmark(total_users, FEATURES)
-  # Split dataset
-  train_features, train_labels = all_features[:train_users], all_labels[:train_users]
-  audit_features, audit_labels = all_features[train_users:], all_labels[train_users:]
 
+  true_params, feature_matrix, labels = create_benchmark(USERS, FEATURES)
   params = jax.tree.map(jnp.zeros_like, true_params)
-  print('Initial Loss (Train): ', logistic_loss(params, train_features, train_labels))
+  print('Initial Loss: ', logistic_loss(params, feature_matrix, labels))
 
   config = execution_plan.BandMFExecutionPlanConfig(
       iterations=ITERATIONS,
       num_bands=BANDS,
-      epsilon=EPSILON,    
+      epsilon=EPSILON,
       delta=DELTA,
-      sampling_prob=EXPECTED_BATCH_SIZE / train_users * BANDS,
+      sampling_prob=EXPECTED_BATCH_SIZE / USERS * BANDS,
   )
   grad_fn = jax_privacy.clipped_grad(
       logistic_loss,
@@ -113,42 +103,24 @@ def main(_):
   noise_state = privatizer.init(params)
   opt_state = optimizer.init(params)
 
- # Train on training set
-  for batch_idx in plan.batch_selection_strategy.batch_iterator(train_users):
+  for batch_idx in plan.batch_selection_strategy.batch_iterator(USERS):
 
     # Padding reduces the required number of compilations of update_fn.
     idx = batch_selection.pad_to_multiple_of(batch_idx, PADDING_MULTIPLE)
     is_padding_example = idx == -1
-    batch = train_features[idx], train_labels[idx]
+    batch = feature_matrix[idx], labels[idx]
 
     params, noise_state, opt_state = update_fn(
-        params, batch, is_padding_example, noise_state, opt_state 
+        params, batch, is_padding_example, noise_state, opt_state
     )
 
   # loss ~ 0.27 with default parameters.
-  print('Final Loss(Train): ', logistic_loss(params, train_features, train_labels))
-  print('True Loss(Train): ', logistic_loss(true_params, train_features, train_labels))
+  print('Final Loss: ', logistic_loss(params, feature_matrix, labels))
+  print('True Loss: ', logistic_loss(true_params, feature_matrix, labels))
 
   print('Learned parameters: ', params)
-  print('True parameters: ', true_params)    
+  print('True parameters: ', true_params)
 
-  # --- Canary Insertion / Auditing ---
-  print('\n--- Privacy Auditing ---')
-  
-  # Calculate scores (negative loss)
-  # Training data (in-canaries) should have lower loss -> higher score
-  in_scores = -elementwise_loss(params, train_features, train_labels)
-  out_scores = -elementwise_loss(params, audit_features, audit_labels)
-  
-  # Run Auditor
-  auditor = auditing.CanaryScoreAuditor(in_scores, out_scores)
-  
-  # Estimate epsilon
-  estimated_epsilon = auditor.epsilon_raw_counts(min_count=10, delta=DELTA)
-
-  print(f'Theoretical Epsilon: {EPSILON:.2f}')
-  print(f'Estimated Epsilon:   {estimated_epsilon:.2f}')
-  print(f'Start Auditing with {len(in_scores)} in-canaries and {len(out_scores)} out-canaries.')
 
 if __name__ == '__main__':
   app.run(main)
