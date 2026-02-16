@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2025 DeepMind Technologies Limited.
+# Copyright 2026 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -75,7 +75,6 @@ def main(_):
   train_users = total_users // 2
   
   true_params, all_features, all_labels = create_benchmark(total_users, FEATURES)
-  
   # Split dataset
   train_features, train_labels = all_features[:train_users], all_labels[:train_users]
   audit_features, audit_labels = all_features[train_users:], all_labels[train_users:]
@@ -86,7 +85,7 @@ def main(_):
   config = execution_plan.BandMFExecutionPlanConfig(
       iterations=ITERATIONS,
       num_bands=BANDS,
-      epsilon=EPSILON,
+      epsilon=EPSILON,    
       delta=DELTA,
       sampling_prob=EXPECTED_BATCH_SIZE / train_users * BANDS,
   )
@@ -114,7 +113,7 @@ def main(_):
   noise_state = privatizer.init(params)
   opt_state = optimizer.init(params)
 
-  # Train on training set
+ # Train on training set
   for batch_idx in plan.batch_selection_strategy.batch_iterator(train_users):
 
     # Padding reduces the required number of compilations of update_fn.
@@ -123,15 +122,15 @@ def main(_):
     batch = train_features[idx], train_labels[idx]
 
     params, noise_state, opt_state = update_fn(
-        params, batch, is_padding_example, noise_state, opt_state
+        params, batch, is_padding_example, noise_state, opt_state 
     )
 
   # loss ~ 0.27 with default parameters.
-  print('Final Loss (Train): ', logistic_loss(params, train_features, train_labels))
-  print('True Loss (Train): ', logistic_loss(true_params, train_features, train_labels))
+  print('Final Loss(Train): ', logistic_loss(params, train_features, train_labels))
+  print('True Loss(Train): ', logistic_loss(true_params, train_features, train_labels))
 
   print('Learned parameters: ', params)
-  print('True parameters: ', true_params)
+  print('True parameters: ', true_params)    
 
   # --- Canary Insertion / Auditing ---
   print('\n--- Privacy Auditing ---')
@@ -151,7 +150,5 @@ def main(_):
   print(f'Estimated Epsilon:   {estimated_epsilon:.2f}')
   print(f'Start Auditing with {len(in_scores)} in-canaries and {len(out_scores)} out-canaries.')
 
-
 if __name__ == '__main__':
   app.run(main)
-
