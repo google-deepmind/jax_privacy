@@ -135,6 +135,119 @@ class DeltaCalculationTest(parameterized.TestCase):
     )
     self.assertAlmostEqual(delta, expected_delta, places=5)
 
+  _FAILURE_DELTA = delta_calculation.get_base_delta(1000, 0.1)
+
+  @parameterized.named_parameters(
+      ('0_is_best', [[1] * 1000, [10] * 1000], None, None, None, (True, 0)),
+      (
+          'support_size_two_0_is_best',
+          [[1] * 1000, [1] * 500 + [10] * 500],
+          None,
+          None,
+          None,
+          (True, 0),
+      ),
+      ('1_is_best', [[1] * 1000, [1] * 1000], None, None, None, (True, 1)),
+      (
+          'simple_0_fails',
+          [[10] * 1000, [10] * 1000],
+          None,
+          None,
+          None,
+          (False, _FAILURE_DELTA),
+      ),
+      (
+          '1_fails_2_passes',
+          [[1] * 1000, [10] * 1000, [1] * 1000],
+          None,
+          None,
+          None,
+          (True, 0),
+      ),
+      (
+          'min_samples_used_for_base_delta',
+          [[10] * 2000, [10] * 1000],
+          None,
+          None,
+          None,
+          (False, _FAILURE_DELTA),
+      ),
+      (
+          'simple_0_is_best_with_counts',
+          [[1], [10]],
+          [[1000], [1000]],
+          None,
+          None,
+          (True, 0),
+      ),
+      (
+          '0_passes_positive_but_fails_negative',
+          [[1] * 1000, [10] * 1000],
+          None,
+          [[10] * 1000, [10] * 1000],
+          None,
+          (False, _FAILURE_DELTA),
+      ),
+      (
+          '0_passes_1_fails_positive',
+          [[1] * 1000, [10] * 1000],
+          None,
+          [[1] * 1000, [1] * 1000],
+          None,
+          (True, 0),
+      ),
+      (
+          '0_passes_1_fails_negative',
+          [[1] * 1000, [1] * 1000],
+          None,
+          [[1] * 1000, [10] * 1000],
+          None,
+          (True, 0),
+      ),
+      (
+          '0_passes_positive_but_fails_negative_with_counts',
+          [[1], [10]],
+          [[1000], [1000]],
+          [[10], [10]],
+          [[1000], [1000]],
+          (False, _FAILURE_DELTA),
+      ),
+      (
+          '0_fails_negative_1_fails_positive_with_counts',
+          [[1], [10]],
+          [[1000], [1000]],
+          [[10], [1]],
+          [[1000], [1000]],
+          (False, _FAILURE_DELTA),
+      ),
+      (
+          '1_fails_negative_with_counts',
+          [[1], [10]],
+          [[1000], [1000]],
+          [[1], [1]],
+          [[1000], [1000]],
+          (True, 0),
+      ),
+  )
+  def test_perform_calibration_from_samples(
+      self,
+      positive_samples,
+      positive_counts,
+      negative_samples,
+      negative_counts,
+      expected_result,
+  ):
+    result = delta_calculation.perform_calibration_from_samples(
+        1.0,
+        0.1,
+        positive_samples=positive_samples,
+        positive_counts=positive_counts,
+        negative_samples=negative_samples,
+        negative_counts=negative_counts,
+    )
+    self.assertEqual(result, expected_result)
+    pass
+
 
 if __name__ == '__main__':
   absltest.main()

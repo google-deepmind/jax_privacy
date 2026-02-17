@@ -209,3 +209,137 @@ def delta_from_epsilon_and_samples(
       raise ValueError('samples and counts must have the same size.')
   np_min = np.minimum
   return np.average(-np.expm1(np_min(epsilon - samples, 0.0)), weights=counts)
+
+
+def perform_calibration_from_samples(
+    epsilon: float,
+    delta: float,
+    *,
+    positive_samples: Sequence[Sequence[float]],
+    positive_counts: Sequence[Sequence[float]] | None = None,
+    negative_samples: Sequence[Sequence[float]] | None = None,
+    negative_counts: Sequence[Sequence[float]] | None = None,
+) -> tuple[bool, int | float]:
+  """Perform calibration to find the highest-utility hyperparameter satisfying the target DP guarantee.
+
+  This is Algorithm 5 in https://arxiv.org/pdf/2602.09338.
+
+  In particular, this method assumes we have chosen a sweep of a hyperparameter
+  (such as noise multiplier), for each value in the sweep independently
+  generated some number of samples, and now want to find the highest-utility
+  hyperparameter (e.g. the lowest noise multiplier or highest number of training
+  iterations in DP-SGD) we can use and still report end-to-end
+  (epsilon, delta)-DP using Monte Carlo verification.
+
+  We assume that the samples are ordered from highest to lowest privacy of the
+  hyperparameters, i.e. lowest to highest delta at a fixed epsilon
+  (or vice-versa), even though the privacy parameters may not be explicitly
+  known. e.g., in the example of calibrating the noise multiplier for
+  DP-BandMF, we would order the samples from highest to lowest noise multiplier,
+  even if we may not know the exact (epsilon, delta)-DP guarantee for each noise
+  multiplier.
+
+  If different numbers of samples were used for each hyperparameter, this method
+  conservatively uses the minimum number of samples across all values of the
+  hyperparameter for computing tail bounds.
+
+  Example Usage (calibrating a Gaussian mechanism):
+    >>> epsilon, delta = 4.0, 1e-3
+    >>> nm_sweep = [2.0, 1.0, 0.5]
+    >>> positive_samples = []
+    >>> for nm in nm_sweep:
+    ...   positive_samples.append(
+    ...     np.random.normal(loc=0.5 / nm ** 2, size=1_000_000)
+    ...   )
+    >>> passes_verification, best_nm_index = perform_calibration_from_samples(
+    ...   epsilon, delta, positive_samples=positive_samples
+    ... )
+    >>> if passes_verification:
+    ...   print(nm_sweep[best_nm_index])
+    1.0
+
+  Args:
+    epsilon: The epsilon parameter of the target DP guarantee.
+    delta: The delta parameter of the target DP guarantee.
+    positive_samples: A list of lists of privacy loss samples from the positive
+      case, one list for each hyperparameter value.
+    positive_counts: An optional list of lists of counts corresponding to each
+      of the lists of positive samples. If None, we assume the samples are count
+      1. If passed, each list should be the same length as the associated list
+      of positive_samples.
+    negative_samples: An optional list of lists of privacy loss samples from the
+      negative case, one list for each hyperparameter value. If None, this means
+      we assume the positive case has a worse DP guarantee than the negative
+      case, so we only need to do accounting for the positive case.
+    negative_counts: An optional list of lists of counts corresponding to each
+      of the lists of negative samples. If None, we assume the samples are
+      unweighted. If passed, each list should be the same length as the
+      associated list of negative_samples. Ignored if negative_samples is None.
+
+  Returns:
+    Either (True, i), or (False, base_delta). If there is an associated set of
+    hyperparameters and (True, i) is returned, i is the index of the
+    highest-utility hyperparameter we can use while satisfying the target
+    (epsilon, delta)-DP guarantee. If (False, base_delta) is returned, we should
+    fall back to a mechanism that is known to be (epsilon, base_delta)-DP (i.e.,
+    one that can be calibrated without Monte Carlo verification)
+  """
+  if not positive_samples:
+    raise ValueError('positive_samples must be non-empty.')
+  if positive_counts is not None and len(positive_samples) != len(
+      positive_counts
+  ):
+    raise ValueError(
+        'positive_samples and positive_counts must have the same length.'
+    )
+  if negative_samples is not None and len(positive_samples) != len(
+      negative_samples
+  ):
+    raise ValueError(
+        'positive_samples and negative_samples must have the same length.'
+    )
+  if negative_counts is not None and len(positive_samples) != len(
+      negative_counts
+  ):
+    raise ValueError(
+        'positive_samples and negative_counts must have the same length.'
+    )
+  if positive_counts is None:
+    positive_counts = [np.ones_like(samples) for samples in positive_samples]
+  if negative_samples is not None and negative_counts is None:
+    negative_counts = [np.ones_like(samples) for samples in negative_samples]
+  positive_sample_counts = [sum(counts) for counts in positive_counts]
+  if negative_samples is None:
+    negative_sample_counts = []
+  else:
+    negative_sample_counts = [sum(counts) for counts in negative_counts]
+  min_sample_count = min(positive_sample_counts + negative_sample_counts)
+
+  base_delta = get_base_delta(min_sample_count, delta)
+
+  first_positive_delta = delta_from_epsilon_and_samples(
+      epsilon, positive_samples[0], positive_counts[0]
+  )
+  if negative_samples is None:
+    first_negative_delta = 0.0
+  else:
+    first_negative_delta = delta_from_epsilon_and_samples(
+        epsilon, negative_samples[0], negative_counts[0]
+    )
+  if first_positive_delta > base_delta or first_negative_delta > base_delta:
+    return False, base_delta
+
+  for i in range(1, len(positive_samples)):
+    positive_delta = delta_from_epsilon_and_samples(
+        epsilon, positive_samples[i], positive_counts[i]
+    )
+    if negative_samples is None:
+      negative_delta = 0.0
+    else:
+      negative_delta = delta_from_epsilon_and_samples(
+          epsilon, negative_samples[i], negative_counts[i]
+      )
+    if positive_delta > base_delta or negative_delta > base_delta:
+      # This hyperparameter does not pass verification, return the previous one.
+      return True, i - 1
+  return True, len(positive_samples) - 1
