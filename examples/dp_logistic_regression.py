@@ -111,7 +111,9 @@ def main(_):
     clipped_grad = grad_fn(params, x, y, is_padding_example=is_padding_example)
 
     noisy_grad, noise_state = privatizer.update(clipped_grad, noise_state)
-    params = jax.tree.map(lambda p, g: p - LEARNING_RATE * g, params, noisy_grad)
+    params = jax.tree.map(
+        lambda p, g: p - LEARNING_RATE * g, params, noisy_grad
+    )
     return params, noise_state
 
   noise_state = privatizer.init(params)
@@ -123,7 +125,9 @@ def main(_):
     is_padding_example = idx == -1
     batch = feature_matrix[idx], labels[idx]
 
-    params, noise_state = update_fn(params, batch, is_padding_example, noise_state)
+    params, noise_state = update_fn(
+        params, batch, is_padding_example, noise_state
+    )
 
   # loss ~ 0.27 with default parameters.
   print('Final Loss: ', logistic_loss(params, feature_matrix, labels))
