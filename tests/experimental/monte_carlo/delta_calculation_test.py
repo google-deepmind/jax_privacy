@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 from absl.testing import absltest
 from absl.testing import parameterized
 from jax_privacy.experimental.monte_carlo import delta_calculation
@@ -89,6 +91,49 @@ class DeltaCalculationTest(parameterized.TestCase):
     except ValueError:
       # One fewer sample failed, as expected.
       pass
+
+  @parameterized.named_parameters(
+      ('all_at_most_epsilon', 3, [1, 2, 3], None, 0.0),
+      ('all_greater_than_epsilon', 3, [3 + math.log(2), 1e9], None, 3 / 4),
+      ('some_greater_than_epsilon', 3, [2, 3, 3 + math.log(2)], None, 1 / 6),
+      (
+          'all_greater_than_epsilon_with_counts',
+          3,
+          [3 + math.log(2), 1e9],
+          [2, 1],
+          2 / 3,
+      ),
+      (
+          'some_greater_than_epsilon_with_counts',
+          3,
+          [2, 3, 3 + math.log(2)],
+          [1, 1, 2],
+          1 / 4,
+      ),
+      ('large_epsilon', 1000, [999, 1000, 1000 + math.log(2)], None, 1 / 6),
+      ('epsilon_zero', 0, [-1, 0, math.log(2)], None, 1 / 6),
+      (
+          'large_epsilon_with_counts',
+          1000,
+          [999, 1000, 1000 + math.log(2)],
+          [1, 1, 2],
+          1 / 4,
+      ),
+      (
+          'epsilon_zero_with_counts',
+          0,
+          [-1, 0, math.log(2)],
+          [1, 1, 2],
+          1 / 4,
+      ),
+  )
+  def test_delta_from_epsilon_and_samples(
+      self, epsilon, samples, counts, expected_delta
+  ):
+    delta = delta_calculation.delta_from_epsilon_and_samples(
+        epsilon, samples, counts
+    )
+    self.assertAlmostEqual(delta, expected_delta, places=5)
 
 
 if __name__ == '__main__':

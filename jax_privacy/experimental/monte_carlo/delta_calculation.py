@@ -15,6 +15,8 @@
 
 """Utilities for calculating deltas in Monte Carlo accounting."""
 
+from typing import Sequence
+
 import numpy as np
 import scipy
 
@@ -170,3 +172,40 @@ def get_base_delta(num_samples: int, target_delta: float) -> float:
   raise ValueError(
       'Failed to find a valid base_delta. num_samples may be too small.'
   )
+
+
+def delta_from_epsilon_and_samples(
+    epsilon: float,
+    samples: Sequence[float],
+    counts: Sequence[float] | None = None,
+):
+  """Calculate the delta parameter for a given epsilon and list of samples.
+
+  Args:
+    epsilon: The epsilon parameter of the DP guarantee.
+    samples: Samples from the privacy loss distribution. That is, to estimate
+      the e^epsilon-hockey stick divergence between P and Q, we sample x from P,
+      and then compute ln(P(x)/Q(x)) to get a single sample.
+    counts: A list of floats representing the counts of the samples. If None, we
+      assume the samples are count 1. This can be helpful if the number of
+      samples is very large, in which case one can discretize the samples and
+      pass the counts of each discretization. If passed, should be the same
+      length as samples.
+
+  Returns:
+    The delta parameter given by Monte Carlo estimation of the hockey-stick
+    divergence.
+  """
+  samples = np.asarray(samples)
+  if epsilon < 0:
+    raise ValueError('epsilon must be non-negative.')
+  if samples.ndim != 1:
+    raise ValueError('samples must be a 1D array.')
+  if counts is not None:
+    counts = np.asarray(counts)
+    if counts.ndim != 1:
+      raise ValueError('counts must be a 1D array.')
+    if samples.size != counts.size:
+      raise ValueError('samples and counts must have the same size.')
+  np_min = np.minimum
+  return np.average(-np.expm1(np_min(epsilon - samples, 0.0)), weights=counts)
