@@ -16,7 +16,7 @@
 """Trains a logistic regression model with DP-BandMF."""
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from absl import app
 import jax
@@ -25,7 +25,6 @@ import jax_privacy
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
-import optax
 
 
 USERS = 100_000
@@ -72,7 +71,7 @@ def create_benchmark(
 
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
   probas = 1 / (1 + jnp.exp(-logits))
-  labels = np.random.rand(samples) < probas
+  labels = jnp.asarray(np.random.rand(samples) < probas)
 
   return params, feature_matrix, labels
 
@@ -83,7 +82,8 @@ def main(_):
   params = jax.tree.map(jnp.zeros_like, true_params)
   print('Initial Loss: ', logistic_loss(params, feature_matrix, labels))
 
-  config = execution_plan.BandMFExecutionPlanConfig(
+  bandmf_config_cls = cast(Any, execution_plan.BandMFExecutionPlanConfig)
+  config = bandmf_config_cls(
       iterations=ITERATIONS,
       num_bands=BANDS,
       epsilon=EPSILON,
@@ -98,7 +98,6 @@ def main(_):
   )
   plan = config.make(grad_fn)
 
-  optimizer = optax.sgd(LEARNING_RATE)
   privatizer = plan.noise_addition_transform
 
   @jax.jit
@@ -107,18 +106,15 @@ def main(_):
       batch: tuple[jax.Array, jax.Array],
       is_padding_example: jax.Array,
       noise_state: Any,
-      opt_state: Any,
-  ) -> tuple[Mapping[str, Any], Any, Any]:
+  ) -> tuple[Mapping[str, Any], Any]:
     x, y = batch
     clipped_grad = grad_fn(params, x, y, is_padding_example=is_padding_example)
 
     noisy_grad, noise_state = privatizer.update(clipped_grad, noise_state)
-    updates, opt_state = optimizer.update(noisy_grad, opt_state)
-    params = optax.apply_updates(params, updates)
-    return params, noise_state, opt_state
+    params = jax.tree.map(lambda p, g: p - LEARNING_RATE * g, params, noisy_grad)
+    return params, noise_state
 
   noise_state = privatizer.init(params)
-  opt_state = optimizer.init(params)
 
   for batch_idx in plan.batch_selection_strategy.batch_iterator(USERS):
 
@@ -127,9 +123,7 @@ def main(_):
     is_padding_example = idx == -1
     batch = feature_matrix[idx], labels[idx]
 
-    params, noise_state, opt_state = update_fn(
-        params, batch, is_padding_example, noise_state, opt_state
-    )
+    params, noise_state = update_fn(params, batch, is_padding_example, noise_state)
 
   # loss ~ 0.27 with default parameters.
   print('Final Loss: ', logistic_loss(params, feature_matrix, labels))
