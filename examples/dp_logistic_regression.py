@@ -15,8 +15,10 @@
 
 """Trains a logistic regression model with DP-BandMF."""
 
+from collections.abc import Mapping
+from typing import Any
+
 from absl import app
-from collections.abc import Mapping, Sequence
 import jax
 import jax.numpy as jnp
 import jax_privacy
@@ -24,7 +26,6 @@ from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
-from typing import Any
 
 
 USERS = 100_000
@@ -76,7 +77,7 @@ def create_benchmark(
   return params, feature_matrix, labels
 
 
-def main(_: Sequence[str]) -> None:
+def main(_):
 
   true_params, feature_matrix, labels = create_benchmark(USERS, FEATURES)
   params = jax.tree.map(jnp.zeros_like, true_params)
