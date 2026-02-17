@@ -94,17 +94,31 @@ def minimum_samples_to_calibrate(base_delta: float, target_delta: float) -> int:
     raise ValueError('target_delta must be > base_delta.')
   lower_bound = int(1 // target_delta)
   upper_bound = 2 * lower_bound
-  while get_overall_delta(upper_bound, base_delta) > target_delta:
+
+  # There are some stability issues in going back-and-forth between base_delta
+  # and target_delta, so to be conservative we enforce both that we have a valid
+  # base_delta and that we achieve the target_delta.
+  # TODO: Investigate using log-space to improve stability.
+  def _enough_samples(num_samples):
+    try:
+      get_base_delta(num_samples, target_delta)
+      return get_overall_delta(num_samples, base_delta) <= target_delta
+    except ValueError:
+      return False
+
+  while not _enough_samples(upper_bound):
     lower_bound, upper_bound = 2 * lower_bound, 2 * upper_bound
   while lower_bound < upper_bound - 1:
     mid = (lower_bound + upper_bound) // 2
-    if get_overall_delta(mid, base_delta) > target_delta:
-      lower_bound = mid
-    else:
+    if _enough_samples(mid):
       upper_bound = mid
+    else:
+      lower_bound = mid
+
   # Due to precision issues, upper_bound might be slightly too small. We fix it
-  # post-hoc by increasing it by 1 until it achieves the target_delta.
-  while get_overall_delta(upper_bound, base_delta) > target_delta:
+  # post-hoc by increasing it by 1 until it achieves the target_delta and also
+  # we have enough samples to find a valid base_delta.
+  while not _enough_samples(upper_bound):
     upper_bound += 1
   return upper_bound
 

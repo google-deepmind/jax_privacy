@@ -73,10 +73,22 @@ class DeltaCalculationTest(parameterized.TestCase):
         delta_calculation.get_overall_delta(num_samples, base_delta),
         target_delta,
     )
-    self.assertGreater(
-        delta_calculation.get_overall_delta(num_samples - 1, base_delta),
-        target_delta,
+    self.assertGreaterEqual(
+        delta_calculation.get_base_delta(num_samples, target_delta),
+        base_delta / 1.001,
     )
+    # Make sure that using one less sample fails.
+    try:
+      delta_calculation.get_base_delta(num_samples - 1, target_delta)
+      # If base_delta was achievable, then 1 fewer sample should not be enough
+      # to achieve the target delta.
+      self.assertGreater(
+          delta_calculation.get_overall_delta(num_samples - 1, base_delta),
+          target_delta,
+      )
+    except ValueError:
+      # One fewer sample failed, as expected.
+      pass
 
 
 if __name__ == '__main__':
