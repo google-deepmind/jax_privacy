@@ -39,6 +39,8 @@ illustrating how JAX Privacy components can be composed in a realistic
 NLP setting.
 """
 
+from typing import Any, Mapping, Sequence, Tuple
+
 from absl import app
 import jax
 from jax import random
@@ -46,8 +48,6 @@ import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
-from typing import Any, Mapping, Sequence, Tuple
-
 import optax
 import tensorflow_datasets as tfds
 
