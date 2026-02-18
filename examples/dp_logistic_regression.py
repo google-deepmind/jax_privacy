@@ -14,6 +14,9 @@
 
 """Trains a logistic regression model with DP-BandMF."""
 
+from collections.abc import Mapping
+from typing import Any, cast
+
 from absl import app
 import jax
 import jax.numpy as jnp
@@ -21,7 +24,6 @@ import jax_privacy
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
-import optax
 
 
 USERS = 100_000
@@ -39,14 +41,22 @@ L2_CLIP_NORM = 1.0
 PADDING_MULTIPLE = 32
 
 
-def logistic_loss(params, feature_matrix, labels):
+def logistic_loss(
+    params: Mapping[str, Any],
+    feature_matrix: jax.Array,
+    labels: jax.Array,
+) -> jax.Array:
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
   y_pred = 1 / (1 + jnp.exp(-logits))
   y_pred = jnp.clip(y_pred, a_min=1e-6, a_max=1 - 1e-6)
   return -jnp.mean(labels * jnp.log(y_pred) + (1 - labels) * jnp.log1p(-y_pred))
 
 
-def create_benchmark(samples: int, features: int, seed: int = 0):
+def create_benchmark(
+    samples: int,
+    features: int,
+    seed: int = 0,
+) -> tuple[Mapping[str, Any], jax.Array, jax.Array]:
   """Creates a simple logistic regression model and training data."""
   key = jax.random.key(seed)
   data_key, params_key = jax.random.split(key)
@@ -60,7 +70,7 @@ def create_benchmark(samples: int, features: int, seed: int = 0):
 
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
   probas = 1 / (1 + jnp.exp(-logits))
-  labels = np.random.rand(samples) < probas
+  labels = jnp.asarray(np.random.rand(samples) < probas)
 
   return params, feature_matrix, labels
 
@@ -71,7 +81,8 @@ def main(_):
   params = jax.tree.map(jnp.zeros_like, true_params)
   print('Initial Loss: ', logistic_loss(params, feature_matrix, labels))
 
-  config = execution_plan.BandMFExecutionPlanConfig(
+  bandmf_config_cls = cast(Any, execution_plan.BandMFExecutionPlanConfig)
+  config = bandmf_config_cls(
       iterations=ITERATIONS,
       num_bands=BANDS,
       epsilon=EPSILON,
@@ -86,21 +97,25 @@ def main(_):
   )
   plan = config.make(grad_fn)
 
-  optimizer = optax.sgd(LEARNING_RATE)
   privatizer = plan.noise_addition_transform
 
   @jax.jit
-  def update_fn(params, batch, is_padding_example, noise_state, opt_state):
+  def update_fn(
+      params: Mapping[str, Any],
+      batch: tuple[jax.Array, jax.Array],
+      is_padding_example: jax.Array,
+      noise_state: Any,
+  ) -> tuple[Mapping[str, Any], Any]:
     x, y = batch
     clipped_grad = grad_fn(params, x, y, is_padding_example=is_padding_example)
 
     noisy_grad, noise_state = privatizer.update(clipped_grad, noise_state)
-    updates, opt_state = optimizer.update(noisy_grad, opt_state)
-    params = optax.apply_updates(params, updates)
-    return params, noise_state, opt_state
+    params = jax.tree.map(
+        lambda p, g: p - LEARNING_RATE * g, params, noisy_grad
+    )
+    return params, noise_state
 
   noise_state = privatizer.init(params)
-  opt_state = optimizer.init(params)
 
   for batch_idx in plan.batch_selection_strategy.batch_iterator(USERS):
 
@@ -109,8 +124,8 @@ def main(_):
     is_padding_example = idx == -1
     batch = feature_matrix[idx], labels[idx]
 
-    params, noise_state, opt_state = update_fn(
-        params, batch, is_padding_example, noise_state, opt_state
+    params, noise_state = update_fn(
+        params, batch, is_padding_example, noise_state
     )
 
   # loss ~ 0.27 with default parameters.
