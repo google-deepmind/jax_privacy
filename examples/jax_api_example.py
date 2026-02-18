@@ -28,16 +28,17 @@ smaller than 0.3).
 
 from typing import Any, Mapping, Tuple
 
+from absl import app
 import dp_accounting
 import jax
-import jax.numpy as jnp
-import tensorflow as tf
-from absl import app
 from jax import random
-
+import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import noise_addition
-from jax_privacy.accounting import accountants, analysis, calibrate
+from jax_privacy.accounting import accountants
+from jax_privacy.accounting import analysis
+from jax_privacy.accounting import calibrate
+import tensorflow as tf
 
 
 def init_model_params() -> Mapping[str, jax.Array]:
