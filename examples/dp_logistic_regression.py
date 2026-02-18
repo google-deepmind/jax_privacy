@@ -1,5 +1,4 @@
-# coding=utf-8
-# Copyright 2025 DeepMind Technologies Limited.
+# Copyright 2026 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,6 +14,8 @@
 
 """Trains a logistic regression model with DP-BandMF."""
 
+from typing import Any, Mapping, Tuple
+
 from absl import app
 import jax
 import jax.numpy as jnp
@@ -23,7 +24,6 @@ from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
-
 
 USERS = 100_000
 FEATURES = 10
@@ -40,14 +40,22 @@ L2_CLIP_NORM = 1.0
 PADDING_MULTIPLE = 32
 
 
-def logistic_loss(params, feature_matrix, labels):
+def logistic_loss(
+    params: Mapping[str, jax.Array],
+    feature_matrix: jax.Array,
+    labels: jax.Array,
+) -> jax.Array:
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
   y_pred = 1 / (1 + jnp.exp(-logits))
   y_pred = jnp.clip(y_pred, a_min=1e-6, a_max=1 - 1e-6)
   return -jnp.mean(labels * jnp.log(y_pred) + (1 - labels) * jnp.log1p(-y_pred))
 
 
-def create_benchmark(samples: int, features: int, seed: int = 0):
+def create_benchmark(
+    samples: int,
+    features: int,
+    seed: int = 0,
+) -> Tuple[Mapping[str, jax.Array], jax.Array, jax.Array]:
   """Creates a simple logistic regression model and training data."""
   key = jax.random.key(seed)
   data_key, params_key = jax.random.split(key)
@@ -91,7 +99,13 @@ def main(_):
   privatizer = plan.noise_addition_transform
 
   @jax.jit
-  def update_fn(params, batch, is_padding_example, noise_state, opt_state):
+  def update_fn(
+      params: Mapping[str, jax.Array],
+      batch: Tuple[jax.Array, jax.Array],
+      is_padding_example: jax.Array,
+      noise_state: Any,
+      opt_state: optax.OptState,
+  ) -> Tuple[Mapping[str, jax.Array], Any, optax.OptState]:
     x, y = batch
     clipped_grad = grad_fn(params, x, y, is_padding_example=is_padding_example)
 

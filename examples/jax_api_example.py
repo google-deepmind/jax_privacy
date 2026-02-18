@@ -1,5 +1,4 @@
-# coding=utf-8
-# Copyright 2025 DeepMind Technologies Limited.
+# Copyright 2026 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +25,8 @@ w and b should be very close to the true w and b (max absolute error should be
 smaller than 0.3).
 """
 
+from typing import Any, Mapping, Tuple
+
 from absl import app
 import dp_accounting
 import jax
@@ -39,7 +40,7 @@ from jax_privacy.accounting import calibrate
 import tensorflow as tf
 
 
-def init_model_params():
+def init_model_params() -> Mapping[str, jax.Array]:
   """Initializes the model's weight (w) and bias (b)."""
   key = random.key(12)
   w_key, b_key = random.split(key)
@@ -48,18 +49,23 @@ def init_model_params():
   return {"w": w, "b": b}
 
 
-def model(params, x):
+def model(params: Mapping[str, jax.Array], x: int) -> int:
   """Defines the linear regression model."""
   return params["w"] * x + params["b"]
 
 
-def loss_fn(params, x, y):
+def loss_fn(params: Mapping[str, jax.Array], x: int, y: int) -> jax.Array:
   """Calculates the mean squared error loss."""
   predictions = model(params, x)
   return jnp.mean((predictions - y) ** 2)
 
 
-def load_data(num_samples, true_w=2.0, true_b=1.0, noise_std=0.1):
+def load_data(
+    num_samples: Any,
+    true_w: float = 2,
+    true_b: float = 1,
+    noise_std: float = 0.1,
+) -> Tuple[jax.Array, jax.Array]:
   """Generates synthetic linear regression data."""
   key = random.key(3)
   x = random.uniform(key, (num_samples,), minval=0.0, maxval=10.0)
@@ -68,7 +74,11 @@ def load_data(num_samples, true_w=2.0, true_b=1.0, noise_std=0.1):
   return x, y
 
 
-def batch_dataset(x, y, batch_size):
+def batch_dataset(
+    x: jax.Array,
+    y: jax.Array,
+    batch_size: int,
+) -> tf.data.Dataset:
   """Batches the data into batches of the given size."""
   return (
       tf.data.Dataset.from_tensor_slices((x, y))
@@ -78,13 +88,17 @@ def batch_dataset(x, y, batch_size):
   )
 
 
-def updated_model_params(model_params, noisy_grads):
+def updated_model_params(
+    model_params: Mapping[str, jax.Array],
+    noisy_grads: Mapping[str, jax.Array],
+) -> Mapping[str, jax.Array]:
   """Updates the model parameters using the given gradients."""
   lr = 0.001
   return jax.tree.map(lambda p, g: p - lr * g, model_params, noisy_grads)
 
 
 def main(_):
+
   true_w = 2.0
   true_b = 1.0
   num_epochs = 100
@@ -128,7 +142,12 @@ def main(_):
   noise_state = privatizer.init(model_params)
 
   @jax.jit
-  def dp_update_step(model_params, batch_x, batch_y, noise_state):
+  def dp_update_step(
+      model_params: Mapping[str, jax.Array],
+      batch_x: jax.Array,
+      batch_y: jax.Array,
+      noise_state: Any,
+  ) -> Tuple[Mapping[str, jax.Array], jax.Array, Any]:
     """Updates the model parameters using DP-SGD."""
     grads, aux_outputs = grad_and_value_fn(model_params, batch_x, batch_y)
     loss = aux_outputs.values.mean()
@@ -140,7 +159,11 @@ def main(_):
   # DP only end.
 
   @jax.jit
-  def update_step(model_params, batch_x, batch_y):
+  def update_step(
+      model_params: Mapping[str, jax.Array],
+      batch_x: jax.Array,
+      batch_y: jax.Array,
+  ) -> Tuple[Mapping[str, jax.Array], jax.Array]:
     """Updates the model parameters without DP."""
     loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(
         model_params, batch_x, batch_y
