@@ -19,6 +19,8 @@ This is the fork of
 https://github.com/keras-team/keras-io/blob/master/examples/vision/mnist_convnet.py.
 """
 
+from typing import Tuple
+
 import os
 from absl import app
 
@@ -27,7 +29,6 @@ os.environ["KERAS_BACKEND"] = "jax"
 from jax_privacy import keras_api
 import keras
 from keras import layers
-from typing import Tuple
 import numpy as np
 
 
