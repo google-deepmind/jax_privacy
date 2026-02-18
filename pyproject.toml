@@ -65,6 +65,24 @@ examples = [
     "grain",
     "keras",
     "tensorflow",
+    "flax",
+]
+
+docs = [
+    "sphinx<9.0.0",
+    "sphinx-rtd-theme",
+    "myst-nb",
+    "sphinx-collections",
+    "ipykernel",
+    "sphinx_autodoc_typehints",
+    "tensorflow",
+    "keras",
+]
+
+dev = [
+    "jax_privacy[lint,test,examples,docs]",
+    "build",
+    "wheel",
 ]
 
 docs = [
