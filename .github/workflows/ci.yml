@@ -31,6 +31,9 @@ jobs:
       - name: Run flake
         run: |
           flake8 jax_privacy tests examples
+      - name: Check import order with isort
+        run: |
+          isort --check --diff jax_privacy tests examples || { echo -e "\n---> Import order check failed. To fix, run `pip install isort && isort jax_privacy tests examples` locally and commit the changes." >&2; exit 1; }
       - name: Check formatting with Pyink
         run: |
           pyink --check --diff jax_privacy tests examples || { echo -e "\n---> Formatting check failed. To fix, run `pip install pyink pyink[jupyter] && pyink jax_privacy tests examples` locally and commit the changes." >&2; exit 1; }

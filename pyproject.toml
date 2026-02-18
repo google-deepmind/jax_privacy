@@ -32,6 +32,7 @@ lint = [
     "pytype",
     "pyink",
     "pyink[jupyter]",
+    "isort"
 ]
 
 test = [

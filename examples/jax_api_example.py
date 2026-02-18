@@ -26,18 +26,18 @@ w and b should be very close to the true w and b (max absolute error should be
 smaller than 0.3).
 """
 
-from absl import app
+from typing import Any, Mapping, Tuple
+
 import dp_accounting
 import jax
-from jax import random
 import jax.numpy as jnp
+import tensorflow as tf
+from absl import app
+from jax import random
+
 import jax_privacy
 from jax_privacy import noise_addition
-from jax_privacy.accounting import accountants
-from jax_privacy.accounting import analysis
-from jax_privacy.accounting import calibrate
-from typing import Any, Mapping, Tuple
-import tensorflow as tf
+from jax_privacy.accounting import accountants, analysis, calibrate
 
 
 def init_model_params() -> Mapping[str, jax.Array]:

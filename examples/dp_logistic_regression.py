@@ -15,16 +15,17 @@
 
 """Trains a logistic regression model with DP-BandMF."""
 
-from absl import app
+from typing import Any, Mapping, Tuple
+
 import jax
 import jax.numpy as jnp
+import numpy as np
+import optax
+from absl import app
+
 import jax_privacy
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
-from typing import Any, Mapping, Tuple
-import numpy as np
-import optax
-
 
 USERS = 100_000
 FEATURES = 10
