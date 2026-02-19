@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright 2026 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,10 +21,12 @@ from absl import app
 import jax
 import jax.numpy as jnp
 import jax_privacy
+from jax_privacy import auditing
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
+
 
 USERS = 100_000
 FEATURES = 10
@@ -34,10 +37,23 @@ EXPECTED_BATCH_SIZE = 1000
 ITERATIONS = 500
 LEARNING_RATE = 0.5
 L2_CLIP_NORM = 1.0
+TRAIN_SPLIT_PERCENT = 0.9
 # Trades-off recompilation with padding for variable batch sizes.
 # PADDING_MULTIPLE = 1 recompiles update_fn for every batch size encountered.
 # PADDING_MULTIPLE > 1 pads batches in range (kP, (k+1)P ] to size (k+1)P
 PADDING_MULTIPLE = 32
+
+
+def elementwise_loss(
+    params: Mapping[str, jax.Array],
+    feature_matrix: jax.Array,
+    labels: jax.Array,
+) -> jax.Array:
+  """Computes element-wise loss for auditing."""
+  logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
+  log_p = jax.nn.log_sigmoid(logits)
+  log_one_minus_p = jax.nn.log_sigmoid(-logits)
+  return -(labels * log_p + (1 - labels) * log_one_minus_p)
 
 
 def logistic_loss(
@@ -45,10 +61,7 @@ def logistic_loss(
     feature_matrix: jax.Array,
     labels: jax.Array,
 ) -> jax.Array:
-  logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
-  y_pred = 1 / (1 + jnp.exp(-logits))
-  y_pred = jnp.clip(y_pred, a_min=1e-6, a_max=1 - 1e-6)
-  return -jnp.mean(labels * jnp.log(y_pred) + (1 - labels) * jnp.log1p(-y_pred))
+  return jnp.mean(elementwise_loss(params, feature_matrix, labels))
 
 
 def create_benchmark(
@@ -68,24 +81,43 @@ def create_benchmark(
   feature_matrix = jax.random.normal(data_key, (samples, features))
 
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
-  probas = 1 / (1 + jnp.exp(-logits))
+  probas = jax.nn.sigmoid(logits)
   labels = np.random.rand(samples) < probas
 
   return params, feature_matrix, labels
 
 
 def main(_):
+  # Split data into training set (in-canaries) and audit set (out-canaries)
+  total_users = USERS
+  train_users = int(total_users * TRAIN_SPLIT_PERCENT)
+  true_params, all_features, all_labels = create_benchmark(
+      total_users, FEATURES
+  )
 
-  true_params, feature_matrix, labels = create_benchmark(USERS, FEATURES)
+  # Split dataset
+  train_features, train_labels = (
+      all_features[:train_users],
+      all_labels[:train_users],
+  )
+  audit_features, audit_labels = (
+      all_features[train_users:],
+      all_labels[train_users:],
+  )
+
   params = jax.tree.map(jnp.zeros_like, true_params)
-  print('Initial Loss: ', logistic_loss(params, feature_matrix, labels))
+  init_params = params
+  print(
+      'Initial Loss(Train): ',
+      logistic_loss(params, train_features, train_labels),
+  )
 
   config = execution_plan.BandMFExecutionPlanConfig(
       iterations=ITERATIONS,
       num_bands=BANDS,
       epsilon=EPSILON,
       delta=DELTA,
-      sampling_prob=EXPECTED_BATCH_SIZE / USERS * BANDS,
+      sampling_prob=EXPECTED_BATCH_SIZE / train_users * BANDS,
   )
   grad_fn = jax_privacy.clipped_grad(
       logistic_loss,
@@ -117,23 +149,65 @@ def main(_):
   noise_state = privatizer.init(params)
   opt_state = optimizer.init(params)
 
-  for batch_idx in plan.batch_selection_strategy.batch_iterator(USERS):
+  for batch_idx in plan.batch_selection_strategy.batch_iterator(train_users):
 
     # Padding reduces the required number of compilations of update_fn.
     idx = batch_selection.pad_to_multiple_of(batch_idx, PADDING_MULTIPLE)
     is_padding_example = idx == -1
-    batch = feature_matrix[idx], labels[idx]
+    batch = train_features[idx], train_labels[idx]
 
     params, noise_state, opt_state = update_fn(
         params, batch, is_padding_example, noise_state, opt_state
     )
 
   # loss ~ 0.27 with default parameters.
-  print('Final Loss: ', logistic_loss(params, feature_matrix, labels))
-  print('True Loss: ', logistic_loss(true_params, feature_matrix, labels))
+  print(
+      'Final Loss(Train): ', logistic_loss(params, train_features, train_labels)
+  )
+  print(
+      'True Loss(Train): ',
+      logistic_loss(true_params, train_features, train_labels),
+  )
 
   print('Learned parameters: ', params)
   print('True parameters: ', true_params)
+
+  # --- Canary Insertion / Auditing ---
+  print('\n--- Privacy Auditing ---')
+
+  # Calculate scores (Initial Loss - Final Loss)
+  in_init_loss = elementwise_loss(init_params, train_features, train_labels)
+  in_final_loss = elementwise_loss(params, train_features, train_labels)
+  in_scores = in_init_loss - in_final_loss
+
+  out_init_loss = elementwise_loss(init_params, audit_features, audit_labels)
+  out_final_loss = elementwise_loss(params, audit_features, audit_labels)
+  out_scores = out_init_loss - out_final_loss
+
+  # Subsample in_scores to match out_scores size
+  in_scores = in_scores[: len(out_scores)]
+
+  # Run Auditor
+  auditor = auditing.CanaryScoreAuditor(in_scores, out_scores)
+
+  # Estimate epsilon
+  estimated_epsilon = auditor.epsilon_raw_counts(min_count=10, delta=DELTA)
+
+  # 99% upper confidence interval
+  quantile_99 = auditing.BootstrapParams(quantiles=0.99)
+  estimated_epsilon_99 = auditor.epsilon_raw_counts(
+      min_count=10, delta=DELTA, bootstrap_params=quantile_99
+  )
+  auroc_99 = auditor.attack_auroc(bootstrap_params=quantile_99)
+
+  print(f'Theoretical Epsilon: {EPSILON:.2f}')
+  print(f'Estimated Epsilon:   {estimated_epsilon:.2f}')
+  print(f'Estimated Epsilon (99% CI): {estimated_epsilon_99:.2f}')
+  print(f'AUROC (99% CI):      {auroc_99:.4f}')
+  print(
+      f'Start Auditing with {len(in_scores)} in-canaries and {len(out_scores)}'
+      ' out-canaries.'
+  )
 
 
 if __name__ == '__main__':
