@@ -18,9 +18,8 @@ This is the fork of
 https://github.com/keras-team/keras-io/blob/master/examples/vision/mnist_convnet.py.
 """
 
-from typing import Tuple
-
 import os
+from typing import Tuple
 from absl import app
 
 os.environ["KERAS_BACKEND"] = "jax"
