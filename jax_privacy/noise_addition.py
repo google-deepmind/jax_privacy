@@ -245,6 +245,7 @@ def _dense_matrix_factorization_privatizer(
         sampler=functools.partial(_gaussian_linear_combination, matrix_row),
         dtype=dtype,
     )
+
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, noise)
     return noisy_grads, index + 1
 
