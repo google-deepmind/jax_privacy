@@ -19,7 +19,6 @@ https://github.com/keras-team/keras-io/blob/master/examples/vision/mnist_convnet
 """
 
 import os
-from typing import Tuple
 from absl import app
 
 os.environ["KERAS_BACKEND"] = "jax"
@@ -31,7 +30,7 @@ import numpy as np
 
 
 num_classes: int = 10
-input_shape: Tuple[int, int, int] = (28, 28, 1)
+input_shape: tuple[int, int, int] = (28, 28, 1)
 
 
 def get_model() -> keras.Model:
@@ -48,9 +47,9 @@ def get_model() -> keras.Model:
   ])
 
 
-def load_data() -> Tuple[
-    Tuple[np.ndarray, np.ndarray],
-    Tuple[np.ndarray, np.ndarray],
+def load_data() -> tuple[
+    tuple[np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray],
 ]:
   """Loads the MNIST data and returns the train and test sets."""
   # Load the data and split it between train and test sets
