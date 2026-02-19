@@ -17,6 +17,7 @@ import itertools
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
+import jax.numpy as jnp
 from jax_privacy import auditing
 import numpy as np
 import scipy.special
@@ -731,6 +732,31 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     delta = 1e-6
     eps = getattr(auditor, method)(significance, delta)
     np.testing.assert_allclose(eps, expected_eps, rtol=1e-5)
+
+  def test_auditor_raises_empty_scores(self):
+    scores = []
+    other_scores = [1, 2, 3]
+    with self.assertRaisesRegex(ValueError, 'must be non-empty'):
+      auditing.CanaryScoreAuditor(scores, other_scores)
+    with self.assertRaisesRegex(ValueError, 'must be non-empty'):
+      auditing.CanaryScoreAuditor(other_scores, scores)
+
+  @parameterized.named_parameters(
+      ('dim_0', 3),
+      ('1x1', [[1]]),
+      ('2x2', [[1, 2], [3, 4]]),
+  )
+  def test_auditor_raises_wrong_dim_scores(self, scores):
+    other_scores = [1, 2, 3]
+    with self.assertRaisesRegex(ValueError, 'must be 1-dimensional'):
+      auditing.CanaryScoreAuditor(scores, other_scores)
+    with self.assertRaisesRegex(ValueError, 'must be 1-dimensional'):
+      auditing.CanaryScoreAuditor(other_scores, scores)
+
+  def test_auditor_accepts_jax_array(self):
+    in_canary_scores = jnp.ones((3,))
+    out_canary_scores = jnp.zeros((5,))
+    auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
 
 
 if __name__ == '__main__':

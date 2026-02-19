@@ -20,7 +20,6 @@ based on attack scores of held-in and held-out canaries.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from concurrent import futures
 import dataclasses
 import functools
@@ -388,8 +387,8 @@ def _pareto_frontier(points: np.ndarray) -> np.ndarray:
 
 
 def _get_tn_fn_counts(
-    in_canary_scores: Sequence[float],
-    out_canary_scores: Sequence[float],
+    in_canary_scores: np.typing.ArrayLike,
+    out_canary_scores: np.typing.ArrayLike,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
   """Computes true negative and false negative counts at each threshold.
 
@@ -535,8 +534,8 @@ class CanaryScoreAuditor:
 
   def __init__(
       self,
-      in_canary_scores: Sequence[float],
-      out_canary_scores: Sequence[float],
+      in_canary_scores: np.typing.ArrayLike,
+      out_canary_scores: np.typing.ArrayLike,
   ):
     """Initializes the CanaryScoreAuditor.
 
@@ -553,11 +552,21 @@ class CanaryScoreAuditor:
     self._out_canary_scores = np.asarray(out_canary_scores)
     if self._in_canary_scores.size == 0:
       raise ValueError('in_canary_scores must be non-empty.')
+    if self._in_canary_scores.ndim != 1:
+      raise ValueError(
+          'in_canary_scores must be 1-dimensional, got'
+          f' {self._in_canary_scores.ndim}.'
+      )
     if self._out_canary_scores.size == 0:
       raise ValueError('out_canary_scores must be non-empty.')
+    if self._out_canary_scores.ndim != 1:
+      raise ValueError(
+          'out_canary_scores must be 1-dimensional, got'
+          f' {self._out_canary_scores.ndim}.'
+      )
 
     self._thresholds, self._tn_counts, self._fn_counts = _get_tn_fn_counts(
-        in_canary_scores, out_canary_scores
+        self._in_canary_scores, self._out_canary_scores
     )
 
   def _get_tp_counts(self) -> np.ndarray:
