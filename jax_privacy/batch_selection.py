@@ -334,6 +334,82 @@ class FixedBatchSampling(BatchSelectionStrategy):
 
 
 @dataclasses.dataclass(frozen=True)
+class BMinSepSampling(BatchSelectionStrategy):
+  """Implements b-min-sep sampling.
+
+  Each batch is sampled using Poisson sampling, ignoring any example that
+  participated in the previous min_sep-1 iterations. See
+  https://arxiv.org/abs/2602.09338 for more details.
+
+  Attributes:
+    sampling_prob: The probability an example is sampled in a given iteration,
+      given that it was not sampled in any of the previous min_sep - 1
+      iterations. Note that the expected batch size is dataset size / (min_sep -
+      1 + 1 / sampling_prob), not just dataset_size * sampling_prob.
+    iterations: The number of total iterations / batches to generate.
+    min_sep: The minimum separation between two sampled examples.
+    warm_start: If True, we initialize the b-min-sep sampling process at a warm
+      start. This ensures the batch size is consistent from the start of
+      training.
+    truncated_batch_size: If set, we truncate the batch to this size. Privacy
+      analysis for this case is currently unsupported except via the reduction
+      in
+      https://journalprivacyconfidentiality.org/index.php/jpc/article/view/998/792.
+        To maintain that the participation of examples is independent prior to
+        truncation, examples which were sampled and then truncated are still
+        excluded in the next min_sep - 1 iterations.
+  """
+
+  sampling_prob: float
+  iterations: int
+  min_sep: int
+  warm_start: bool = True
+  truncated_batch_size: int | None = None
+
+  def batch_iterator(
+      self, num_examples: int, rng: RngType = None
+  ) -> Iterator[np.ndarray]:
+    # Aliases for brevity.
+    p = self.sampling_prob
+    b = self.min_sep
+    rng = np.random.default_rng(rng)
+    dtype = np.min_scalar_type(-num_examples)
+    if self.warm_start:
+      size = rng.binomial(n=num_examples, p=(b - 1) * p / (1 + (b - 1) * p))
+      concatenated_history = rng.choice(
+          num_examples,
+          size=size,
+          replace=False,
+      )
+      partition = _independent_partition(size, b - 1, rng, dtype)
+      history = [concatenated_history[partition[i]] for i in range(b - 1)]
+    else:
+      history = []
+    for _ in range(self.iterations):
+      # Simpler to just sample from all examples and then remove previously seen
+      # examples, than to try to determine all examples not in history and
+      # sample from just those.
+      sample_size = rng.binomial(n=num_examples, p=p)
+      sample = rng.choice(
+          num_examples,
+          size=sample_size,
+          replace=False,
+      )
+      for previous_batch in history:
+        sample = np.setdiff1d(sample, previous_batch, assume_unique=True)
+      history.append(sample)
+      if self.truncated_batch_size is not None:
+        sample = rng.choice(
+            sample,
+            size=min(sample.size, self.truncated_batch_size),
+            replace=False,
+        )
+      if len(history) >= b:
+        history.pop(0)
+      yield sample
+
+
+@dataclasses.dataclass(frozen=True)
 class UserSelectionStrategy:
   """A strategy that applies a base_strategy at the user level.
 
