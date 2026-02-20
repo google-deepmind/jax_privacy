@@ -56,6 +56,13 @@ def _check_subset_of_kb_participation(batches, cycle_length):
       assert np.intersect1d(partition[i], partition[j]).size == 0
 
 
+def _check_b_min_sep_property(batches, min_sep):
+  """Checks that the batches have the b-min-sep property."""
+  for i in range(len(batches)):
+    for j in range(i + 1, min(len(batches), i + min_sep)):
+      assert np.intersect1d(batches[i], batches[j]).size == 0
+
+
 def _check_element_range(batches, num_examples):
   """Checks that all batches are in the range [0, num_examples)."""
   for batch in batches:
@@ -237,6 +244,78 @@ class BatchSelectionTest(parameterized.TestCase):
     batches_b = list(strategy.batch_iterator(50, rng=0))
     for batch_a, batch_b in zip(batches_a, batches_b, strict=True):
       np.testing.assert_array_equal(batch_a, batch_b)
+
+  @parameterized.product(
+      num_examples=[100],
+      sampling_prob=[0.1],
+      iterations=[100],
+      min_sep=[2, 4],
+      warm_start=[True, False],
+      truncated_batch_size=[None, 4],
+  )
+  def test_b_min_sep_sampling(
+      self,
+      num_examples,
+      sampling_prob,
+      iterations,
+      min_sep,
+      warm_start,
+      truncated_batch_size,
+  ):
+    """Tests for b-min-sep sampling."""
+    strategy = batch_selection.BMinSepSampling(
+        sampling_prob=sampling_prob,
+        iterations=iterations,
+        min_sep=min_sep,
+        warm_start=warm_start,
+        truncated_batch_size=truncated_batch_size,
+    )
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    self.assertLen(batches, iterations)
+    _check_element_range(batches, num_examples)
+    _check_b_min_sep_property(batches, min_sep)
+    if truncated_batch_size:
+      self.assertLessEqual(
+          max(len(batch) for batch in batches), truncated_batch_size
+      )
+
+  @parameterized.product(
+      num_examples=[1000],
+      iterations=[10],
+      warm_start=[True, False],
+      truncated_batch_size=[None, 4],
+  )
+  def test_b_min_sep_sampling_prob_one(
+      self, num_examples, iterations, warm_start, truncated_batch_size
+  ):
+    """Tests for b-min-sep sampling with sampling_prob = 1."""
+    strategy = batch_selection.BMinSepSampling(
+        sampling_prob=1.0,
+        iterations=iterations,
+        min_sep=2,
+        warm_start=warm_start,
+        truncated_batch_size=truncated_batch_size,
+    )
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    self.assertLen(batches, iterations)
+    _check_element_range(batches, num_examples)
+    if truncated_batch_size:
+      self.assertLessEqual(
+          max(len(batch) for batch in batches), truncated_batch_size
+      )
+    else:
+      # Reduces to balls-in-bins.
+      _check_cyclic_property(batches, 2)
+      if not warm_start:
+        # Without warm-start, first batch will have all examples.
+        self.assertLen(batches[0], num_examples)
+        self.assertEmpty(batches[1])
+      else:
+        # With warm-start, first two batches should each have about half the
+        # examples.
+        self.assertEqual(len(batches[0]) + len(batches[1]), num_examples)
+        self.assertGreaterEqual(len(batches[0]), 400)
+        self.assertLessEqual(len(batches[0]), 600)
 
   def test_user_selection_strategy(self):
     """Tests for UserSelectionStrategy."""

@@ -114,6 +114,74 @@ def _generate_balls_in_bins_sample(
   return rng.normal(loc=mode, scale=noise_multiplier)
 
 
+def _generate_b_min_sep_sample(
+    strategy: batch_selection.BMinSepSampling,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+    seed: Seed = None,
+    positive_sample: bool = True,
+) -> np.ndarray:
+  """Generates a sample from the dominating pair for DP-BandMF using b-min-sep sampling.
+
+  See https://arxiv.org/abs/2602.09338 for details.
+
+  Args:
+    strategy: The b-min-sep sampling strategy to use.
+    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
+      clip norm, not accounting for the norm of c_col.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D. It is assumed that the length of c_col is the same as the minimum
+      separation parameter in the sampling scheme.
+    seed: The rng or seed to use for sampling.
+    positive_sample: If True, we sample from the distribution in the dominating
+      pair corresponding to the case where the sensitive example is included.
+      Otherwise, we sample from the other case in the dominating pair, where the
+      sensitive example is not included.
+
+  Returns:
+    A sample from the dominating PLD for DP-BandMF using b-min-sep sampling.
+  """
+  # Aliases for readability of math.
+  p = strategy.sampling_prob
+  b = strategy.min_sep
+  if strategy.iterations <= 0:
+    raise ValueError('iterations must be positive.')
+  if noise_multiplier <= 0:
+    raise ValueError('noise_multiplier must be positive.')
+  if not (0 < strategy.sampling_prob < 1):
+    raise ValueError('sampling_prob must be in (0, 1).')
+  _validate_c_col(c_col)
+  if c_col.size > strategy.min_sep:
+    raise ValueError('c_col must have length less than or equal to min_sep.')
+  if c_col.size > strategy.iterations:
+    c_col = c_col[: strategy.iterations]
+  rng = np.random.default_rng(seed)
+  if positive_sample:
+    pre_filter_x = rng.binomial(1, p, size=strategy.iterations)
+    x = np.zeros(strategy.iterations, dtype=np.float32)
+    if strategy.warm_start:
+      # We use a 'warm-start' such that each example is only available in the
+      # first iteration w.p. 1 / (1 + (b - 1) * p), and otherwise is first
+      # available in a uniformly random iteration from the next b - 1
+      # iterations.
+      i = rng.choice(
+          range(b),
+          p=[1 / (1 + (b - 1) * p)] + [p / (1 + (b - 1) * p)] * (b - 1),
+      )
+    else:
+      i = 0
+    while i < strategy.iterations:
+      if pre_filter_x[i] == 1:
+        x[i] = 1.0
+        i += b
+      else:
+        i += 1
+    mode = _banded_c_times_x(c_col, x)
+  else:
+    mode = np.zeros(strategy.iterations)
+  return rng.normal(loc=mode, scale=noise_multiplier)
+
+
 def generate_sample(
     strategy: batch_selection.BatchSelectionStrategy,
     noise_multiplier: float,
@@ -145,6 +213,18 @@ def generate_sample(
     return _generate_balls_in_bins_sample(
         strategy.iterations,
         strategy.cycle_length,
+        noise_multiplier,
+        c_col,
+        seed,
+        positive_sample,
+    )
+  elif isinstance(strategy, batch_selection.BMinSepSampling):
+    if strategy.truncated_batch_size:
+      raise ValueError(
+          'Truncated batch size is not supported for sample generation.'
+      )
+    return _generate_b_min_sep_sample(
+        strategy,
         noise_multiplier,
         c_col,
         seed,
