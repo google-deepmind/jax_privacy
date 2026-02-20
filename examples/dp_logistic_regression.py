@@ -28,16 +28,16 @@ import numpy as np
 import optax
 
 
-USERS = 100_000
-FEATURES = 10
+USERS = 10_000
+FEATURES = 100
 EPSILON = 1.0
 DELTA = 1e-5
 BANDS = 4
 EXPECTED_BATCH_SIZE = 1000
 ITERATIONS = 500
-LEARNING_RATE = 0.5
+LEARNING_RATE = 0.2
 L2_CLIP_NORM = 1.0
-TRAIN_SPLIT_PERCENT = 0.9
+AUDIT_HOLDOUT_PERCENT = 0.1
 # Trades-off recompilation with padding for variable batch sizes.
 # PADDING_MULTIPLE = 1 recompiles update_fn for every batch size encountered.
 # PADDING_MULTIPLE > 1 pads batches in range (kP, (k+1)P ] to size (k+1)P
@@ -51,9 +51,8 @@ def elementwise_loss(
 ) -> jax.Array:
   """Computes element-wise loss for auditing."""
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
-  log_p = jax.nn.log_sigmoid(logits)
-  log_one_minus_p = jax.nn.log_sigmoid(-logits)
-  return -(labels * log_p + (1 - labels) * log_one_minus_p)
+  signed_logits = jnp.where(labels, logits, -logits)
+  return -jax.nn.log_sigmoid(signed_logits)
 
 
 def logistic_loss(
@@ -81,36 +80,30 @@ def create_benchmark(
   feature_matrix = jax.random.normal(data_key, (samples, features))
 
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
-  probas = jax.nn.sigmoid(logits)
-  labels = np.random.rand(samples) < probas
+  labels = np.random.rand(samples) < jax.nn.sigmoid(logits)
 
   return params, feature_matrix, labels
 
 
 def main(_):
   # Split data into training set (in-canaries) and audit set (out-canaries)
-  total_users = USERS
-  train_users = int(total_users * TRAIN_SPLIT_PERCENT)
-  true_params, all_features, all_labels = create_benchmark(
-      total_users, FEATURES
-  )
+  audit_users = int(USERS * AUDIT_HOLDOUT_PERCENT)
+  train_users = USERS - audit_users
+  true_params, all_features, all_labels = create_benchmark(USERS, FEATURES)
 
   # Split dataset
   train_features, train_labels = (
       all_features[:train_users],
       all_labels[:train_users],
   )
-  audit_features, audit_labels = (
+  audit_held_out_features, audit_held_out_labels = (
       all_features[train_users:],
       all_labels[train_users:],
   )
 
-  params = jax.tree.map(jnp.zeros_like, true_params)
-  init_params = params
-  print(
-      'Initial Loss(Train): ',
-      logistic_loss(params, train_features, train_labels),
-  )
+  init_params = jax.tree.map(jnp.zeros_like, true_params)
+  init_loss = logistic_loss(init_params, train_features, train_labels)
+  print(f'Initial training loss: {init_loss:.3f}')
 
   config = execution_plan.BandMFExecutionPlanConfig(
       iterations=ITERATIONS,
@@ -146,6 +139,7 @@ def main(_):
     params = optax.apply_updates(params, updates)
     return params, noise_state, opt_state
 
+  params = init_params
   noise_state = privatizer.init(params)
   opt_state = optimizer.init(params)
 
@@ -160,37 +154,32 @@ def main(_):
         params, batch, is_padding_example, noise_state, opt_state
     )
 
-  # loss ~ 0.27 with default parameters.
-  print(
-      'Final Loss(Train): ', logistic_loss(params, train_features, train_labels)
-  )
-  print(
-      'True Loss(Train): ',
-      logistic_loss(true_params, train_features, train_labels),
-  )
-
-  print('Learned parameters: ', params)
-  print('True parameters: ', true_params)
-
-  # --- Canary Insertion / Auditing ---
-  print('\n--- Privacy Auditing ---')
+  final_loss = logistic_loss(params, train_features, train_labels)
+  print(f'Final training loss:   {final_loss:.3f}')
+  optimal_loss = logistic_loss(true_params, train_features, train_labels)
+  print(f'Optimal training loss: {optimal_loss:.3f}')
 
   # Calculate scores (Initial Loss - Final Loss)
-  in_init_loss = elementwise_loss(init_params, train_features, train_labels)
-  in_final_loss = elementwise_loss(params, train_features, train_labels)
+  audit_held_in_features = train_features[:audit_users]
+  audit_held_in_labels = train_labels[:audit_users]
+  in_init_loss = elementwise_loss(
+      init_params, audit_held_in_features, audit_held_in_labels
+  )
+  in_final_loss = elementwise_loss(
+      params, audit_held_in_features, audit_held_in_labels
+  )
   in_scores = in_init_loss - in_final_loss
 
-  out_init_loss = elementwise_loss(init_params, audit_features, audit_labels)
-  out_final_loss = elementwise_loss(params, audit_features, audit_labels)
+  out_init_loss = elementwise_loss(
+      init_params, audit_held_out_features, audit_held_out_labels
+  )
+  out_final_loss = elementwise_loss(
+      params, audit_held_out_features, audit_held_out_labels
+  )
   out_scores = out_init_loss - out_final_loss
 
-  # Subsample in_scores to match out_scores size
-  in_scores = in_scores[: len(out_scores)]
-
-  # Run Auditor
   auditor = auditing.CanaryScoreAuditor(in_scores, out_scores)
 
-  # Estimate epsilon
   estimated_epsilon = auditor.epsilon_raw_counts(min_count=10, delta=DELTA)
 
   # 99% upper confidence interval
@@ -200,14 +189,11 @@ def main(_):
   )
   auroc_99 = auditor.attack_auroc(bootstrap_params=quantile_99)
 
+  print(f'Audited with {audit_users} held-in/held-out canaries.')
   print(f'Theoretical Epsilon: {EPSILON:.2f}')
   print(f'Estimated Epsilon:   {estimated_epsilon:.2f}')
   print(f'Estimated Epsilon (99% CI): {estimated_epsilon_99:.2f}')
   print(f'AUROC (99% CI):      {auroc_99:.4f}')
-  print(
-      f'Start Auditing with {len(in_scores)} in-canaries and {len(out_scores)}'
-      ' out-canaries.'
-  )
 
 
 if __name__ == '__main__':
