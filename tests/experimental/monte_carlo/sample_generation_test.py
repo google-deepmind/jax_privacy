@@ -67,6 +67,53 @@ class SampleGenerationTest(parameterized.TestCase):
       self.assertLess(first_mode_count, 5300)
 
   @parameterized.parameters([
+      (True, np.array([1.0]), np.array([1.0, 0.0, 1.0, 0.0])),
+      (True, np.array([1.0, 0.5]), np.array([1.0, 0.5, 1.0, 0.5])),
+      (False, np.array([1.0, 0.5]), np.array([0.0, 0.0, 0.0, 0.0])),
+      (
+          True,
+          np.array([1.0, 0.5, 0.25, 0.125]),
+          np.array([1.0, 0.5, 1.25, 0.625]),
+      ),
+      (
+          False,
+          np.array([1.0, 0.5, 0.25, 0.125]),
+          np.array([0.0, 0.0, 0.0, 0.0]),
+      ),
+  ])
+  def test_generate_balls_in_bins_sample_low_noise_multiple_samples(
+      self, positive_sample, c_col, first_mode
+  ):
+    """Tests generating multiple samples in one call."""
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=2, iterations=4
+    )
+    noise_multiplier = 1e-9
+    # The distribution of samples should be evenly divided between the first
+    # mode and the second mode, which is just the first mode shifted by 1
+    # position. For positive_sample=False, these are the same.
+    second_mode = np.zeros_like(first_mode)
+    second_mode[1:] = first_mode[:-1]
+    first_mode_count = 0
+    samples = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier,
+        c_col,
+        positive_sample=positive_sample,
+        num_samples=10000,
+    )
+    for i in range(10000):
+      is_first_mode = np.allclose(samples[:, i], first_mode, atol=1e-6)
+      is_second_mode = np.allclose(samples[:, i], second_mode, atol=1e-6)
+      self.assertTrue(is_first_mode or is_second_mode)
+      if is_first_mode:
+        first_mode_count += 1
+    # 6 standard deviations away from the mean.
+    if positive_sample:
+      self.assertGreater(first_mode_count, 4700)
+      self.assertLess(first_mode_count, 5300)
+
+  @parameterized.parameters([
       (
           np.array([1.0, 0.0, 1.0, 0.0]),
           np.array([1.0, 0.0]),
@@ -97,6 +144,33 @@ class SampleGenerationTest(parameterized.TestCase):
         c_col,
     )
     self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
+
+  @parameterized.parameters([
+      (
+          np.array([
+              [1.0, 0.0],
+              [0.5, 1.0],
+              [1.0, 0.5],
+              [0.5, 1.0],
+          ]),
+          np.array([1.0, 0.5]),
+          [0.9052974004451105, 0.7802974004451104],
+      ),
+  ])
+  def test_compute_privacy_loss_balls_in_bins_multiple_samples(
+      self, sample, c_col, expected_privacy_loss
+  ):
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=2, iterations=4
+    )
+    noise_multiplier = 1.0
+    privacy_loss = sample_generation.compute_privacy_loss(
+        sampling_scheme,
+        sample,
+        noise_multiplier,
+        c_col,
+    )
+    np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
 
   def test_get_privacy_loss_positive_sample(self):
     # Test that this method combines drawing a sample and computing its privacy

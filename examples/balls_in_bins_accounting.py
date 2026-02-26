@@ -98,28 +98,27 @@ def main(_) -> None:
   )
   positive_samples = []
   negative_samples = []
-  # This double for loop is massively parallelizable! In this small example, it
-  # is not necessary, but for larger sample sizes it is recommended to
-  # parallelize this, across multiple cores or machines, in whatever manner
-  # is befitting for your use case.
+  # This for loop is massively parallelizable! In addition, for larger numbers
+  # of samples, we need multiple calls to get_privacy_loss_sample with smaller
+  # values of num_samples to avoid out of memory errors. These calls can also
+  # be massively parallelized. For practical applications, we recommend
+  # parallelizing across these two dimensions in whatever manner best fits your
+  # workflow.
   for nm in nm_sweep:
-    per_nm_positive_samples = []
-    per_nm_negative_samples = []
-    for _ in range(minimum_samples):
-      positive_sample = sample_generation.get_privacy_loss_sample(
-          strategy=strategy,
-          noise_multiplier=nm,
-          c_col=C_COL,
-          positive_sample=True,
-      )
-      negative_sample = sample_generation.get_privacy_loss_sample(
-          strategy=strategy,
-          noise_multiplier=nm,
-          c_col=C_COL,
-          positive_sample=False,
-      )
-      per_nm_positive_samples.append(positive_sample)
-      per_nm_negative_samples.append(negative_sample)
+    per_nm_positive_samples = sample_generation.get_privacy_loss_sample(
+        strategy=strategy,
+        noise_multiplier=nm,
+        c_col=C_COL,
+        positive_sample=True,
+        num_samples=minimum_samples,
+    )
+    per_nm_negative_samples = sample_generation.get_privacy_loss_sample(
+        strategy=strategy,
+        noise_multiplier=nm,
+        c_col=C_COL,
+        positive_sample=False,
+        num_samples=minimum_samples,
+    )
     positive_samples.append(per_nm_positive_samples)
     negative_samples.append(per_nm_negative_samples)
 
