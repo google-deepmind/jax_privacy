@@ -377,6 +377,16 @@ class BMinSepSampling(BatchSelectionStrategy):
   warm_start: bool = True
   truncated_batch_size: int | None = None
 
+  def __post_init__(self):
+    if self.min_sep <= 0:
+      raise ValueError('min_sep must be positive.')
+    if self.iterations < 0:
+      raise ValueError('iterations must be non-negative.')
+    if not 0 <= self.sampling_prob <= 1:
+      raise ValueError('sampling_prob must be in [0, 1]')
+    if self.truncated_batch_size is not None and self.truncated_batch_size < 0:
+      raise ValueError('truncated_batch_size must be non-negative.')
+
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:

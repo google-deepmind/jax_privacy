@@ -113,6 +113,125 @@ class SampleGenerationTest(parameterized.TestCase):
       self.assertGreater(first_mode_count, 4700)
       self.assertLess(first_mode_count, 5300)
 
+  @parameterized.product(
+      sampling_info=[
+          (
+              True,
+              np.array([1.0]),
+              0.5,
+              False,
+              [
+                  np.array([1.0, 0.0, 1.0]),
+                  np.array([1.0, 0.0, 0.0]),
+                  np.array([0.0, 1.0, 0.0]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([1 / 4, 1 / 4, 1 / 4, 1 / 8, 1 / 8]),
+          ),
+          (
+              True,
+              np.array([1.0, 0.5]),
+              0.5,
+              False,
+              [
+                  np.array([1.0, 0.5, 1.0]),
+                  np.array([1.0, 0.5, 0.0]),
+                  np.array([0.0, 1.0, 0.5]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([1 / 4, 1 / 4, 1 / 4, 1 / 8, 1 / 8]),
+          ),
+          (
+              True,
+              np.array([1.0, 0.5]),
+              0.25,
+              False,
+              [
+                  np.array([1.0, 0.5, 1.0]),
+                  np.array([1.0, 0.5, 0.0]),
+                  np.array([0.0, 1.0, 0.5]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([1 / 16, 3 / 16, 3 / 16, 9 / 64, 27 / 64]),
+          ),
+          (
+              True,
+              np.array([1.0, 0.5]),
+              0.5,
+              True,
+              [
+                  np.array([1.0, 0.5, 1.0]),
+                  np.array([1.0, 0.5, 0.0]),
+                  np.array([0.0, 1.0, 0.5]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([1 / 6, 1 / 6, 1 / 3, 1 / 6, 1 / 6]),
+          ),
+          (
+              False,
+              np.array([1.0]),
+              0.5,
+              False,
+              [
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([1.0]),
+          ),
+      ],
+      use_vectorized=[True, False],
+  )
+  def test_generate_b_min_sep_sample_low_noise(
+      self,
+      sampling_info,
+      use_vectorized,
+  ):
+    (
+        positive_sample,
+        c_col,
+        sampling_prob,
+        warm_start,
+        modes,
+        mode_distribution,
+    ) = sampling_info
+    sampling_scheme = batch_selection.BMinSepSampling(
+        sampling_prob=sampling_prob,
+        min_sep=2,
+        iterations=3,
+        warm_start=warm_start,
+    )
+    mode_counts = np.zeros(len(modes))
+    noise_multiplier = 1e-9
+    num_samples = 10000
+    if use_vectorized:
+      samples = sample_generation.generate_sample(
+          sampling_scheme,
+          noise_multiplier,
+          c_col,
+          positive_sample=positive_sample,
+          num_samples=num_samples,
+      )
+    else:
+      samples = np.zeros((3, num_samples))
+      for i in range(num_samples):
+        samples[:, i] = sample_generation.generate_sample(
+            sampling_scheme,
+            noise_multiplier,
+            c_col,
+            positive_sample=positive_sample,
+        )
+    for i, mode in enumerate(modes):
+      for j in range(num_samples):
+        if np.allclose(samples[:, j], mode, atol=1e-6):
+          mode_counts[i] += 1
+    differences = np.abs(mode_counts - num_samples * mode_distribution)
+    stdev = np.sqrt(num_samples * mode_distribution * (1 - mode_distribution))
+    # All within 6 standard deviations
+    assert np.all(differences <= 6 * stdev)
+
   @parameterized.parameters([
       (
           np.array([1.0, 0.0, 1.0, 0.0]),

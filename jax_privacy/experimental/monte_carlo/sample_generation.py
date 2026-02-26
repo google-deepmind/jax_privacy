@@ -94,11 +94,8 @@ def _generate_balls_in_bins_sample(
   """
   if iterations <= 0:
     raise ValueError('iterations must be positive.')
-  if noise_multiplier <= 0:
-    raise ValueError('noise_multiplier must be positive.')
   if cycle_length <= 0:
     raise ValueError('cycle_length must be positive.')
-  _validate_c_col(c_col)
   if c_col.size > iterations:
     c_col = c_col[:iterations]
   rng = np.random.default_rng(seed)
@@ -113,6 +110,86 @@ def _generate_balls_in_bins_sample(
   else:
     mode = np.zeros(iterations)
   return rng.normal(loc=mode, scale=noise_multiplier)
+
+
+def _sample_b_min_sep_positive_modes(
+    strategy: batch_selection.BMinSepSampling,
+    c_col: np.ndarray,
+    rng: np.random.Generator,
+    num_samples: int,
+) -> np.ndarray:
+  """Samples Cx for distribution on x induced by b-min-sep sampling."""
+  # Rename for brevity and alignment with paper.
+  b = strategy.min_sep
+  p = strategy.sampling_prob
+  n = strategy.iterations
+  mode = np.zeros((n, num_samples))
+  if strategy.warm_start:
+    warm_start_probs = np.zeros(b)
+    warm_start_probs[0] = 1.0 / (1.0 + (b - 1) * p)
+    warm_start_probs[1:] = p * warm_start_probs[0]
+    last_part = rng.choice(b, p=warm_start_probs, size=num_samples) - b
+  else:
+    last_part = -b * np.ones(num_samples, dtype=np.int32)
+  cols = np.broadcast_to(
+      np.arange(num_samples)[:, None], (num_samples, c_col.size)
+  )
+  vals = np.broadcast_to(c_col, (num_samples, c_col.size))
+  while np.min(last_part) < n:
+    last_part = last_part + b - 1 + rng.geometric(p, size=num_samples)
+    rows = last_part[:, None] + np.arange(c_col.size)
+    mask = rows < n
+    np.add.at(mode, (rows[mask], cols[mask]), vals[mask])
+  return mode
+
+
+def _generate_b_min_sep_sample(
+    strategy: batch_selection.BMinSepSampling,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+    seed: Seed = None,
+    positive_sample: bool = True,
+    num_samples: int | None = None,
+) -> np.ndarray:
+  """Samples from the dominating pair for DP-BandMF using b-min-sep sampling.
+
+  See https://arxiv.org/abs/2602.09338 for details.
+
+  Args:
+    strategy: The b-min-sep sampling strategy to use.
+    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
+      clip norm, not accounting for the norm of c_col.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D. It is assumed that the length of c_col is the same as the minimum
+      separation parameter in the sampling scheme.
+    seed: The rng or seed to use for sampling.
+    positive_sample: If True, we sample from the distribution in the dominating
+      pair corresponding to the case where the sensitive example is included.
+      Otherwise, we sample from the other case in the dominating pair, where the
+      sensitive example is not included.
+    num_samples: The number of samples to generate. None means generate a single
+      sample.
+
+  Returns:
+    Sample(s) from the dominating PLD for DP-BandMF using b-min-sep sampling.
+  """
+  if c_col.size > strategy.min_sep:
+    raise ValueError('c_col must have length less than or equal to min_sep.')
+  if c_col.size > strategy.iterations:
+    c_col = c_col[: strategy.iterations]
+  rng = np.random.default_rng(seed)
+  # For simplicity, if num_samples is None, we still create a 2D array.
+  num_samples_or_one = num_samples or 1
+  if positive_sample:
+    mode = _sample_b_min_sep_positive_modes(
+        strategy, c_col, rng, num_samples_or_one
+    )
+  else:
+    mode = np.zeros((strategy.iterations, num_samples_or_one))
+  if num_samples is None:
+    return rng.normal(loc=mode[:, 0], scale=noise_multiplier)
+  else:
+    return rng.normal(loc=mode, scale=noise_multiplier)
 
 
 def generate_sample(
@@ -147,6 +224,9 @@ def generate_sample(
     strategy.iterations. If num_samples is not None, the output is 2D with
     dimension (strategy.iterations, num_samples).
   """
+  if noise_multiplier < 0:
+    raise ValueError('noise_multiplier must be non-negative.')
+  _validate_c_col(c_col)
   if isinstance(strategy, batch_selection.BallsInBinsSampling):
     if num_samples is None:
       return _generate_balls_in_bins_sample(
@@ -171,6 +251,19 @@ def generate_sample(
             positive_sample,
         )
       return output
+  elif isinstance(strategy, batch_selection.BMinSepSampling):
+    if strategy.truncated_batch_size:
+      raise ValueError(
+          'Truncated batch size is not supported for sample generation.'
+      )
+    return _generate_b_min_sep_sample(
+        strategy,
+        noise_multiplier,
+        c_col,
+        seed,
+        positive_sample,
+        num_samples,
+    )
   else:
     raise ValueError(f'Unsupported batch selection strategy: {type(strategy)}')
 
