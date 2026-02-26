@@ -291,6 +291,73 @@ class SampleGenerationTest(parameterized.TestCase):
     )
     np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
 
+  @parameterized.parameters([
+      (
+          np.array([1.0, 1.0, 1.0]),
+          np.array([1.0]),
+          False,
+          0.6070560625306676,
+      ),
+      (
+          np.array([1.0, 1.0, 1.0]),
+          np.array([1.0, 0.5]),
+          False,
+          0.9239798890121712,
+      ),
+      (
+          np.array([1.0, 1.0, 1.0]),
+          np.array([1.0, 0.5]),
+          True,
+          0.8329398380809252,
+      ),
+  ])
+  def test_compute_privacy_loss_b_min_sep(
+      self, sample, c_col, warm_start, expected_privacy_loss
+  ):
+    sampling_scheme = batch_selection.BMinSepSampling(
+        sampling_prob=0.5,
+        min_sep=2,
+        iterations=3,
+        warm_start=warm_start,
+    )
+    privacy_loss = sample_generation.compute_privacy_loss(
+        sampling_scheme,
+        sample,
+        1.0,
+        c_col,
+    )
+    print(f"privacy_loss: {privacy_loss}")
+    self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
+
+  @parameterized.parameters([
+      (
+          np.array([
+              [1.0, 0.0],
+              [1.0, 1.0],
+              [1.0, 1.0],
+          ]),
+          np.array([1.0, 0.5]),
+          False,
+          [0.9239798890121712, 0.4155349444473233],
+      ),
+  ])
+  def test_compute_privacy_loss_b_min_sep_multiple_samples(
+      self, sample, c_col, warm_start, expected_privacy_loss
+  ):
+    sampling_scheme = batch_selection.BMinSepSampling(
+        sampling_prob=0.5,
+        min_sep=2,
+        iterations=3,
+        warm_start=warm_start,
+    )
+    privacy_loss = sample_generation.compute_privacy_loss(
+        sampling_scheme,
+        sample,
+        1.0,
+        c_col,
+    )
+    np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
+
   def test_get_privacy_loss_positive_sample(self):
     # Test that this method combines drawing a sample and computing its privacy
     # loss correctly on a low-noise example.
