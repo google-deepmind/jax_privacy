@@ -67,6 +67,7 @@ examples = [
     "keras",
     "tensorflow",
     "tensorflow_datasets",
+    "randomgen",
 ]
 
 docs = [
