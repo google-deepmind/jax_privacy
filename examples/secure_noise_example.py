@@ -1,4 +1,9 @@
-"""Demonstrates cryptographically secure DP-SGD using CPU-side randomness."""
+"""Demonstrates cryptographically secure DP-SGD using CPU-side randomness.
+
+Hybrid Entropy Architecture: sourcing hardware-level entropy (RDRAND) on the
+CPU to mitigate the "Implementation Gap" and injecting it into the JIT-compiled
+GPU step.
+"""
 
 from typing import Mapping, Tuple
 
@@ -6,10 +11,10 @@ from absl import app
 import jax
 import jax.numpy as jnp
 import jax_privacy
+from jax_privacy import batch_selection
 import numpy as np
 import optax
-from numpy.random import Generator
-from randomgen import AESCounter
+import randomgen
 
 
 USERS = 1000
@@ -63,16 +68,16 @@ def create_benchmark(
 
 
 def generate_secure_noise(
-    generator: Generator,
+    prng: np.random.Generator,
     params: Mapping[str, jax.Array],
     stddev: float,
 ) -> Mapping[str, np.ndarray]:
   """Generates cryptographic noise for gradients."""
 
   def sample_noise(leaf):
-    return generator.standard_normal(leaf.shape, dtype=np.float32) * stddev
+    return prng.standard_normal(leaf.shape, dtype=np.float32) * stddev
 
-  return jax.tree_util.tree_map(sample_noise, params)
+  return jax.tree.map(sample_noise, params)
 
 
 def main(_):
@@ -83,8 +88,7 @@ def main(_):
   optimizer = optax.sgd(LEARNING_RATE)
   opt_state = optimizer.init(init_params)
 
-  seed = 42
-  generator = Generator(AESCounter(seed))
+  prng = np.random.Generator(randomgen.RDRAND())
   stddev = L2_CLIP_NORM / BATCH_SIZE
 
   grad_fn = jax_privacy.clipped_grad(
@@ -95,14 +99,12 @@ def main(_):
   )
 
   @jax.jit
-  def train_step(
-      params_, opt_state_, batch_features, batch_labels, secure_noise
-  ):
+  def train_step(params, opt_state, batch_features, batch_labels, secure_noise):
     """Executes a single training step.
 
     Args:
-      params_: Current model parameters.
-      opt_state_: Current optimizer state.
+      params: Current model parameters.
+      opt_state: Current optimizer state.
       batch_features: Feature matrix for the batch.
       batch_labels: Labels for the batch.
       secure_noise: Pre-generated cryptographic noise for the gradients.
@@ -111,22 +113,25 @@ def main(_):
       A tuple containing the updated parameters, the updated optimizer state,
       and a null privatizer state.
     """
-    grads = grad_fn(params_, batch_features, batch_labels)
-    noisy_grads = jax.tree_util.tree_map(jnp.add, grads, secure_noise)
-    updates, new_opt_state = optimizer.update(noisy_grads, opt_state_)
-    new_params = optax.apply_updates(params_, updates)
-    new_privatizer_state = None
-    return new_params, new_opt_state, new_privatizer_state
+    grads = grad_fn(params, batch_features, batch_labels)
+    noisy_grads = jax.tree.map(jnp.add, grads, secure_noise)
+    updates, new_opt_state = optimizer.update(noisy_grads, opt_state)
+    new_params = optax.apply_updates(params, updates)
+    return new_params, new_opt_state, None
 
   params = init_params
   # WARNING: Batch selection and noise generation happen on CPU
   # for cryptographic security.
-  for step in range(STEPS):
-    idx = generator.choice(USERS, size=BATCH_SIZE, replace=False)
+  strategy = batch_selection.CyclicPoissonSampling(
+      sampling_prob=BATCH_SIZE / USERS, iterations=STEPS
+  )
+  for step, idx in enumerate(
+      strategy.batch_iterator(num_examples=USERS, rng=prng)
+  ):
     batch_features = all_features[idx]
     batch_labels = all_labels[idx]
 
-    secure_noise = generate_secure_noise(generator, params, stddev)
+    secure_noise = generate_secure_noise(prng, params, stddev)
 
     params, opt_state, _ = train_step(
         params,
