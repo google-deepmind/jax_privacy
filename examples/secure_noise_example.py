@@ -5,9 +5,8 @@ CPU to mitigate the "Implementation Gap" and injecting it into the JIT-compiled
 GPU step.
 """
 
-from typing import Mapping, Tuple
-
 import time
+from typing import Mapping, Tuple
 
 from absl import app
 import dp_accounting

@@ -15,6 +15,7 @@
 
 """Trains a logistic regression model with DP-BandMF."""
 
+import time
 from typing import Any, Mapping, Tuple
 
 from absl import app
@@ -26,7 +27,6 @@ from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
-import time
 
 
 USERS = 10_000
