@@ -26,6 +26,7 @@ from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
+import time
 
 
 USERS = 10_000
@@ -143,7 +144,10 @@ def main(_):
   noise_state = privatizer.init(params)
   opt_state = optimizer.init(params)
 
-  for batch_idx in plan.batch_selection_strategy.batch_iterator(train_users):
+  start_time = time.perf_counter()
+  for step, batch_idx in enumerate(
+      plan.batch_selection_strategy.batch_iterator(train_users)
+  ):
 
     # Padding reduces the required number of compilations of update_fn.
     idx = batch_selection.pad_to_multiple_of(batch_idx, PADDING_MULTIPLE)
@@ -153,6 +157,12 @@ def main(_):
     params, noise_state, opt_state = update_fn(
         params, batch, is_padding_example, noise_state, opt_state
     )
+
+    if step > 0 and step % 20 == 0:
+      loss = logistic_loss(params, train_features, train_labels)
+      elapsed = time.perf_counter() - start_time
+      print(f'Step {step}, Loss: {loss:.4f}, Elapsed Time (s): {elapsed:.4f}')
+      start_time = time.perf_counter()
 
   final_loss = logistic_loss(params, train_features, train_labels)
   print(f'Final training loss:   {final_loss:.3f}')
