@@ -166,7 +166,7 @@ def matrix_factorization_privatizer(
   elif isinstance(noising_matrix, streaming_matrix.StreamingMatrix):
     impl = _streaming_matrix_factorization_privatizer
   else:
-    raise NotImplementedError('Unsupported noising_matrix: ', noising_matrix)
+    raise NotImplementedError(f'Unsupported noising_matrix: {noising_matrix}')
 
   return impl(
       noising_matrix,
@@ -233,7 +233,7 @@ def _dense_matrix_factorization_privatizer(
   if noising_matrix.ndim != 2:
     raise ValueError(f'Expected 2D matrix, found {noising_matrix.shape=}.')
 
-  def privatize(sum_of_clipped_grads, noise_state, params=None):
+  def update(sum_of_clipped_grads, noise_state, params=None):
     del params  # Unused, but expected by optax.GradientTransformation API.
     index = noise_state
     matrix_row = noising_matrix[index] * stddev
@@ -249,7 +249,7 @@ def _dense_matrix_factorization_privatizer(
     return noisy_grads, index + 1
 
   init = lambda _: jnp.array(0)
-  return optax.GradientTransformation(init, privatize)
+  return optax.GradientTransformation(init, update)
 
 
 def _iid_normal_noise(prng_key, target_tree, stddev, dtype=None):
@@ -270,13 +270,13 @@ def _streaming_matrix_factorization_privatizer(
     strategy: _IntermediateStrategy,
     dtype: jax.typing.DTypeLike | None = None,
 ) -> optax.GradientTransformation:
-  """Creates a a gradient privatizer from a StreamingMatrix C^{-1}."""
+  """Creates a gradient privatizer from a StreamingMatrix C^{-1}."""
 
   def init(model):
     intermediate = jax.tree.map(strategy.get_noise_structure, model)
     return prng_key, noising_matrix.init_multiply(intermediate)
 
-  def privatize(sum_of_clipped_grads, noise_state, params=None):
+  def update(sum_of_clipped_grads, noise_state, params=None):
     del params  # Unused, but expected by optax.GradientTransformation API.
     prng_key, inner_state = noise_state
     new_key, sub_key = jax.random.split(prng_key)
@@ -288,4 +288,4 @@ def _streaming_matrix_factorization_privatizer(
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, corr_noise)
     return noisy_grads, (new_key, new_state)
 
-  return optax.GradientTransformation(init, privatize)
+  return optax.GradientTransformation(init, update)
