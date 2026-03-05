@@ -220,6 +220,7 @@ def _epsilon_one_run_fdp(
     # Returns a positive value if attack scores falsify the f-DP claim.
     # See 'audit_rh_with_cap' in https://arxiv.org/pdf/2410.22235.
     blow_up_inv_fn = _gaussian_dp_blow_up_inverse(eps, delta)
+    a = 0
 
     r = significance * n_correct / m
     h = significance * (n_guess - n_correct) / m
