@@ -382,7 +382,7 @@ _DEFAULT_POISSON_PADDING_MULTIPLE = 32
 
 
 class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
-  """Keras dataset that serves Poisson-sampled batches from random-access data."""
+  """Keras dataset serving Poisson-sampled batches from random-access data."""
 
   def __init__(
       self,
