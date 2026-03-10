@@ -260,18 +260,17 @@ class DPKerasConfig:
 def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   """Adds DP-SGD training to a Keras model without modifying its API.
 
-  This function modifies `model` in-place by adding attributes and replaces
-  methods (e.g. it replaces train_step) and returns the modified model. The API
-  of the model is not modified, i.e. you can use it as a usual Keras model.
+  This function mutates ``model`` in place, installs the DP-SGD hooks, and
+  returns the same model instance. The wrapped ``fit()`` path expects
+  random-access per-example arrays or pytrees of arrays so it can perform
+  Poisson sampling internally.
 
   Args:
     model: The Keras model to add DP-SGD training to.
-    params: The parameters for DP-SGD training. Training data passed to fit()
-      must be provided as random-access per-example arrays or pytrees of
-      arrays so the wrapper can perform Poisson sampling internally.
+    params: The parameters for DP-SGD training.
 
   Returns:
-    The Keras model with overloaded methods for DP-SGD training.
+    The input model with overloaded methods for DP-SGD training.
   """
   _validate_model(model)
 
