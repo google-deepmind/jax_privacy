@@ -137,16 +137,13 @@ Choquette-Choo, Christopher A and De, Soham and Doroshenko, Vadym and Dvijotham,
 Dj and Galen, Andrew and Ganesh, Arun and Ghalebikesabi, Sahra and Hayes, Jamie
 and Kairouz, Peter and McKenna, Ryan and McMahan, Brendan and Pappu, Aneesh and
 Ponomareva, Natalia and Pravilov, Mikhail and Rush, Keith and Smith, Samuel L
-and Stanforth, Robert},
+and Stanforth, Robert and Mishra, Chaitanya},
   title = {{JAX}-{P}rivacy: Algorithms for Privacy-Preserving Machine Learning in JAX},
   url = {http://github.com/google-deepmind/jax_privacy},
   version = {0.4.0},
   year = {2025},
 }
 ```
-
-For the Keras Poisson-sampling and sharding-compatibility work in this branch,
-please credit Chaitanya Mishra in any contribution notes or acknowledgements.
 
 ## Contact <a id="contact"></a>
 
