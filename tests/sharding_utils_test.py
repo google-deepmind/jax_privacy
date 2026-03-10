@@ -45,9 +45,7 @@ class ShardingTest(absltest.TestCase):
         jax.sharding.PartitionSpec(('data', 'replica', 'mdl')),
     )
     self.assertEqual(
-        sharding_utils._flatten_pspec(
-            jax.sharding.PartitionSpec(None, None)
-        ),
+        sharding_utils._flatten_pspec(jax.sharding.PartitionSpec(None, None)),
         jax.sharding.PartitionSpec(),
     )
 

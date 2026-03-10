@@ -377,8 +377,10 @@ class KerasApiTest(parameterized.TestCase):
     )
 
     np.testing.assert_array_equal(
-        batch_sample_weight, (~np.asarray(is_padding_example)).astype(np.float32)
+        batch_sample_weight,
+        (~np.asarray(is_padding_example)).astype(np.float32),
     )
+
   def test_dp_training_e2e_work(self):
     np.random.seed(42)
     train_size = 200

@@ -409,9 +409,7 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
   def __len__(self) -> int:
     return self._steps_per_epoch
 
-  def __getitem__(
-      self, index: int
-  ) -> dict[str, chex.ArrayTree | None]:
+  def __getitem__(self, index: int) -> dict[str, chex.ArrayTree | None]:
     padded_indices = self._epoch_batches[index]
     is_padding_example = padded_indices == -1
     batched_x = _take_batch_from_tree(self._x, padded_indices)
@@ -580,7 +578,12 @@ def _pack_poisson_sampled_batch(
 
 def _unpack_private_training_data(
     data: Any,
-) -> tuple[chex.ArrayTree, chex.ArrayTree | None, chex.ArrayTree | None, jax.Array | None]:
+) -> tuple[
+    chex.ArrayTree,
+    chex.ArrayTree | None,
+    chex.ArrayTree | None,
+    jax.Array | None,
+]:
   if (
       isinstance(data, dict)
       and _POISSON_INPUTS_KEY in data
@@ -608,7 +611,9 @@ def _maybe_symbolically_build_private_model(
   model._symbolic_build(data_batch=(x, y, sample_weight))  # pylint: disable=protected-access
 
 
-def _masked_mean(values: chex.Array, is_padding_example: jax.Array) -> chex.Array:
+def _masked_mean(
+    values: chex.Array, is_padding_example: jax.Array
+) -> chex.Array:
   """Averages only the non-padding examples, returning 0 for empty batches."""
   values = jnp.asarray(values)
   if values.ndim == 0:
@@ -631,7 +636,10 @@ def _validate_random_access_training_data(
         'The target data must have the same leading batch dimension as the'
         ' training inputs.'
     )
-  if sample_weight is not None and _tree_batch_size(sample_weight) != train_size:
+  if (
+      sample_weight is not None
+      and _tree_batch_size(sample_weight) != train_size
+  ):
     raise ValueError(
         'The sample weights must have the same leading batch dimension as the'
         ' training inputs.'
@@ -691,9 +699,7 @@ def _create_fit_fn_with_validation(
     )
     x = _get_param(fit_signature, 'x', *args, **kwargs)
     y = _get_param(fit_signature, 'y', *args, **kwargs)
-    sample_weight = _get_param(
-        fit_signature, 'sample_weight', *args, **kwargs
-    )
+    sample_weight = _get_param(fit_signature, 'sample_weight', *args, **kwargs)
     train_size = None
     if x is not None:
       if validation_split:
