@@ -45,6 +45,7 @@ from collections.abc import Callable
 import dataclasses
 import functools
 import inspect
+import math
 import types
 from typing import Any
 
@@ -52,6 +53,7 @@ import chex
 import jax
 import jax.numpy as jnp
 import jax_privacy
+from jax_privacy import batch_selection
 from jax_privacy.accounting import accountants
 from jax_privacy.accounting import analysis
 from jax_privacy.accounting import calibrate
@@ -77,8 +79,11 @@ class DPKerasConfig:
         noise). You should set this value before training and only based on the
         privacy guarantees you have to achieve. You should not increase the
         delta only because of poor model performance.
-      clipping_norm: The clipping norm for the per-example gradients.
-      batch_size: The batch size for the training.
+      clipping_norm: The clipping norm for the gradients. TODO: how to choose
+        it?
+      batch_size: The expected batch size for Poisson-sampled training. The
+        actual number of examples used in a step is random, but its expectation
+        is this value.
       gradient_accumulation_steps: The number of gradient accumulation steps.
         This is the number of batches to accumulate before adding noise and
         performing an optimizer step. 1 means that there is no gradient
@@ -194,15 +199,30 @@ class DPKerasConfig:
       raise ValueError(f'Clipping norm {self.clipping_norm} must be positive.')
     if self.batch_size <= 0:
       raise ValueError(f'Batch size {self.batch_size} must be positive.')
-    if self.train_steps <= 0:
-      raise ValueError(f'Train steps {self.train_steps} must be positive.')
     if self.train_size <= 0:
       raise ValueError(f'Train size {self.train_size} must be positive.')
+    if self.batch_size > self.train_size:
+      raise ValueError(
+          f'Batch size {self.batch_size} must be less than or equal to train'
+          f' size {self.train_size}.'
+      )
+    if self.train_steps <= 0:
+      raise ValueError(f'Train steps {self.train_steps} must be positive.')
     if self.gradient_accumulation_steps <= 0:
       raise ValueError(
           f'Gradient accumulation steps {self.gradient_accumulation_steps} must'
           ' be positive.'
       )
+    if self.microbatch_size is not None:
+      if self.microbatch_size <= 0:
+        raise ValueError(
+            f'Microbatch size {self.microbatch_size} must be positive.'
+        )
+      if self.microbatch_size > self.batch_size:
+        raise ValueError(
+            f'Microbatch size {self.microbatch_size} must be less than or'
+            f' equal to batch size {self.batch_size}.'
+        )
     if self.noise_multiplier is not None:
       if self.noise_multiplier <= 0:
         raise ValueError(
@@ -246,7 +266,9 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
 
   Args:
     model: The Keras model to add DP-SGD training to.
-    params: The parameters for DP-SGD training.
+    params: The parameters for DP-SGD training. Training data passed to fit()
+      must be provided as random-access per-example arrays or pytrees of
+      arrays so the wrapper can perform Poisson sampling internally.
 
   Returns:
     The Keras model with overloaded methods for DP-SGD training.
@@ -353,6 +375,269 @@ def _add_dp_sgd_attributes(model: keras.Model, params: DPKerasConfig) -> None:
 
 
 _FitFnReturnType = keras.callbacks.History
+_POISSON_INPUTS_KEY = '_jax_privacy_inputs'
+_POISSON_TARGETS_KEY = '_jax_privacy_targets'
+_POISSON_SAMPLE_WEIGHT_KEY = '_jax_privacy_sample_weight'
+_POISSON_PADDING_MASK_KEY = '_jax_privacy_is_padding_example'
+_DEFAULT_POISSON_PADDING_MULTIPLE = 32
+
+
+class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
+  """Keras dataset that serves Poisson-sampled batches from random-access data."""
+
+  def __init__(
+      self,
+      x: chex.ArrayTree,
+      y: chex.ArrayTree | None,
+      sample_weight: chex.ArrayTree | None,
+      *,
+      dp_params: DPKerasConfig,
+      steps_per_epoch: int,
+  ):
+    super().__init__()
+    self._x = x
+    self._y = y
+    self._sample_weight = sample_weight
+    self._train_size = _tree_batch_size(x)
+    self._steps_per_epoch = steps_per_epoch
+    self._sampling_prob = dp_params.batch_size / float(self._train_size)
+    self._padding_multiple = _get_poisson_padding_multiple(dp_params)
+    seed = _get_random_int64() if dp_params.seed is None else dp_params.seed
+    self._rng = np.random.default_rng(seed)
+    self._epoch_batches = []
+    self.on_epoch_end()
+
+  def __len__(self) -> int:
+    return self._steps_per_epoch
+
+  def __getitem__(
+      self, index: int
+  ) -> dict[str, chex.ArrayTree | None]:
+    padded_indices = self._epoch_batches[index]
+    is_padding_example = padded_indices == -1
+    batched_x = _take_batch_from_tree(self._x, padded_indices)
+    batched_y = _take_optional_batch_from_tree(self._y, padded_indices)
+    batched_sample_weight = _build_batch_sample_weight(
+        self._sample_weight, padded_indices, is_padding_example
+    )
+    return _pack_poisson_sampled_batch(
+        batched_x,
+        batched_y,
+        batched_sample_weight,
+        is_padding_example,
+    )
+
+  def on_epoch_end(self):
+    strategy = batch_selection.CyclicPoissonSampling(
+        sampling_prob=self._sampling_prob,
+        iterations=self._steps_per_epoch,
+    )
+    self._epoch_batches = [
+        _pad_batch_indices(np.asarray(indices), self._padding_multiple)
+        for indices in strategy.batch_iterator(self._train_size, rng=self._rng)
+    ]
+
+
+def _is_var_keyword_parameter(parameter: inspect.Parameter) -> bool:
+  return parameter.kind is inspect.Parameter.VAR_KEYWORD
+
+
+def _fit_accepts_keyword(
+    fit_signature: inspect.Signature, keyword: str
+) -> bool:
+  return keyword in fit_signature.parameters or any(
+      _is_var_keyword_parameter(parameter)
+      for parameter in fit_signature.parameters.values()
+  )
+
+
+def _normalize_bound_fit_arguments(
+    fit_signature: inspect.Signature,
+    *args,
+    **kwargs,
+) -> dict[str, Any]:
+  """Normalizes fit arguments into a kwargs-only call."""
+  bound_arguments = fit_signature.bind_partial(*args, **kwargs)
+  normalized_kwargs = {}
+  for name, value in bound_arguments.arguments.items():
+    parameter = fit_signature.parameters[name]
+    if _is_var_keyword_parameter(parameter):
+      normalized_kwargs.update(value)
+    else:
+      normalized_kwargs[name] = value
+  return normalized_kwargs
+
+
+def _get_poisson_padding_multiple(dp_params: DPKerasConfig) -> int:
+  if dp_params.microbatch_size is not None:
+    return dp_params.microbatch_size
+  return max(1, min(dp_params.batch_size, _DEFAULT_POISSON_PADDING_MULTIPLE))
+
+
+def _pad_batch_indices(indices: np.ndarray, multiple: int) -> np.ndarray:
+  """Pads indices with -1 so empty Poisson draws are still representable."""
+  if multiple <= 0:
+    raise ValueError(f'Padding multiple must be positive, got {multiple}.')
+  if indices.size == 0:
+    return np.full((multiple,), -1, dtype=np.int32)
+  return batch_selection.pad_to_multiple_of(indices, multiple)
+
+
+def _tree_batch_size(tree: chex.ArrayTree) -> int:
+  """Returns and validates the batch size of a pytree of arrays."""
+  leaves = jax.tree.leaves(tree)
+  if not leaves:
+    raise ValueError('Expected at least one array leaf in the training data.')
+  batch_size = None
+  for leaf in leaves:
+    if not hasattr(leaf, 'shape'):
+      raise ValueError(
+          'DP Keras training requires random-access array-like inputs.'
+      )
+    if len(leaf.shape) == 0:
+      raise ValueError(
+          'DP Keras training requires each input leaf to have a batch'
+          ' dimension.'
+      )
+    try:
+      np.asarray(leaf[:1])
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+      raise ValueError(
+          'DP Keras training requires random-access array-like inputs.'
+      ) from exc
+    leaf_batch_size = leaf.shape[0]
+    if batch_size is None:
+      batch_size = leaf_batch_size
+    elif leaf_batch_size != batch_size:
+      raise ValueError(
+          'All training data leaves must agree on their leading batch'
+          ' dimension.'
+      )
+  return int(batch_size)
+
+
+def _take_batch_from_leaf(leaf: chex.Array, indices: np.ndarray) -> np.ndarray:
+  """Slices one array leaf, turning -1 indices into zero padding."""
+  leaf = np.asarray(leaf)
+  valid_positions = indices >= 0
+  batch = np.zeros((indices.shape[0],) + leaf.shape[1:], dtype=leaf.dtype)
+  if np.any(valid_positions):
+    batch[valid_positions] = leaf[indices[valid_positions]]
+  return batch
+
+
+def _take_batch_from_tree(
+    tree: chex.ArrayTree, indices: np.ndarray
+) -> chex.ArrayTree:
+  return jax.tree.map(lambda leaf: _take_batch_from_leaf(leaf, indices), tree)
+
+
+def _take_optional_batch_from_tree(
+    tree: chex.ArrayTree | None, indices: np.ndarray
+) -> chex.ArrayTree | None:
+  if tree is None:
+    return None
+  return _take_batch_from_tree(tree, indices)
+
+
+def _mask_sample_weight_leaf(
+    sample_weight_leaf: chex.Array, is_padding_example: np.ndarray
+) -> np.ndarray:
+  """Zeros sample weights on padded examples while preserving rank."""
+  sample_weight_leaf = np.asarray(sample_weight_leaf)
+  mask = (~is_padding_example).astype(sample_weight_leaf.dtype)
+  mask = mask.reshape(mask.shape + (1,) * (sample_weight_leaf.ndim - 1))
+  return sample_weight_leaf * mask
+
+
+def _build_batch_sample_weight(
+    sample_weight: chex.ArrayTree | None,
+    indices: np.ndarray,
+    is_padding_example: np.ndarray,
+) -> chex.ArrayTree:
+  """Builds sample weights that hide synthetic padding examples from Keras."""
+  if sample_weight is None:
+    return (~is_padding_example).astype(np.float32)
+  batched_sample_weight = _take_batch_from_tree(sample_weight, indices)
+  return jax.tree.map(
+      lambda leaf: _mask_sample_weight_leaf(leaf, is_padding_example),
+      batched_sample_weight,
+  )
+
+
+def _pack_poisson_sampled_batch(
+    x: chex.ArrayTree,
+    y: chex.ArrayTree | None,
+    sample_weight: chex.ArrayTree,
+    is_padding_example: np.ndarray,
+) -> dict[str, Any]:
+  return {
+      _POISSON_INPUTS_KEY: x,
+      _POISSON_TARGETS_KEY: y,
+      _POISSON_SAMPLE_WEIGHT_KEY: sample_weight,
+      _POISSON_PADDING_MASK_KEY: np.asarray(is_padding_example, dtype=np.bool_),
+  }
+
+
+def _unpack_private_training_data(
+    data: Any,
+) -> tuple[chex.ArrayTree, chex.ArrayTree | None, chex.ArrayTree | None, jax.Array | None]:
+  if (
+      isinstance(data, dict)
+      and _POISSON_INPUTS_KEY in data
+      and _POISSON_TARGETS_KEY in data
+      and _POISSON_SAMPLE_WEIGHT_KEY in data
+      and _POISSON_PADDING_MASK_KEY in data
+  ):
+    return (
+        data[_POISSON_INPUTS_KEY],
+        data[_POISSON_TARGETS_KEY],
+        data[_POISSON_SAMPLE_WEIGHT_KEY],
+        jnp.asarray(data[_POISSON_PADDING_MASK_KEY]),
+    )
+  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
+  return x, y, sample_weight, None
+
+
+def _maybe_symbolically_build_private_model(
+    model: keras.Model, dataset: _PoissonSampledTrainingDataset
+) -> None:
+  """Builds the model on a plain batch before fit() sees the private dataset."""
+  if not hasattr(model, '_symbolic_build'):
+    return
+  x, y, sample_weight, _ = _unpack_private_training_data(dataset[0])
+  model._symbolic_build(data_batch=(x, y, sample_weight))  # pylint: disable=protected-access
+
+
+def _masked_mean(values: chex.Array, is_padding_example: jax.Array) -> chex.Array:
+  """Averages only the non-padding examples, returning 0 for empty batches."""
+  values = jnp.asarray(values)
+  if values.ndim == 0:
+    return values
+  weights = jnp.asarray(~is_padding_example, dtype=values.dtype)
+  weights = weights.reshape(weights.shape + (1,) * (values.ndim - 1))
+  denominator = jnp.maximum(jnp.sum(weights, axis=0), 1.0)
+  return jnp.sum(values * weights, axis=0) / denominator
+
+
+def _validate_random_access_training_data(
+    x: chex.ArrayTree,
+    y: chex.ArrayTree | None,
+    sample_weight: chex.ArrayTree | None,
+) -> int:
+  """Validates that fit() inputs can be resampled safely for Poisson DP-SGD."""
+  train_size = _tree_batch_size(x)
+  if y is not None and _tree_batch_size(y) != train_size:
+    raise ValueError(
+        'The target data must have the same leading batch dimension as the'
+        ' training inputs.'
+    )
+  if sample_weight is not None and _tree_batch_size(sample_weight) != train_size:
+    raise ValueError(
+        'The sample weights must have the same leading batch dimension as the'
+        ' training inputs.'
+    )
+  return train_size
 
 
 def _create_fit_fn_with_validation(
@@ -384,6 +669,7 @@ def _create_fit_fn_with_validation(
   ) -> _FitFnReturnType:
     _validate_optimizer(self, self._dp_params)  # pylint: disable=protected-access
     fit_signature = inspect.signature(original_fit_fn)
+    fit_kwargs = _normalize_bound_fit_arguments(fit_signature, *args, **kwargs)
 
     # batch_size is not set explicitely in the fit() call if the input dataset
     # is already batched. In this case, we assume that the batch sizes are
@@ -401,6 +687,24 @@ def _create_fit_fn_with_validation(
     steps_per_epoch = _get_param(
         fit_signature, 'steps_per_epoch', *args, **kwargs
     )
+    validation_split = (
+        _get_param(fit_signature, 'validation_split', *args, **kwargs) or 0.0
+    )
+    x = _get_param(fit_signature, 'x', *args, **kwargs)
+    y = _get_param(fit_signature, 'y', *args, **kwargs)
+    sample_weight = _get_param(
+        fit_signature, 'sample_weight', *args, **kwargs
+    )
+    train_size = None
+    if x is not None:
+      if validation_split:
+        raise ValueError(
+            'validation_split is not supported for DP Keras training because'
+            ' the privacy accountant needs the exact training-set size after'
+            ' any split. Please create the train/validation split explicitly'
+            ' and pass validation_data instead.'
+        )
+      train_size = _validate_random_access_training_data(x, y, sample_weight)
 
     # Note accessing self._dp_params is safe because it's added in
     # _add_dp_sgd_attributes, but requires disabling pylint because this
@@ -408,6 +712,7 @@ def _create_fit_fn_with_validation(
     _check_dp_params_aligned_with_fit_args(
         self._dp_params,  # pylint: disable=protected-access
         batch_size,
+        train_size=train_size,
     )
 
     performed_optimizer_steps = (
@@ -437,10 +742,32 @@ def _create_fit_fn_with_validation(
           f' {performed_optimizer_steps + optimizer_steps_to_perform} >'
           f' total_train_steps={self._dp_params.train_steps}.'  # pylint: disable=protected-access
       )
-    return original_fit_fn(
-        *args,
-        **kwargs,
-    )
+    if x is not None:
+      poisson_dataset = _PoissonSampledTrainingDataset(
+          x,
+          y,
+          sample_weight,
+          dp_params=self._dp_params,  # pylint: disable=protected-access
+          steps_per_epoch=steps_per_epoch
+          or _get_default_steps_per_epoch(train_size, batch_size),
+      )
+      _maybe_symbolically_build_private_model(self, poisson_dataset)
+      fit_kwargs['x'] = poisson_dataset
+      if _fit_accepts_keyword(fit_signature, 'y'):
+        fit_kwargs['y'] = None
+      if _fit_accepts_keyword(fit_signature, 'sample_weight'):
+        fit_kwargs['sample_weight'] = None
+      if _fit_accepts_keyword(fit_signature, 'batch_size'):
+        fit_kwargs['batch_size'] = None
+      if _fit_accepts_keyword(fit_signature, 'shuffle'):
+        fit_kwargs['shuffle'] = False
+      if _fit_accepts_keyword(fit_signature, 'validation_split'):
+        fit_kwargs['validation_split'] = 0.0
+      if steps_per_epoch is not None and _fit_accepts_keyword(
+          fit_signature, 'steps_per_epoch'
+      ):
+        fit_kwargs['steps_per_epoch'] = steps_per_epoch
+    return original_fit_fn(**fit_kwargs)
 
   return fit_fn_with_validation
 
@@ -448,6 +775,7 @@ def _create_fit_fn_with_validation(
 def _check_dp_params_aligned_with_fit_args(
     dp_params: DPKerasConfig,
     batch_size: int,
+    train_size: int | None = None,
 ) -> None:
   """Checks that the DP parameters are aligned with the fit() arguments."""
   if dp_params.batch_size != batch_size:
@@ -456,6 +784,14 @@ def _check_dp_params_aligned_with_fit_args(
         f' passed to fit(): {dp_params.batch_size=} != {batch_size=}. Please'
         ' make sure that the batch size in the DP parameters is equal to the'
         ' batch size passed to fit().'
+    )
+  if train_size is not None and dp_params.train_size != train_size:
+    raise ValueError(
+        'The train size in the DP parameters is not equal to the size of the'
+        f' training data passed to fit(): {dp_params.train_size=} !='
+        f' {train_size=}. Please make sure that DPKerasConfig.train_size'
+        ' matches the number of training examples available for Poisson'
+        ' sampling.'
     )
 
 
@@ -516,11 +852,11 @@ def _dp_train_step(
       optimizer_variables,
       _,
   ) = state
-  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
+  x, y, sample_weight, is_padding_example = _unpack_private_training_data(data)
 
   dp_batch_size = self._dp_params.batch_size  # pylint: disable=protected-access
   actual_batch_size = jax.tree_util.tree_leaves(x)[0].shape[0]
-  if dp_batch_size != actual_batch_size:
+  if is_padding_example is None and dp_batch_size != actual_batch_size:
     # it is ok to throw an exception even though we are in a jit function
     # because the check is based on the static values, i.e. they won't
     # change between invocations, and if the condition is violated, it will
@@ -533,6 +869,8 @@ def _dp_train_step(
         ' data you supplied in the fit() call.'
     )
     raise ValueError(error_message)
+  if is_padding_example is None:
+    is_padding_example = jnp.zeros(actual_batch_size, dtype=jnp.bool_)
 
   (_, aux), grads = _noised_clipped_grads(
       self.compute_loss_and_updates,
@@ -540,6 +878,7 @@ def _dp_train_step(
       state,
       data,
       model=self,
+      is_padding_example=is_padding_example,
   )
   (
       unscaled_loss,
@@ -616,6 +955,8 @@ def _noised_clipped_grads(
     state: _StateType,
     data: _KerasInputsDataType,
     model: keras.Model | None = None,
+    *,
+    is_padding_example: jax.Array | None = None,
 ) -> tuple[tuple[chex.Numeric, _AuxType], chex.ArrayTree]:
   """Computes noised and clipped gradients.
 
@@ -627,6 +968,8 @@ def _noised_clipped_grads(
     data: The data for the model: triple of x, y (can be None), sample_weight
       (can be None).
     model: Optional Keras model used to cache the calibrated noise multiplier.
+    is_padding_example: Optional mask marking padded examples introduced by the
+      Poisson-sampled training wrapper.
 
   Returns:
     (loss, aux), grads
@@ -639,7 +982,15 @@ def _noised_clipped_grads(
   ) = state
   # TODO: b/415360727 - access it and update it by name.
   noise_state = non_trainable_variables[0], ()
-  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
+  x, y, sample_weight, wrapped_is_padding_example = (
+      _unpack_private_training_data(data)
+  )
+  if is_padding_example is None:
+    if wrapped_is_padding_example is None:
+      batch_size = jax.tree.leaves(x)[0].shape[0]
+      is_padding_example = jnp.zeros(batch_size, dtype=jnp.bool_)
+    else:
+      is_padding_example = wrapped_is_padding_example
 
   clipped_grad_fn = jax_privacy.clipped_grad(
       fun=compute_loss_and_updates_fn,
@@ -661,6 +1012,7 @@ def _noised_clipped_grads(
       sample_weight,
       True,  # training=True
       optimizer_variables,
+      is_padding_example=is_padding_example,
   )
 
   noise_multiplier = _resolve_noise_multiplier(dp_params, model)
@@ -671,11 +1023,16 @@ def _noised_clipped_grads(
 
   noisy_grads, new_noise_state = privatizer.update(clipped_grad, noise_state)
 
-  loss = per_example_aux.values.mean()
-  unscaled_loss = per_example_aux.aux[0].mean()
+  # TODO: Investigate whether we should return mean or sum here.
+  loss = _masked_mean(per_example_aux.values, is_padding_example)
+  unscaled_loss = _masked_mean(per_example_aux.aux[0], is_padding_example)
   y_pred = per_example_aux.aux[1]
   non_trainable_variables = [new_noise_state[0]] + non_trainable_variables[1:]
-  new_metrics = jax.tree.map(lambda x: x.mean(axis=0), per_example_aux.aux[3])
+  # TODO: Determine the correct way to aggregate metrics.
+  new_metrics = jax.tree.map(
+      lambda x: _masked_mean(x, is_padding_example),
+      per_example_aux.aux[3],
+  )
 
   aux = (unscaled_loss, y_pred, non_trainable_variables, new_metrics)
 
@@ -764,8 +1121,14 @@ def _calculate_optimizer_steps_to_perform_in_fit(
 ) -> int:
   """Returns the number of optimizer steps that will be performed by fit."""
   epochs_to_perform = epochs - initial_epoch
-  steps_per_epoch = steps_per_epoch or (train_size // batch_size)
+  steps_per_epoch = steps_per_epoch or _get_default_steps_per_epoch(
+      train_size, batch_size
+  )
   return steps_per_epoch * epochs_to_perform
+
+
+def _get_default_steps_per_epoch(train_size: int, batch_size: int) -> int:
+  return max(1, math.floor(train_size / batch_size))
 
 
 def _get_random_int64() -> np.int64:

@@ -100,6 +100,8 @@ def main(_):
         f"DP training:{epsilon=} {delta=} {clipping_norm=} {batch_size=} "
         f"{epochs=} {train_size=}"
     )
+    # DP training batches are formed internally via Poisson sampling from the
+    # per-example arrays passed to fit().
   else:
     print("Non-DP training")
   model.compile(
@@ -110,7 +112,6 @@ def main(_):
   model.fit(
       x_train,
       y_train,
-      batch_size=batch_size,
       epochs=epochs,
       validation_data=(x_test, y_test),
   )

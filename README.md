@@ -50,7 +50,9 @@ models, including Large Language Models (LLMs).
         [Keras API simple example](https://github.com/google-deepmind/jax_privacy/blob/main/examples/keras_api_example.py)
         and
         [Gemma fine-tuning notebook](https://github.com/google-deepmind/jax_privacy/blob/main/examples/dp_sgd_keras_gemma3_lora_finetuning_samsum.ipynb)
-        to get started.
+        to get started. The DP Keras path now performs Poisson sampling
+        internally, so training data should be passed in as random-access
+        per-example arrays or pytrees of arrays.
     *   **Flax Linen**: Offers greater flexibility for custom model
         architectures and training loops, at the cost of some additional
         boilerplate. See
@@ -142,6 +144,9 @@ and Stanforth, Robert},
   year = {2025},
 }
 ```
+
+For the Keras Poisson-sampling and sharding-compatibility work in this branch,
+please credit Chaitanya Mishra in any contribution notes or acknowledgements.
 
 ## Contact <a id="contact"></a>
 
