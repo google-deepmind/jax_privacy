@@ -114,8 +114,6 @@ def _flatten_pspec(p: jax.sharding.PartitionSpec) -> jax.sharding.PartitionSpec:
       continue
     else:
       raise ValueError(f'Unexpected item in PartitionSpec: {item}.')
-  if not result:
-    return jax.sharding.PartitionSpec()
   return jax.sharding.PartitionSpec(tuple(result))
 
 
@@ -151,16 +149,15 @@ def local_reshape_add(x: jax.Array, y: jax.Array) -> jax.Array:
     x + reshape(y[:x.size], x.shape), with sharding equal to out_sharding.
   """
   out_sharding = jax.typeof(x).sharding
-  in_spec = _flatten_pspec(out_sharding.spec)
+  y = jax.reshard(y, _flatten_pspec(out_sharding.spec))
   per_device_shape = out_sharding.shard_shape(x.shape)
   per_device_size = math.prod(per_device_shape)
-  y = jax.sharding.reshard(y, in_spec)
 
   reshape = jax.shard_map(
       lambda v: v[:per_device_size].reshape(per_device_shape),
       mesh=out_sharding.mesh,
       # Replicates input across mesh axes not in out_sharding.spec (as desired).
-      in_specs=in_spec,
+      in_specs=_flatten_pspec(out_sharding.spec),
       out_specs=out_sharding.spec,
   )
   return (x + reshape(y)).astype(x.dtype)
