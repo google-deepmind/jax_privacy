@@ -134,7 +134,11 @@ def pad_to_multiple_of(indices: np.ndarray, multiple: int) -> np.ndarray:
   """
   if indices.ndim > 1:
     raise ValueError('pad_to_multiple_of currently expects 1D indices.')
+  if multiple <= 0:
+    raise ValueError(f'Padding multiple must be positive, got {multiple}.')
   curr_size = indices.shape[0]
+  if curr_size == 0:
+    return np.full(multiple, -1, dtype=indices.dtype)
   pad_size = (multiple - curr_size) % multiple
   new_indices = np.full(curr_size + pad_size, -1, dtype=indices.dtype)
   new_indices[:curr_size] = indices

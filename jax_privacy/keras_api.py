@@ -475,8 +475,6 @@ def _pad_batch_indices(indices: np.ndarray, multiple: int) -> np.ndarray:
   """Pads indices with -1 so empty Poisson draws are still representable."""
   if multiple <= 0:
     raise ValueError(f'Padding multiple must be positive, got {multiple}.')
-  if indices.size == 0:
-    return np.full((multiple,), -1, dtype=np.int32)
   return batch_selection.pad_to_multiple_of(indices, multiple)
 
 

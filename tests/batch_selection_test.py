@@ -453,6 +453,14 @@ class BatchPaddingTest(parameterized.TestCase):
     self.assertEqual(new_indices.size % multiple, 0)
     np.testing.assert_array_equal(new_indices[new_indices != -1], indices)
 
+  def test_pad_to_multiple_of_empty_indices(self):
+    new_indices = batch_selection.pad_to_multiple_of(
+        np.array([], dtype=np.int32), multiple=4
+    )
+    np.testing.assert_array_equal(
+        new_indices, np.array([-1, -1, -1, -1], dtype=np.int32)
+    )
+
 
 if __name__ == "__main__":
   absltest.main()
