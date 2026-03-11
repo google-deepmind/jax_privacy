@@ -439,15 +439,6 @@ def _is_var_keyword_parameter(parameter: inspect.Parameter) -> bool:
   return parameter.kind is inspect.Parameter.VAR_KEYWORD
 
 
-def _fit_accepts_keyword(
-    fit_signature: inspect.Signature, keyword: str
-) -> bool:
-  return keyword in fit_signature.parameters or any(
-      _is_var_keyword_parameter(parameter)
-      for parameter in fit_signature.parameters.values()
-  )
-
-
 def _normalize_bound_fit_arguments(
     fit_signature: inspect.Signature,
     *args,
@@ -463,6 +454,27 @@ def _normalize_bound_fit_arguments(
     else:
       normalized_kwargs[name] = value
   return normalized_kwargs
+
+
+def _prepare_fit_kwargs_for_poisson_dataset(
+    fit_kwargs: dict[str, Any],
+    *,
+    poisson_dataset: _PoissonSampledTrainingDataset,
+) -> dict[str, Any]:
+  """Swaps array inputs for a PyDataset and removes consumed fit arguments."""
+  fit_kwargs = dict(fit_kwargs)
+  fit_kwargs['x'] = poisson_dataset
+  for key in (
+      'y',
+      'sample_weight',
+      'batch_size',
+      'shuffle',
+      'validation_split',
+  ):
+    fit_kwargs.pop(key, None)
+  if fit_kwargs.get('steps_per_epoch') is None:
+    fit_kwargs.pop('steps_per_epoch', None)
+  return fit_kwargs
 
 
 def _get_poisson_padding_multiple(dp_params: DPKerasConfig) -> int:
@@ -755,21 +767,10 @@ def _create_fit_fn_with_validation(
           or _get_default_steps_per_epoch(train_size, batch_size),
       )
       _maybe_symbolically_build_private_model(self, poisson_dataset)
-      fit_kwargs['x'] = poisson_dataset
-      if _fit_accepts_keyword(fit_signature, 'y'):
-        fit_kwargs['y'] = None
-      if _fit_accepts_keyword(fit_signature, 'sample_weight'):
-        fit_kwargs['sample_weight'] = None
-      if _fit_accepts_keyword(fit_signature, 'batch_size'):
-        fit_kwargs['batch_size'] = None
-      if _fit_accepts_keyword(fit_signature, 'shuffle'):
-        fit_kwargs['shuffle'] = False
-      if _fit_accepts_keyword(fit_signature, 'validation_split'):
-        fit_kwargs['validation_split'] = 0.0
-      if steps_per_epoch is not None and _fit_accepts_keyword(
-          fit_signature, 'steps_per_epoch'
-      ):
-        fit_kwargs['steps_per_epoch'] = steps_per_epoch
+      fit_kwargs = _prepare_fit_kwargs_for_poisson_dataset(
+          fit_kwargs,
+          poisson_dataset=poisson_dataset,
+      )
     return original_fit_fn(**fit_kwargs)
 
   return fit_fn_with_validation

@@ -381,6 +381,34 @@ class KerasApiTest(parameterized.TestCase):
         (~np.asarray(is_padding_example)).astype(np.float32),
     )
 
+  def test_prepare_fit_kwargs_for_poisson_dataset(self):
+    fit_kwargs = {
+        "x": np.arange(6).reshape(3, 2),
+        "y": np.arange(3),
+        "sample_weight": np.ones(3),
+        "batch_size": 3,
+        "shuffle": True,
+        "validation_split": 0.0,
+        "steps_per_epoch": None,
+        "epochs": 5,
+    }
+    poisson_dataset = object()
+
+    rewritten_kwargs = keras_api._prepare_fit_kwargs_for_poisson_dataset(
+        fit_kwargs,
+        poisson_dataset=poisson_dataset,
+    )
+
+    self.assertEqual(rewritten_kwargs["x"], poisson_dataset)
+    self.assertEqual(rewritten_kwargs["epochs"], 5)
+    self.assertNotIn("y", rewritten_kwargs)
+    self.assertNotIn("sample_weight", rewritten_kwargs)
+    self.assertNotIn("batch_size", rewritten_kwargs)
+    self.assertNotIn("shuffle", rewritten_kwargs)
+    self.assertNotIn("validation_split", rewritten_kwargs)
+    self.assertNotIn("steps_per_epoch", rewritten_kwargs)
+    self.assertEqual(fit_kwargs["x"].shape, (3, 2))
+
   def test_dp_training_e2e_work(self):
     np.random.seed(42)
     train_size = 200
