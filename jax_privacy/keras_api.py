@@ -79,8 +79,7 @@ class DPKerasConfig:
         noise). You should set this value before training and only based on the
         privacy guarantees you have to achieve. You should not increase the
         delta only because of poor model performance.
-      clipping_norm: The clipping norm for the gradients. TODO: how to choose
-        it?
+      clipping_norm: The clipping norm for the gradients.
       batch_size: The batch size used by the DP optimizer. When
         `poisson_sampling_in_fit=True`, this is the expected batch size of the
         internal Poisson sampler. Otherwise it must match the batch size
@@ -420,7 +419,7 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
     padded_indices = self._epoch_batches[index]
     is_padding_example = padded_indices == -1
     batched_x = _take_batch_from_tree(self._x, padded_indices)
-    batched_y = _take_optional_batch_from_tree(self._y, padded_indices)
+    batched_y = _take_batch_from_tree(self._y, padded_indices)
     batched_sample_weight = _build_batch_sample_weight(
         self._sample_weight, padded_indices, is_padding_example
     )
@@ -453,17 +452,13 @@ def _normalize_bound_fit_arguments(
     *args,
     **kwargs,
 ) -> dict[str, Any]:
-  """Normalizes fit arguments into a kwargs-only call.
-
-  This keeps the wrapper logic independent of whether callers used positional
-  or keyword arguments, and flattens any ``**kwargs`` entry exposed by the
-  underlying Keras model implementation.
-  """
+  """Normalizes fit arguments into a kwargs-only call."""
   bound_arguments = fit_signature.bind_partial(*args, **kwargs)
   normalized_kwargs = {}
   for name, value in bound_arguments.arguments.items():
     parameter = fit_signature.parameters[name]
     if _is_var_keyword_parameter(parameter):
+      # Flatten any bound **kwargs entry exposed by the wrapped Keras model.
       normalized_kwargs.update(value)
     else:
       normalized_kwargs[name] = value
@@ -475,14 +470,11 @@ def _prepare_fit_kwargs_for_poisson_dataset(
     *,
     poisson_dataset: _PoissonSampledTrainingDataset,
 ) -> dict[str, Any]:
-  """Swaps array inputs for a PyDataset and removes consumed fit arguments.
-
-  Once ``x`` becomes a ``PyDataset``, Keras expects targets and sample weights
-  to be yielded by that dataset rather than passed through separate fit
-  arguments.
-  """
+  """Swaps array inputs for a PyDataset and removes consumed fit arguments."""
   fit_kwargs = dict(fit_kwargs)
   fit_kwargs['x'] = poisson_dataset
+  # Once x becomes a PyDataset, Keras expects targets and sample weights to be
+  # yielded by the dataset rather than passed as separate fit arguments.
   for key in (
       'y',
       'sample_weight',
@@ -504,8 +496,8 @@ def _get_poisson_padding_multiple(dp_params: DPKerasConfig) -> int:
 
 def _pad_batch_indices(indices: np.ndarray, multiple: int) -> np.ndarray:
   """Pads indices with -1 so empty Poisson draws are still representable."""
-  if multiple <= 0:
-    raise ValueError(f'Padding multiple must be positive, got {multiple}.')
+  if indices.size == 0:
+    return np.full(multiple, -1, dtype=np.int32)
   return batch_selection.pad_to_multiple_of(indices, multiple)
 
 
@@ -553,17 +545,11 @@ def _take_batch_from_leaf(leaf: chex.Array, indices: np.ndarray) -> np.ndarray:
 
 
 def _take_batch_from_tree(
-    tree: chex.ArrayTree, indices: np.ndarray
-) -> chex.ArrayTree:
-  return jax.tree.map(lambda leaf: _take_batch_from_leaf(leaf, indices), tree)
-
-
-def _take_optional_batch_from_tree(
     tree: chex.ArrayTree | None, indices: np.ndarray
 ) -> chex.ArrayTree | None:
   if tree is None:
     return None
-  return _take_batch_from_tree(tree, indices)
+  return jax.tree.map(lambda leaf: _take_batch_from_leaf(leaf, indices), tree)
 
 
 def _build_batch_sample_weight(
@@ -583,12 +569,10 @@ def _pack_poisson_sampled_batch(
     sample_weight: chex.ArrayTree,
     is_padding_example: np.ndarray,
 ) -> dict[str, Any]:
-  """Packs a private batch plus padding metadata for Keras train_step.
-
-  Keras only treats tuples of length up to three as ``(x, y, sample_weight)``.
-  The padding mask is extra metadata needed by the DP train_step, so private
-  Poisson batches are stored in a dict instead of a tuple.
-  """
+  """Packs a private batch plus padding metadata."""
+  # Keras only treats tuples of length up to three as
+  # (x, y, sample_weight). The padding mask is extra metadata needed by the
+  # DP train_step, so private Poisson batches are stored in a dict instead.
   return {
       _POISSON_INPUTS_KEY: x,
       _POISSON_TARGETS_KEY: y,
@@ -605,12 +589,10 @@ def _unpack_private_training_data(
     chex.ArrayTree | None,
     jax.Array | None,
 ]:
-  """Returns ``(x, y, sample_weight, is_padding_example)`` for private batches.
-
-  Regular Keras data still follows the usual ``(x, y, sample_weight)`` tuple
-  convention. Private Poisson batches use a dict so the padding mask can travel
-  alongside the standard Keras fields without violating that tuple contract.
-  """
+  """Returns private-batch data plus an optional padding mask."""
+  # Regular Keras data follows the usual (x, y, sample_weight) tuple contract.
+  # Private Poisson batches use a dict so the padding mask can travel
+  # alongside those fields.
   if (
       isinstance(data, dict)
       and _POISSON_INPUTS_KEY in data
@@ -631,15 +613,13 @@ def _unpack_private_training_data(
 def _maybe_symbolically_build_private_model(
     model: keras.Model, dataset: _PoissonSampledTrainingDataset
 ) -> None:
-  """Runs Keras' internal symbolic build before ``fit()`` sees a dict batch.
-
-  ``_symbolic_build`` is a private Keras helper, not a JAX-specific concept.
-  It lets Keras infer shapes and create state from a standard
-  ``(x, y, sample_weight)`` batch before the wrapped ``fit()`` path starts
-  yielding dicts that also carry the padding mask metadata.
-  """
+  """Runs Keras' symbolic build before fit() sees a private dict batch."""
   if not hasattr(model, '_symbolic_build'):
     return
+  # _symbolic_build is a private Keras helper, not a JAX-specific concept.
+  # It lets Keras infer shapes and create state from a standard
+  # (x, y, sample_weight) batch before the wrapped fit() path starts yielding
+  # dicts that also carry the padding mask metadata.
   x, y, sample_weight, _ = _unpack_private_training_data(dataset[0])
   model._symbolic_build(data_batch=(x, y, sample_weight))  # pylint: disable=protected-access
 
@@ -652,9 +632,10 @@ def _masked_mean(
   if values.ndim == 0:
     return values
   where = jnp.asarray(~is_padding_example)
-  where = where.reshape(where.shape + (1,) * (values.ndim - 1))
+  for _ in range(values.ndim - 1):
+    where = jnp.expand_dims(where, axis=-1)
   mean = jnp.mean(values, axis=0, where=where)
-  return jnp.where(jnp.any(where, axis=0), mean, jnp.zeros_like(mean))
+  return jnp.where(jnp.any(where, axis=0), mean, jnp.nan_to_num(mean))
 
 
 def _validate_random_access_training_data_and_get_size(
@@ -662,12 +643,7 @@ def _validate_random_access_training_data_and_get_size(
     y: chex.ArrayTree | None,
     sample_weight: chex.ArrayTree | None,
 ) -> int:
-  """Validates Poisson-resampleable fit inputs and returns their size.
-
-  The returned size is used both to verify ``DPKerasConfig.train_size`` and to
-  derive the default ``steps_per_epoch`` for the internally Poisson-sampled
-  path.
-  """
+  """Validates Poisson-resampleable fit inputs and returns their size."""
   validated_train_size = _tree_batch_size(x)
   if y is not None and _tree_batch_size(y) != validated_train_size:
     raise ValueError(
@@ -1065,12 +1041,12 @@ def _noised_clipped_grads(
 
   noisy_grads, new_noise_state = privatizer.update(clipped_grad, noise_state)
 
-  # TODO: Investigate whether we should return mean or sum here.
+  # Open question: should these aggregates be means or sums?
   loss = _masked_mean(per_example_aux.values, is_padding_example)
   unscaled_loss = _masked_mean(per_example_aux.aux[0], is_padding_example)
   y_pred = per_example_aux.aux[1]
   non_trainable_variables = [new_noise_state[0]] + non_trainable_variables[1:]
-  # TODO: Determine the correct way to aggregate metrics.
+  # Open question: confirm that masked means are the right metric reduction.
   new_metrics = jax.tree.map(
       lambda x: _masked_mean(x, is_padding_example),
       per_example_aux.aux[3],

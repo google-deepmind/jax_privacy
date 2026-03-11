@@ -384,6 +384,15 @@ class KerasApiTest(parameterized.TestCase):
         (~np.asarray(is_padding_example)).astype(np.float32),
     )
 
+  def test_pad_batch_indices_reifies_empty_poisson_draw(self):
+    padded_indices = keras_api._pad_batch_indices(
+        np.array([], dtype=np.int32), multiple=4
+    )
+
+    np.testing.assert_array_equal(
+        padded_indices, np.array([-1, -1, -1, -1], dtype=np.int32)
+    )
+
   def test_private_training_data_round_trip_preserves_padding_mask(self):
     x = np.arange(6).reshape(3, 2)
     y = np.arange(3)

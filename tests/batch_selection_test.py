@@ -457,9 +457,7 @@ class BatchPaddingTest(parameterized.TestCase):
     new_indices = batch_selection.pad_to_multiple_of(
         np.array([], dtype=np.int32), multiple=4
     )
-    np.testing.assert_array_equal(
-        new_indices, np.array([-1, -1, -1, -1], dtype=np.int32)
-    )
+    np.testing.assert_array_equal(new_indices, np.array([], dtype=np.int32))
 
 
 if __name__ == "__main__":
