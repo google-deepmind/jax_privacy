@@ -578,6 +578,12 @@ def _pack_poisson_sampled_batch(
     sample_weight: chex.ArrayTree,
     is_padding_example: np.ndarray,
 ) -> dict[str, Any]:
+  """Packs a private batch plus padding metadata for Keras train_step.
+
+  Keras only treats tuples of length up to three as ``(x, y, sample_weight)``.
+  The padding mask is extra metadata needed by the DP train_step, so private
+  Poisson batches are stored in a dict instead of a tuple.
+  """
   return {
       _POISSON_INPUTS_KEY: x,
       _POISSON_TARGETS_KEY: y,
@@ -594,6 +600,12 @@ def _unpack_private_training_data(
     chex.ArrayTree | None,
     jax.Array | None,
 ]:
+  """Returns ``(x, y, sample_weight, is_padding_example)`` for private batches.
+
+  Regular Keras data still follows the usual ``(x, y, sample_weight)`` tuple
+  convention. Private Poisson batches use a dict so the padding mask can travel
+  alongside the standard Keras fields without violating that tuple contract.
+  """
   if (
       isinstance(data, dict)
       and _POISSON_INPUTS_KEY in data

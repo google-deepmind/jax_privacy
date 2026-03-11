@@ -381,6 +381,27 @@ class KerasApiTest(parameterized.TestCase):
         (~np.asarray(is_padding_example)).astype(np.float32),
     )
 
+  def test_private_training_data_round_trip_preserves_padding_mask(self):
+    x = np.arange(6).reshape(3, 2)
+    y = np.arange(3)
+    sample_weight = np.array([1.0, 0.5, 2.0], dtype=np.float32)
+    is_padding_example = np.array([False, True, False])
+
+    packed_batch = keras_api._pack_poisson_sampled_batch(
+        x,
+        y,
+        sample_weight,
+        is_padding_example,
+    )
+    unpacked_x, unpacked_y, unpacked_sample_weight, unpacked_padding_mask = (
+        keras_api._unpack_private_training_data(packed_batch)
+    )
+
+    np.testing.assert_array_equal(unpacked_x, x)
+    np.testing.assert_array_equal(unpacked_y, y)
+    np.testing.assert_array_equal(unpacked_sample_weight, sample_weight)
+    np.testing.assert_array_equal(unpacked_padding_mask, is_padding_example)
+
   def test_prepare_fit_kwargs_for_poisson_dataset(self):
     fit_kwargs = {
         "x": np.arange(6).reshape(3, 2),
