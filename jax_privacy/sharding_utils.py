@@ -149,7 +149,6 @@ def local_reshape_add(x: jax.Array, y: jax.Array) -> jax.Array:
     x + reshape(y[:x.size], x.shape), with sharding equal to out_sharding.
   """
   out_sharding = jax.typeof(x).sharding
-  y = jax.reshard(y, _flatten_pspec(out_sharding.spec))
   per_device_shape = out_sharding.shard_shape(x.shape)
   per_device_size = math.prod(per_device_shape)
 
@@ -160,6 +159,7 @@ def local_reshape_add(x: jax.Array, y: jax.Array) -> jax.Array:
       in_specs=_flatten_pspec(out_sharding.spec),
       out_specs=out_sharding.spec,
   )
+  y = jax.reshard(y, _flatten_pspec(out_sharding.spec))
   return (x + reshape(y)).astype(x.dtype)
 
 
