@@ -121,6 +121,9 @@ class KerasApiTest(parameterized.TestCase):
     ):
       dataclasses.replace(valid_params, microbatch_size=11)
 
+  def test_poisson_sampling_in_fit_defaults_to_disabled(self):
+    self.assertFalse(self._get_params().poisson_sampling_in_fit)
+
   def test_effective_batch_size(self):
     params1 = dataclasses.replace(self._get_params(), batch_size=5)
     self.assertEqual(params1.effective_batch_size, 5)
@@ -464,6 +467,7 @@ class KerasApiTest(parameterized.TestCase):
         gradient_accumulation_steps=1,
         train_steps=train_steps,
         train_size=train_size,
+        poisson_sampling_in_fit=True,
         seed=0,
     )
     model = keras_api.make_private(model, dp_params)
@@ -602,6 +606,7 @@ class KerasApiTest(parameterized.TestCase):
         clipping_norm=1.0,
         train_steps=28,
         train_size=200,
+        poisson_sampling_in_fit=True,
         seed=0,
     )
     model = keras_api.make_private(model, dp_params)
@@ -617,6 +622,33 @@ class KerasApiTest(parameterized.TestCase):
     ):
       model.fit(data_generator())  # pylint: disable=not-callable
 
+  def test_fit_allows_generator_when_poisson_sampling_in_fit_disabled(self):
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        batch_size=100,
+        gradient_accumulation_steps=1,
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        train_steps=2,
+        train_size=200,
+        seed=0,
+    )
+    model = keras_api.make_private(model, dp_params)
+
+    def data_generator():
+      while True:
+        yield np.zeros((100, 4)), np.zeros((100,))
+
+    model.compile(loss="mse", optimizer="adam")
+    history = model.fit(  # pylint: disable=not-callable
+        data_generator(),
+        steps_per_epoch=1,
+        epochs=1,
+    )
+
+    self.assertIn("loss", history.history)
+
   def test_fit_rejects_train_size_mismatch(self):
     train_size = 200
     x, y = np.random.uniform(0, 1, (train_size, 4)), np.random.uniform(
@@ -631,6 +663,7 @@ class KerasApiTest(parameterized.TestCase):
         clipping_norm=1.0,
         train_steps=28,
         train_size=train_size - 1,
+        poisson_sampling_in_fit=True,
         seed=0,
     )
     model = keras_api.make_private(model, dp_params)
@@ -657,6 +690,7 @@ class KerasApiTest(parameterized.TestCase):
         clipping_norm=1.0,
         train_steps=28,
         train_size=train_size,
+        poisson_sampling_in_fit=True,
         seed=0,
     )
     model = keras_api.make_private(model, dp_params)
@@ -687,6 +721,7 @@ class KerasApiTest(parameterized.TestCase):
         gradient_accumulation_steps=1,
         train_steps=train_steps,
         train_size=train_size,
+        poisson_sampling_in_fit=True,
         seed=0,
     )
     model = keras_api.make_private(model, dp_params)

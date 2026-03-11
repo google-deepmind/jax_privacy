@@ -81,9 +81,10 @@ class DPKerasConfig:
         delta only because of poor model performance.
       clipping_norm: The clipping norm for the gradients. TODO: how to choose
         it?
-      batch_size: The expected batch size for Poisson-sampled training. The
-        actual number of examples used in a step is random, but its expectation
-        is this value.
+      batch_size: The batch size used by the DP optimizer. When
+        `poisson_sampling_in_fit=True`, this is the expected batch size of the
+        internal Poisson sampler. Otherwise it must match the batch size
+        supplied to `fit()`.
       gradient_accumulation_steps: The number of gradient accumulation steps.
         This is the number of batches to accumulate before adding noise and
         performing an optimizer step. 1 means that there is no gradient
@@ -104,6 +105,10 @@ class DPKerasConfig:
       train_size: The number of training examples in the dataset. If you repeat
         the examples in your dataset iterator, it should be the number of
         training examples in the original dataset before repeating.
+      poisson_sampling_in_fit: Whether `fit()` should internally resample
+        random-access array inputs using Poisson sampling. Leave this as False
+        for backwards-compatible behavior or when the user supplies a dataset
+        iterator that already handles sampling.
       noise_multiplier: The noise multiplier for the gradients. If None
         (recommended), the noise multiplier will be automatically calculated
         based on epsilon, delta, effective_batch_size, train_steps and
@@ -138,6 +143,7 @@ class DPKerasConfig:
   gradient_accumulation_steps: int
   train_steps: int
   train_size: int
+  poisson_sampling_in_fit: bool = False
   noise_multiplier: float | None = None
   rescale_to_unit_norm: bool = True
   microbatch_size: int | None = None
@@ -261,9 +267,10 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   """Adds DP-SGD training to a Keras model without modifying its API.
 
   This function mutates ``model`` in place, installs the DP-SGD hooks, and
-  returns the same model instance. The wrapped ``fit()`` path expects
-  random-access per-example arrays or pytrees of arrays so it can perform
-  Poisson sampling internally.
+  returns the same model instance. When
+  ``params.poisson_sampling_in_fit`` is enabled, the wrapped ``fit()`` path
+  expects random-access per-example arrays or pytrees of arrays so it can
+  perform Poisson sampling internally.
 
   Args:
     model: The Keras model to add DP-SGD training to.
@@ -424,7 +431,8 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
         is_padding_example,
     )
 
-  def on_epoch_end(self):
+  def on_epoch_end(self) -> None:
+    """Precomputes one epoch of padded Poisson-sampled index batches."""
     strategy = batch_selection.CyclicPoissonSampling(
         sampling_prob=self._sampling_prob,
         iterations=self._steps_per_epoch,
@@ -436,6 +444,7 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
 
 
 def _is_var_keyword_parameter(parameter: inspect.Parameter) -> bool:
+  """Returns whether a signature entry corresponds to ``**kwargs``."""
   return parameter.kind is inspect.Parameter.VAR_KEYWORD
 
 
@@ -444,7 +453,12 @@ def _normalize_bound_fit_arguments(
     *args,
     **kwargs,
 ) -> dict[str, Any]:
-  """Normalizes fit arguments into a kwargs-only call."""
+  """Normalizes fit arguments into a kwargs-only call.
+
+  This keeps the wrapper logic independent of whether callers used positional
+  or keyword arguments, and flattens any ``**kwargs`` entry exposed by the
+  underlying Keras model implementation.
+  """
   bound_arguments = fit_signature.bind_partial(*args, **kwargs)
   normalized_kwargs = {}
   for name, value in bound_arguments.arguments.items():
@@ -461,7 +475,12 @@ def _prepare_fit_kwargs_for_poisson_dataset(
     *,
     poisson_dataset: _PoissonSampledTrainingDataset,
 ) -> dict[str, Any]:
-  """Swaps array inputs for a PyDataset and removes consumed fit arguments."""
+  """Swaps array inputs for a PyDataset and removes consumed fit arguments.
+
+  Once ``x`` becomes a ``PyDataset``, Keras expects targets and sample weights
+  to be yielded by that dataset rather than passed through separate fit
+  arguments.
+  """
   fit_kwargs = dict(fit_kwargs)
   fit_kwargs['x'] = poisson_dataset
   for key in (
@@ -524,7 +543,7 @@ def _tree_batch_size(tree: chex.ArrayTree) -> int:
 
 
 def _take_batch_from_leaf(leaf: chex.Array, indices: np.ndarray) -> np.ndarray:
-  """Slices one array leaf, turning -1 indices into zero padding."""
+  """Slices one array leaf, turning padded ``-1`` indices into zeros."""
   leaf = np.asarray(leaf)
   valid_positions = indices >= 0
   batch = np.zeros((indices.shape[0],) + leaf.shape[1:], dtype=leaf.dtype)
@@ -612,7 +631,13 @@ def _unpack_private_training_data(
 def _maybe_symbolically_build_private_model(
     model: keras.Model, dataset: _PoissonSampledTrainingDataset
 ) -> None:
-  """Builds the model on a plain batch before fit() sees the private dataset."""
+  """Runs Keras' internal symbolic build before ``fit()`` sees a dict batch.
+
+  ``_symbolic_build`` is a private Keras helper, not a JAX-specific concept.
+  It lets Keras infer shapes and create state from a standard
+  ``(x, y, sample_weight)`` batch before the wrapped ``fit()`` path starts
+  yielding dicts that also carry the padding mask metadata.
+  """
   if not hasattr(model, '_symbolic_build'):
     return
   x, y, sample_weight, _ = _unpack_private_training_data(dataset[0])
@@ -632,27 +657,32 @@ def _masked_mean(
   return jnp.where(jnp.any(where, axis=0), mean, jnp.zeros_like(mean))
 
 
-def _validate_random_access_training_data(
+def _validate_random_access_training_data_and_get_size(
     x: chex.ArrayTree,
     y: chex.ArrayTree | None,
     sample_weight: chex.ArrayTree | None,
 ) -> int:
-  """Validates that fit() inputs can be resampled safely for Poisson DP-SGD."""
-  train_size = _tree_batch_size(x)
-  if y is not None and _tree_batch_size(y) != train_size:
+  """Validates Poisson-resampleable fit inputs and returns their size.
+
+  The returned size is used both to verify ``DPKerasConfig.train_size`` and to
+  derive the default ``steps_per_epoch`` for the internally Poisson-sampled
+  path.
+  """
+  validated_train_size = _tree_batch_size(x)
+  if y is not None and _tree_batch_size(y) != validated_train_size:
     raise ValueError(
         'The target data must have the same leading batch dimension as the'
         ' training inputs.'
     )
   if (
       sample_weight is not None
-      and _tree_batch_size(sample_weight) != train_size
+      and _tree_batch_size(sample_weight) != validated_train_size
   ):
     raise ValueError(
         'The sample weights must have the same leading batch dimension as the'
         ' training inputs.'
     )
-  return train_size
+  return validated_train_size
 
 
 def _create_fit_fn_with_validation(
@@ -685,6 +715,9 @@ def _create_fit_fn_with_validation(
     _validate_optimizer(self, self._dp_params)  # pylint: disable=protected-access
     fit_signature = inspect.signature(original_fit_fn)
     fit_kwargs = _normalize_bound_fit_arguments(fit_signature, *args, **kwargs)
+    use_poisson_sampling_in_fit = (
+        self._dp_params.poisson_sampling_in_fit  # pylint: disable=protected-access
+    )
 
     # batch_size is not set explicitely in the fit() call if the input dataset
     # is already batched. In this case, we assume that the batch sizes are
@@ -708,8 +741,13 @@ def _create_fit_fn_with_validation(
     x = _get_param(fit_signature, 'x', *args, **kwargs)
     y = _get_param(fit_signature, 'y', *args, **kwargs)
     sample_weight = _get_param(fit_signature, 'sample_weight', *args, **kwargs)
-    train_size = None
-    if x is not None:
+    validated_train_size = None
+    if use_poisson_sampling_in_fit:
+      if x is None:
+        raise ValueError(
+            'fit() must receive x when'
+            ' DPKerasConfig.poisson_sampling_in_fit is enabled.'
+        )
       if validation_split:
         raise ValueError(
             'validation_split is not supported for DP Keras training because'
@@ -717,7 +755,9 @@ def _create_fit_fn_with_validation(
             ' any split. Please create the train/validation split explicitly'
             ' and pass validation_data instead.'
         )
-      train_size = _validate_random_access_training_data(x, y, sample_weight)
+      validated_train_size = _validate_random_access_training_data_and_get_size(
+          x, y, sample_weight
+      )
 
     # Note accessing self._dp_params is safe because it's added in
     # _add_dp_sgd_attributes, but requires disabling pylint because this
@@ -725,7 +765,7 @@ def _create_fit_fn_with_validation(
     _check_dp_params_aligned_with_fit_args(
         self._dp_params,  # pylint: disable=protected-access
         batch_size,
-        train_size=train_size,
+        train_size=validated_train_size,
     )
 
     performed_optimizer_steps = (
@@ -755,14 +795,14 @@ def _create_fit_fn_with_validation(
           f' {performed_optimizer_steps + optimizer_steps_to_perform} >'
           f' total_train_steps={self._dp_params.train_steps}.'  # pylint: disable=protected-access
       )
-    if x is not None:
+    if use_poisson_sampling_in_fit:
       poisson_dataset = _PoissonSampledTrainingDataset(
           x,
           y,
           sample_weight,
           dp_params=self._dp_params,  # pylint: disable=protected-access
           steps_per_epoch=steps_per_epoch
-          or _get_default_steps_per_epoch(train_size, batch_size),
+          or _get_default_steps_per_epoch(validated_train_size, batch_size),
       )
       _maybe_symbolically_build_private_model(self, poisson_dataset)
       fit_kwargs = _prepare_fit_kwargs_for_poisson_dataset(

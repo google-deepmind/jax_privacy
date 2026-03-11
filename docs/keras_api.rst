@@ -37,9 +37,9 @@ example below shows that.
 This section demonstrates how to integrate the Keras API into a typical
 Keras training workflow.
 
-The example below passes training data to ``fit()`` as per-example arrays.
-In that setup, the DP Keras wrapper draws Poisson-sampled batches internally
-from those arrays.
+The example below enables ``poisson_sampling_in_fit`` and passes training data
+to ``fit()`` as per-example arrays. In that setup, the DP Keras wrapper draws
+Poisson-sampled batches internally from those arrays.
 
 .. literalinclude:: ../examples/keras_api_example.py
    :language: python
