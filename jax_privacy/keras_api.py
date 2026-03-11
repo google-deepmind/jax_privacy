@@ -547,16 +547,6 @@ def _take_optional_batch_from_tree(
   return _take_batch_from_tree(tree, indices)
 
 
-def _mask_sample_weight_leaf(
-    sample_weight_leaf: chex.Array, is_padding_example: np.ndarray
-) -> np.ndarray:
-  """Zeros sample weights on padded examples while preserving rank."""
-  sample_weight_leaf = np.asarray(sample_weight_leaf)
-  mask = (~is_padding_example).astype(sample_weight_leaf.dtype)
-  mask = mask.reshape(mask.shape + (1,) * (sample_weight_leaf.ndim - 1))
-  return sample_weight_leaf * mask
-
-
 def _build_batch_sample_weight(
     sample_weight: chex.ArrayTree | None,
     indices: np.ndarray,
@@ -565,11 +555,7 @@ def _build_batch_sample_weight(
   """Builds sample weights that hide synthetic padding examples from Keras."""
   if sample_weight is None:
     return (~is_padding_example).astype(np.float32)
-  batched_sample_weight = _take_batch_from_tree(sample_weight, indices)
-  return jax.tree.map(
-      lambda leaf: _mask_sample_weight_leaf(leaf, is_padding_example),
-      batched_sample_weight,
-  )
+  return _take_batch_from_tree(sample_weight, indices)
 
 
 def _pack_poisson_sampled_batch(
