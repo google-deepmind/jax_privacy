@@ -409,6 +409,22 @@ class KerasApiTest(parameterized.TestCase):
     self.assertNotIn("steps_per_epoch", rewritten_kwargs)
     self.assertEqual(fit_kwargs["x"].shape, (3, 2))
 
+  def test_masked_mean_ignores_padding_examples(self):
+    values = jnp.array([[1.0, 10.0], [3.0, 30.0], [5.0, 50.0]])
+    is_padding_example = jnp.array([False, True, False])
+
+    mean = keras_api._masked_mean(values, is_padding_example)
+
+    np.testing.assert_allclose(mean, np.array([3.0, 30.0]))
+
+  def test_masked_mean_returns_zero_for_all_padding(self):
+    values = jnp.array([[1.0, 10.0], [3.0, 30.0]])
+    is_padding_example = jnp.array([True, True])
+
+    mean = keras_api._masked_mean(values, is_padding_example)
+
+    np.testing.assert_allclose(mean, np.array([0.0, 0.0]))
+
   def test_dp_training_e2e_work(self):
     np.random.seed(42)
     train_size = 200

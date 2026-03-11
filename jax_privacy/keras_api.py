@@ -628,10 +628,10 @@ def _masked_mean(
   values = jnp.asarray(values)
   if values.ndim == 0:
     return values
-  weights = jnp.asarray(~is_padding_example, dtype=values.dtype)
-  weights = weights.reshape(weights.shape + (1,) * (values.ndim - 1))
-  denominator = jnp.maximum(jnp.sum(weights, axis=0), 1.0)
-  return jnp.sum(values * weights, axis=0) / denominator
+  where = jnp.asarray(~is_padding_example)
+  where = where.reshape(where.shape + (1,) * (values.ndim - 1))
+  mean = jnp.mean(values, axis=0, where=where)
+  return jnp.where(jnp.any(where, axis=0), mean, jnp.zeros_like(mean))
 
 
 def _validate_random_access_training_data(
