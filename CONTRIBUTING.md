@@ -15,7 +15,7 @@ limitations under the License. -->
 # How to Contribute
 
 We welcome small patches related to bug fixes, but we do not plan to accept
-major changes to this repository at this time.
+major changes to this repository at this time
 
 ## Coordination & Claiming Issues
 
