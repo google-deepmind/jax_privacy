@@ -55,6 +55,7 @@ test = [
     "hypothesis",
     "crc32c",
     "keras",
+    "flax",
 ]
 
 examples = [

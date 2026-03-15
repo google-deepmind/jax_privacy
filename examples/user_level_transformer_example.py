@@ -53,6 +53,7 @@ DELTA = 1e-6
 
 class TransformerDecoder(nn.Module):
   """A minimal Transformer Decoder."""
+
   vocab_size: int
   embed_dim: int
   num_heads: int
@@ -61,9 +62,9 @@ class TransformerDecoder(nn.Module):
   @nn.compact
   def __call__(self, x, train: bool):
     x = nn.Embed(num_embeddings=self.vocab_size, features=self.embed_dim)(x)
-    x = nn.SelfAttention(
-        num_heads=self.num_heads, qkv_features=self.embed_dim
-    )(x)
+    x = nn.SelfAttention(num_heads=self.num_heads, qkv_features=self.embed_dim)(
+        x
+    )
     x = nn.Dense(self.ff_dim)(x)
     x = nn.relu(x)
     x = nn.Dense(self.vocab_size)(x)
@@ -175,9 +176,7 @@ def main(argv: list[str]) -> None:
     # Add Privacy Noise (Using plan's privatizer)
     noisy_grads, noise_state = privatizer.update(grads, noise_state)
 
-    updates, opt_state = optimizer.update(
-        noisy_grads, opt_state, params
-    )
+    updates, opt_state = optimizer.update(noisy_grads, opt_state, params)
     params = optax.apply_updates(params, updates)
     return params, opt_state, noise_state
 
