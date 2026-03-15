@@ -48,9 +48,6 @@ lint = [
     "pyink[jupyter]",
 ]
 
-[project.optional-dependencies]
-# ... (lint section)
-
 test = [
     "pytest",
     "pytest-xdist",
@@ -58,7 +55,8 @@ test = [
     "hypothesis",
     "crc32c",
     "keras",
-    "flax; sys_platform != 'win32'",
+    # Add the environment marker to flax here:
+    "flax; sys_platform != 'win32'", 
 ]
 
 examples = [
