@@ -51,7 +51,7 @@ EMBED_SIZE = 16
 NUM_HEADS = 4
 NUM_LAYERS = 2
 LEARNING_RATE = 1e-3
-NUM_STEPS = 10
+NUM_STEPS = 20
 CLIP_NORM = 1.0
 NOISE_MULTIPLIER = 1.0
 EPSILON = 10.0
@@ -69,7 +69,7 @@ def download_data(url: str) -> str:
     The content of the downloaded file as a string.
   """
   with urllib.request.urlopen(url, timeout=10) as response:
-    return response.read().decode('utf-8')
+    return response.read().decode("utf-8")
 
 
 def create_tokenizer(text: str) -> Dict[str, int]:
@@ -148,14 +148,10 @@ class TransformerBlock(nnx.Module):
     self.ln2 = nnx.LayerNorm(num_features=embed_size, rngs=rngs)
     self.ffw = nnx.Sequential(
         nnx.Linear(
-            in_features=embed_size,
-            out_features=4 * embed_size,
-            rngs=rngs
+            in_features=embed_size, out_features=4 * embed_size, rngs=rngs
         ),
         nnx.Linear(
-            in_features=4 * embed_size,
-            out_features=embed_size,
-            rngs=rngs
+            in_features=4 * embed_size, out_features=embed_size, rngs=rngs
         ),
     )
 
@@ -242,6 +238,7 @@ def pure_loss_fn(
     params: nnx.State,
     x: jax.Array,
     y: jax.Array,
+    prng_key: jax.Array,
     graphdef: nnx.GraphDef,
     other: nnx.State,
 ) -> jax.Array:
@@ -255,17 +252,24 @@ def pure_loss_fn(
     params: The trainable parameters of the model.
     x: Input batch (single example or microbatch).
     y: Target batch (single example or microbatch).
+    prng_key: An isolated pseudo-random number generator key.
     graphdef: The static graph definition of the NNX model.
-    other: Non-trainable state (e.g., RNG counts).
+    other: Non-trainable state (excluding RNG counts).
 
   Returns:
     The scalar loss value.
   """
+  # Vmap supplies a single prng_key per example.
+  # We inject it into the `other` tree mapping.
+  other = jax.tree_util.tree_map(
+      lambda x: nnx.RngState(prng_key) if isinstance(x, nnx.RngState) else x,
+      other,
+      is_leaf=lambda x: isinstance(x, nnx.RngState),
+  )
   model = nnx.merge(graphdef, params, other)
 
   # Standard call without rank normalization
   logits = model(x)
-
 
   return optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
 
@@ -273,7 +277,7 @@ def pure_loss_fn(
 def main(argv: list[str]) -> None:
   """Main training loop."""
   if len(argv) > 1:
-    raise app.UsageError('Too many command-line arguments.')
+    raise app.UsageError("Too many command-line arguments.")
   device = jax.extend.backend.get_backend().platform
   print(f"Starting DP-SGD Training on {device.upper()}...")
 
@@ -299,9 +303,11 @@ def main(argv: list[str]) -> None:
   )
   optimizer = optax.sgd(LEARNING_RATE)
 
-  # CRITICAL: Exhaustive split to separate trainable params from static
   # graph and other state.
   graphdef, params, other = nnx.split(model, nnx.Param, ...)
+  # Remove the internal RNG state from `other` so we can inject them properly
+  other = nnx.split(other, nnx.RngState, ...)[2]
+
   opt_state = optimizer.init(params)
 
   # Configure DP Gradient Clipping
@@ -309,10 +315,9 @@ def main(argv: list[str]) -> None:
       functools.partial(pure_loss_fn, graphdef=graphdef, other=other),
       l2_clip_norm=CLIP_NORM,
       batch_argnums=(1, 2),  # x and y are batched
-      keep_batch_dim=True,   # Return per-example gradients
-      return_values=True,    # Return loss values for logging
-      # Note: We do not pass prng_argnum here because 'other' (arg 4) contains
-      # RNG state which is handled as a standard argument by NNX.
+      prng_argnum=3,  # Explicitly vmap the PRNG key per batch example
+      keep_batch_dim=True,  # Return per-example gradients
+      return_values=True,  # Return loss values for logging
   )
 
   # Execution Plan Configuration
@@ -320,8 +325,9 @@ def main(argv: list[str]) -> None:
   config = execution_plan.BandMFExecutionPlanConfig(
       iterations=NUM_STEPS,
       num_bands=1,
-      epsilon=EPSILON,
-      delta=DELTA,
+      epsilon=None,
+      delta=None,
+      noise_multiplier=NOISE_MULTIPLIER,
       sampling_prob=BATCH_SIZE / dataset_size,
   )
   plan = config.make(grad_fn)
@@ -333,6 +339,7 @@ def main(argv: list[str]) -> None:
       params: nnx.State,
       opt_state: optax.OptState,
       batch: Tuple[jax.Array, jax.Array],
+      prng_key: jax.Array,
       *,
       noise_state: Any,
   ) -> Tuple[nnx.State, optax.OptState, Any, jax.Array]:
@@ -342,6 +349,7 @@ def main(argv: list[str]) -> None:
       params: Current model parameters.
       opt_state: Current optimizer state.
       batch: A tuple (x, y) of input and target data.
+      prng_key: A pseudorandom number generator key.
       noise_state: Current state of the noise mechanism.
 
     Returns:
@@ -350,10 +358,13 @@ def main(argv: list[str]) -> None:
     x, y = batch
 
     # Compute clipped gradients and per-example loss values
-    grads, loss = grad_fn(params, x, y)
+    grads, loss = grad_fn(params, x, y, prng_key)
+
+    # Manually aggregate the per-example clipped gradients using sum
+    summed_grads = jax.tree_util.tree_map(lambda g: jnp.sum(g, axis=0), grads)
 
     # Add Privacy Noise
-    noisy_grads, noise_state = privatizer.update(grads, noise_state)
+    noisy_grads, noise_state = privatizer.update(summed_grads, noise_state)
 
     # Apply updates using Optax
     updates, opt_state = optimizer.update(noisy_grads, opt_state)
@@ -365,6 +376,7 @@ def main(argv: list[str]) -> None:
   # Training loop
   print(f"Training for {NUM_STEPS} steps...")
   iterator = plan.batch_selection_strategy.batch_iterator(dataset_size)
+  prng_key = jax.random.key(42)
   for step, batch_indices in enumerate(iterator):
     if step >= NUM_STEPS:
       break
@@ -377,8 +389,9 @@ def main(argv: list[str]) -> None:
     y = np.stack([data[i + 1 : i + CONTEXT_LENGTH + 1] for i in batch_indices])
     batch = (x, y)
 
+    prng_key, subkey = jax.random.split(prng_key)
     params, opt_state, noise_state, loss = train_step(
-        params, opt_state, batch, noise_state=noise_state
+        params, opt_state, batch, subkey, noise_state=noise_state
     )
 
     print(f"Step {step + 1}/{NUM_STEPS}, Loss: {loss:.4f}")
