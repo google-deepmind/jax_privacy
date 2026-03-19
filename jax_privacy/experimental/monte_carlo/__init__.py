@@ -12,21 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Public API for matrix factorization.
+"""Monte Carlo module.
 
 .. autosummary::
    :toctree: _autosummary_output
    :nosignatures:
 
-   jax_privacy.matrix_factorization.banded
-   jax_privacy.matrix_factorization.buffered_toeplitz
-   jax_privacy.matrix_factorization.checks
-   jax_privacy.matrix_factorization.dense
-   jax_privacy.matrix_factorization.optimization
-   jax_privacy.matrix_factorization.sensitivity
-   jax_privacy.matrix_factorization.streaming_matrix
-   jax_privacy.matrix_factorization.test_utils
-   jax_privacy.matrix_factorization.toeplitz
+   jax_privacy.experimental.monte_carlo.delta_calculation
+   jax_privacy.experimental.monte_carlo.sample_generation
 """
-
-from .streaming_matrix import StreamingMatrix

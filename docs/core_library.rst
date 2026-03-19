@@ -29,6 +29,7 @@ Public API
   clipping
   noise_addition
   auditing
+  matrix_factorization
 
 
 Experimental Modules
@@ -39,3 +40,5 @@ Experimental Modules
 
   experimental.execution_plan
   experimental.compilation_utils
+  experimental.accounting
+  experimental.monte_carlo
