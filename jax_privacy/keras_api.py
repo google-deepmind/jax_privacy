@@ -383,7 +383,6 @@ _FitFnReturnType = keras.callbacks.History
 _POISSON_INPUTS_KEY = '_jax_privacy_inputs'
 _POISSON_TARGETS_KEY = '_jax_privacy_targets'
 _POISSON_SAMPLE_WEIGHT_KEY = '_jax_privacy_sample_weight'
-_POISSON_PADDING_MASK_KEY = '_jax_privacy_is_padding_example'
 _DEFAULT_POISSON_PADDING_MULTIPLE = 32
 
 
@@ -417,17 +416,15 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
 
   def __getitem__(self, index: int) -> dict[str, chex.ArrayTree | None]:
     padded_indices = self._epoch_batches[index]
-    is_padding_example = padded_indices == -1
     batched_x = _take_batch_from_tree(self._x, padded_indices)
     batched_y = _take_batch_from_tree(self._y, padded_indices)
     batched_sample_weight = _build_batch_sample_weight(
-        self._sample_weight, padded_indices, is_padding_example
+        self._sample_weight, padded_indices
     )
     return _pack_poisson_sampled_batch(
         batched_x,
         batched_y,
         batched_sample_weight,
-        is_padding_example,
     )
 
   def on_epoch_end(self) -> None:
@@ -555,11 +552,10 @@ def _take_batch_from_tree(
 def _build_batch_sample_weight(
     sample_weight: chex.ArrayTree | None,
     indices: np.ndarray,
-    is_padding_example: np.ndarray,
 ) -> chex.ArrayTree:
   """Builds sample weights that hide synthetic padding examples from Keras."""
   if sample_weight is None:
-    return (~is_padding_example).astype(np.float32)
+    return (indices >= 0).astype(np.float32)
   return _take_batch_from_tree(sample_weight, indices)
 
 
@@ -567,18 +563,43 @@ def _pack_poisson_sampled_batch(
     x: chex.ArrayTree,
     y: chex.ArrayTree | None,
     sample_weight: chex.ArrayTree,
-    is_padding_example: np.ndarray,
 ) -> dict[str, Any]:
-  """Packs a private batch plus padding metadata."""
-  # Keras only treats tuples of length up to three as
-  # (x, y, sample_weight). The padding mask is extra metadata needed by the
-  # DP train_step, so private Poisson batches are stored in a dict instead.
+  """Packs a private Poisson batch for the wrapped DP train_step."""
+  # The private Poisson path stays wrapped so the DP train_step can tell it
+  # apart from ordinary Keras tuples. Padding examples are encoded as zero
+  # sample weights and recovered on demand when the batch is unpacked.
   return {
       _POISSON_INPUTS_KEY: x,
       _POISSON_TARGETS_KEY: y,
       _POISSON_SAMPLE_WEIGHT_KEY: sample_weight,
-      _POISSON_PADDING_MASK_KEY: np.asarray(is_padding_example, dtype=np.bool_),
   }
+
+
+def _leaf_padding_mask_from_sample_weight(
+    sample_weight_leaf: chex.Array,
+) -> jax.Array:
+  """Returns which batch entries have any nonzero weight in one leaf."""
+  sample_weight_leaf = jnp.asarray(sample_weight_leaf)
+  reduction_axes = tuple(range(1, sample_weight_leaf.ndim))
+  if reduction_axes:
+    return jnp.any(sample_weight_leaf, axis=reduction_axes)
+  return sample_weight_leaf != 0
+
+
+def _padding_mask_from_sample_weight(
+    sample_weight: chex.ArrayTree,
+) -> jax.Array:
+  """Returns which batch entries are synthetic padding examples."""
+  has_any_weight = None
+  for leaf in jax.tree.leaves(sample_weight):
+    leaf_has_any_weight = _leaf_padding_mask_from_sample_weight(leaf)
+    if has_any_weight is None:
+      has_any_weight = leaf_has_any_weight
+    else:
+      has_any_weight = jnp.logical_or(has_any_weight, leaf_has_any_weight)
+  if has_any_weight is None:
+    raise ValueError('Expected sample_weight to contain at least one leaf.')
+  return ~has_any_weight
 
 
 def _unpack_private_training_data(
@@ -591,20 +612,21 @@ def _unpack_private_training_data(
 ]:
   """Returns private-batch data plus an optional padding mask."""
   # Regular Keras data follows the usual (x, y, sample_weight) tuple contract.
-  # Private Poisson batches use a dict so the padding mask can travel
-  # alongside those fields.
+  # Private Poisson batches use a dict so the wrapper can distinguish them from
+  # ordinary Keras tuples. Padding examples are reconstructed from zeroed
+  # sample weights when those private batches are unpacked.
   if (
       isinstance(data, dict)
       and _POISSON_INPUTS_KEY in data
       and _POISSON_TARGETS_KEY in data
       and _POISSON_SAMPLE_WEIGHT_KEY in data
-      and _POISSON_PADDING_MASK_KEY in data
   ):
+    sample_weight = data[_POISSON_SAMPLE_WEIGHT_KEY]
     return (
         data[_POISSON_INPUTS_KEY],
         data[_POISSON_TARGETS_KEY],
-        data[_POISSON_SAMPLE_WEIGHT_KEY],
-        jnp.asarray(data[_POISSON_PADDING_MASK_KEY]),
+        sample_weight,
+        _padding_mask_from_sample_weight(sample_weight),
     )
   x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
   return x, y, sample_weight, None
@@ -636,29 +658,6 @@ def _masked_mean(
     where = jnp.expand_dims(where, axis=-1)
   mean = jnp.mean(values, axis=0, where=where)
   return jnp.where(jnp.any(where, axis=0), mean, jnp.nan_to_num(mean))
-
-
-def _validate_random_access_training_data_and_get_size(
-    x: chex.ArrayTree,
-    y: chex.ArrayTree | None,
-    sample_weight: chex.ArrayTree | None,
-) -> int:
-  """Validates Poisson-resampleable fit inputs and returns their size."""
-  validated_train_size = _tree_batch_size(x)
-  if y is not None and _tree_batch_size(y) != validated_train_size:
-    raise ValueError(
-        'The target data must have the same leading batch dimension as the'
-        ' training inputs.'
-    )
-  if (
-      sample_weight is not None
-      and _tree_batch_size(sample_weight) != validated_train_size
-  ):
-    raise ValueError(
-        'The sample weights must have the same leading batch dimension as the'
-        ' training inputs.'
-    )
-  return validated_train_size
 
 
 def _create_fit_fn_with_validation(
@@ -731,9 +730,20 @@ def _create_fit_fn_with_validation(
             ' any split. Please create the train/validation split explicitly'
             ' and pass validation_data instead.'
         )
-      validated_train_size = _validate_random_access_training_data_and_get_size(
-          x, y, sample_weight
-      )
+      validated_train_size = _tree_batch_size(x)
+      if y is not None and _tree_batch_size(y) != validated_train_size:
+        raise ValueError(
+            'The target data must have the same leading batch dimension as'
+            ' the training inputs.'
+        )
+      if (
+          sample_weight is not None
+          and _tree_batch_size(sample_weight) != validated_train_size
+      ):
+        raise ValueError(
+            'The sample weights must have the same leading batch dimension as'
+            ' the training inputs.'
+        )
 
     # Note accessing self._dp_params is safe because it's added in
     # _add_dp_sgd_attributes, but requires disabling pylint because this
