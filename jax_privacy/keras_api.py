@@ -380,9 +380,6 @@ def _add_dp_sgd_attributes(model: keras.Model, params: DPKerasConfig) -> None:
 
 
 _FitFnReturnType = keras.callbacks.History
-_POISSON_INPUTS_KEY = '_jax_privacy_inputs'
-_POISSON_TARGETS_KEY = '_jax_privacy_targets'
-_POISSON_SAMPLE_WEIGHT_KEY = '_jax_privacy_sample_weight'
 _DEFAULT_POISSON_PADDING_MULTIPLE = 32
 
 
@@ -414,18 +411,16 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
   def __len__(self) -> int:
     return self._steps_per_epoch
 
-  def __getitem__(self, index: int) -> dict[str, chex.ArrayTree | None]:
+  def __getitem__(
+      self, index: int
+  ) -> tuple[chex.ArrayTree, chex.ArrayTree | None, chex.ArrayTree]:
     padded_indices = self._epoch_batches[index]
     batched_x = _take_batch_from_tree(self._x, padded_indices)
     batched_y = _take_batch_from_tree(self._y, padded_indices)
     batched_sample_weight = _build_batch_sample_weight(
         self._sample_weight, padded_indices
     )
-    return _pack_poisson_sampled_batch(
-        batched_x,
-        batched_y,
-        batched_sample_weight,
-    )
+    return batched_x, batched_y, batched_sample_weight
 
   def on_epoch_end(self) -> None:
     """Precomputes one epoch of padded Poisson-sampled index batches."""
@@ -559,90 +554,29 @@ def _build_batch_sample_weight(
   return _take_batch_from_tree(sample_weight, indices)
 
 
-def _pack_poisson_sampled_batch(
-    x: chex.ArrayTree,
-    y: chex.ArrayTree | None,
-    sample_weight: chex.ArrayTree,
-) -> dict[str, Any]:
-  """Packs a private Poisson batch for the wrapped DP train_step."""
-  # The private Poisson path stays wrapped so the DP train_step can tell it
-  # apart from ordinary Keras tuples. Padding examples are encoded as zero
-  # sample weights and recovered on demand when the batch is unpacked.
-  return {
-      _POISSON_INPUTS_KEY: x,
-      _POISSON_TARGETS_KEY: y,
-      _POISSON_SAMPLE_WEIGHT_KEY: sample_weight,
-  }
-
-
-def _leaf_padding_mask_from_sample_weight(
-    sample_weight_leaf: chex.Array,
-) -> jax.Array:
-  """Returns which batch entries have any nonzero weight in one leaf."""
-  sample_weight_leaf = jnp.asarray(sample_weight_leaf)
-  reduction_axes = tuple(range(1, sample_weight_leaf.ndim))
-  if reduction_axes:
-    return jnp.any(sample_weight_leaf, axis=reduction_axes)
-  return sample_weight_leaf != 0
-
-
 def _padding_mask_from_sample_weight(
-    sample_weight: chex.ArrayTree,
+    sample_weight: jax.Array,
 ) -> jax.Array:
   """Returns which batch entries are synthetic padding examples."""
-  has_any_weight = None
-  for leaf in jax.tree.leaves(sample_weight):
-    leaf_has_any_weight = _leaf_padding_mask_from_sample_weight(leaf)
-    if has_any_weight is None:
-      has_any_weight = leaf_has_any_weight
-    else:
-      has_any_weight = jnp.logical_or(has_any_weight, leaf_has_any_weight)
-  if has_any_weight is None:
-    raise ValueError('Expected sample_weight to contain at least one leaf.')
-  return ~has_any_weight
-
-
-def _unpack_private_training_data(
-    data: Any,
-) -> tuple[
-    chex.ArrayTree,
-    chex.ArrayTree | None,
-    chex.ArrayTree | None,
-    jax.Array | None,
-]:
-  """Returns private-batch data plus an optional padding mask."""
-  # Regular Keras data follows the usual (x, y, sample_weight) tuple contract.
-  # Private Poisson batches use a dict so the wrapper can distinguish them from
-  # ordinary Keras tuples. Padding examples are reconstructed from zeroed
-  # sample weights when those private batches are unpacked.
-  if (
-      isinstance(data, dict)
-      and _POISSON_INPUTS_KEY in data
-      and _POISSON_TARGETS_KEY in data
-      and _POISSON_SAMPLE_WEIGHT_KEY in data
-  ):
-    sample_weight = data[_POISSON_SAMPLE_WEIGHT_KEY]
-    return (
-        data[_POISSON_INPUTS_KEY],
-        data[_POISSON_TARGETS_KEY],
-        sample_weight,
-        _padding_mask_from_sample_weight(sample_weight),
-    )
-  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
-  return x, y, sample_weight, None
+  sample_weight = jnp.asarray(sample_weight)
+  if sample_weight.ndim == 1:
+    return sample_weight == 0
+  if sample_weight.ndim == 2:
+    return ~jnp.any(sample_weight, axis=1)
+  raise ValueError('Expected sample_weight to be a 1D or 2D array.')
 
 
 def _maybe_symbolically_build_private_model(
     model: keras.Model, dataset: _PoissonSampledTrainingDataset
 ) -> None:
-  """Runs Keras' symbolic build before fit() sees a private dict batch."""
+  """Runs Keras' symbolic build before fit() sees the Poisson dataset."""
   if not hasattr(model, '_symbolic_build'):
     return
   # _symbolic_build is a private Keras helper, not a JAX-specific concept.
   # It lets Keras infer shapes and create state from a standard
   # (x, y, sample_weight) batch before the wrapped fit() path starts yielding
-  # dicts that also carry the padding mask metadata.
-  x, y, sample_weight, _ = _unpack_private_training_data(dataset[0])
+  # Poisson-sampled batches from the PyDataset.
+  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(dataset[0])
   model._symbolic_build(data_batch=(x, y, sample_weight))  # pylint: disable=protected-access
 
 
@@ -880,7 +814,13 @@ def _dp_train_step(
       optimizer_variables,
       _,
   ) = state
-  x, y, sample_weight, is_padding_example = _unpack_private_training_data(data)
+  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
+  is_padding_example = None
+  if (
+      self._dp_params.poisson_sampling_in_fit  # pylint: disable=protected-access
+      and sample_weight is not None
+  ):
+    is_padding_example = _padding_mask_from_sample_weight(sample_weight)
 
   dp_batch_size = self._dp_params.batch_size  # pylint: disable=protected-access
   actual_batch_size = jax.tree_util.tree_leaves(x)[0].shape[0]
@@ -1010,15 +950,13 @@ def _noised_clipped_grads(
   ) = state
   # TODO: b/415360727 - access it and update it by name.
   noise_state = non_trainable_variables[0], ()
-  x, y, sample_weight, wrapped_is_padding_example = (
-      _unpack_private_training_data(data)
-  )
+  x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
   if is_padding_example is None:
-    if wrapped_is_padding_example is None:
+    if dp_params.poisson_sampling_in_fit and sample_weight is not None:
+      is_padding_example = _padding_mask_from_sample_weight(sample_weight)
+    else:
       batch_size = jax.tree.leaves(x)[0].shape[0]
       is_padding_example = jnp.zeros(batch_size, dtype=jnp.bool_)
-    else:
-      is_padding_example = wrapped_is_padding_example
 
   clipped_grad_fn = jax_privacy.clipped_grad(
       fun=compute_loss_and_updates_fn,

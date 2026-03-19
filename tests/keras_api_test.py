@@ -322,12 +322,12 @@ class KerasApiTest(parameterized.TestCase):
 
     realized_batch_sizes = []
     for i, padded_indices in enumerate(dataset._epoch_batches):
-      (
-          batch_x,
-          batch_y,
-          batch_sample_weight,
-          is_padding_example,
-      ) = keras_api._unpack_private_training_data(dataset[i])
+      batch_x, batch_y, batch_sample_weight = (
+          keras.utils.unpack_x_y_sample_weight(dataset[i])
+      )
+      is_padding_example = keras_api._padding_mask_from_sample_weight(
+          batch_sample_weight
+      )
       valid_positions = padded_indices >= 0
 
       self.assertEqual(batch_x.shape[0] % dp_params.batch_size, 0)
@@ -375,8 +375,9 @@ class KerasApiTest(parameterized.TestCase):
         steps_per_epoch=4,
     )
 
-    _, _, batch_sample_weight, is_padding_example = (
-        keras_api._unpack_private_training_data(dataset[0])
+    _, _, batch_sample_weight = keras.utils.unpack_x_y_sample_weight(dataset[0])
+    is_padding_example = keras_api._padding_mask_from_sample_weight(
+        batch_sample_weight
     )
 
     np.testing.assert_array_equal(
@@ -393,34 +394,16 @@ class KerasApiTest(parameterized.TestCase):
         padded_indices, np.array([-1, -1, -1, -1], dtype=np.int32)
     )
 
-  def test_private_training_data_round_trip_preserves_padding_mask(self):
-    x = np.arange(6).reshape(3, 2)
-    y = np.arange(3)
+  def test_padding_mask_from_2d_sample_weight(self):
     sample_weight = np.array(
         [[1.0, 0.5], [0.0, 0.0], [2.0, 3.0]], dtype=np.float32
     )
-    is_padding_example = np.array([False, True, False])
+    padding_mask = keras_api._padding_mask_from_sample_weight(sample_weight)
 
-    packed_batch = keras_api._pack_poisson_sampled_batch(
-        x,
-        y,
-        sample_weight,
-    )
-    unpacked_x, unpacked_y, unpacked_sample_weight, unpacked_padding_mask = (
-        keras_api._unpack_private_training_data(packed_batch)
-    )
+    np.testing.assert_array_equal(padding_mask, np.array([False, True, False]))
 
-    np.testing.assert_array_equal(unpacked_x, x)
-    np.testing.assert_array_equal(unpacked_y, y)
-    np.testing.assert_array_equal(unpacked_sample_weight, sample_weight)
-    np.testing.assert_array_equal(unpacked_padding_mask, is_padding_example)
-
-  def test_padding_mask_from_sample_weight_tree(self):
-    sample_weight = {
-        "a": np.array([[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]], dtype=np.float32),
-        "b": np.array([0.0, 0.0, 2.0], dtype=np.float32),
-    }
-
+  def test_padding_mask_from_1d_sample_weight(self):
+    sample_weight = np.array([1.0, 0.0, 2.0], dtype=np.float32)
     padding_mask = keras_api._padding_mask_from_sample_weight(sample_weight)
 
     np.testing.assert_array_equal(padding_mask, np.array([False, True, False]))
