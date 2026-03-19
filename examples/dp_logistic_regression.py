@@ -21,7 +21,6 @@ from typing import Any, Mapping, Tuple
 from absl import app
 import jax
 import jax.numpy as jnp
-import jax_privacy
 from jax_privacy import auditing
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
@@ -61,6 +60,9 @@ def logistic_loss(
     feature_matrix: jax.Array,
     labels: jax.Array,
 ) -> jax.Array:
+  # JAX privacy will call this function with size 1 batches, so it doesn't
+  # matter how we aggregate across the batch dimension here.
+  # (jnp.mean and jnp.sum will produce the same result)
   return jnp.mean(elementwise_loss(params, feature_matrix, labels))
 
 
@@ -106,23 +108,20 @@ def main(_):
   init_loss = logistic_loss(init_params, train_features, train_labels)
   print(f'Initial training loss: {init_loss:.3f}')
 
-  config = execution_plan.BandMFExecutionPlanConfig(
+  config = execution_plan.BandMFExecutionPlanConfig.default(
       iterations=ITERATIONS,
       num_bands=BANDS,
+      l2_clip_norm=L2_CLIP_NORM,
+      normalize_by=EXPECTED_BATCH_SIZE,
       epsilon=EPSILON,
       delta=DELTA,
       sampling_prob=EXPECTED_BATCH_SIZE / train_users * BANDS,
   )
-  grad_fn = jax_privacy.clipped_grad(
-      logistic_loss,
-      l2_clip_norm=L2_CLIP_NORM,
-      batch_argnums=(1, 2),
-      normalize_by=EXPECTED_BATCH_SIZE,
-  )
-  plan = config.make(grad_fn)
+  print('Initialized BandMFExecutionPlanConfig')
+  plan = config.plan
+  grad_fn = plan.clipped_grad(logistic_loss, batch_argnums=(1, 2))
 
   optimizer = optax.sgd(LEARNING_RATE)
-  privatizer = plan.noise_addition_transform
 
   @jax.jit
   def update_fn(
@@ -132,16 +131,21 @@ def main(_):
       noise_state: Any,
       opt_state: optax.OptState,
   ) -> Tuple[Mapping[str, jax.Array], Any, optax.OptState]:
+    print('Compiling update_fn for batch size ', batch[0].shape[0])
     x, y = batch
-    clipped_grad = grad_fn(params, x, y, is_padding_example=is_padding_example)
+    clipped_grad_sum = grad_fn(
+        params, x, y, is_padding_example=is_padding_example
+    )
 
-    noisy_grad, noise_state = privatizer.update(clipped_grad, noise_state)
+    noisy_grad, noise_state = plan.noise_addition_transform.update(
+        clipped_grad_sum, noise_state
+    )
     updates, opt_state = optimizer.update(noisy_grad, opt_state)
     params = optax.apply_updates(params, updates)
     return params, noise_state, opt_state
 
   params = init_params
-  noise_state = privatizer.init(params)
+  noise_state = plan.noise_addition_transform.init(params)
   opt_state = optimizer.init(params)
 
   start_time = time.perf_counter()

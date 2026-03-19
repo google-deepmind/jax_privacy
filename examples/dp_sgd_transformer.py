@@ -45,7 +45,6 @@ from absl import app
 import jax
 from jax import random
 import jax.numpy as jnp
-import jax_privacy
 from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import optax
@@ -62,13 +61,7 @@ def init_model_params(
 ) -> Mapping[str, Any]:
   """Initializes Transformer parameters."""
   keys = random.split(key, 5)
-  model_params = {
-      'embedding': random.normal(keys[0], (vocab_size, embed_dim)) * 0.1,
-      'pos_embedding': random.normal(keys[1], (max_len, embed_dim)) * 0.1,
-      'layers': [],
-      'ln_f': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
-      'head': random.normal(keys[4], (embed_dim, vocab_size)) * 0.1,
-  }
+  layers = []
   layer_keys = random.split(keys[2], num_layers * 6)
   for i in range(num_layers):
     layer_key = layer_keys[i * 6 : (i + 1) * 6]
@@ -90,8 +83,14 @@ def init_model_params(
         'ln1': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
         'ln2': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
     }
-    model_params['layers'].append(layer)
-  return model_params
+    layers.append(layer)
+  return {
+      'embedding': random.normal(keys[0], (vocab_size, embed_dim)) * 0.1,
+      'pos_embedding': random.normal(keys[1], (max_len, embed_dim)) * 0.1,
+      'layers': layers,
+      'ln_f': {'scale': jnp.ones(embed_dim), 'bias': jnp.zeros(embed_dim)},
+      'head': random.normal(keys[4], (embed_dim, vocab_size)) * 0.1,
+  }
 
 
 def transformer_block(
@@ -252,25 +251,25 @@ def main(argv: Sequence[str]) -> None:
   model_params = init_model_params(key, vocab_size=vocab_size, max_len=max_len)
 
   # Set up DP components
-  config = execution_plan.BandMFExecutionPlanConfig(
+  config = execution_plan.BandMFExecutionPlanConfig.default(
       iterations=iterations,
       num_bands=1,
       epsilon=epsilon,
       delta=delta,
       sampling_prob=expected_batch_size / train_size,
-  )
-  grad_fn = jax_privacy.clipped_grad(
-      loss_fn,
+      rescale_to_unit_norm=True,
+      normalize_by=expected_batch_size,
       l2_clip_norm=clipping_norm,
+  )
+  grad_fn = config.plan.clipped_grad(
+      loss_fn,
       batch_argnums=(1, 2),
       has_aux=False,
       return_values=True,
-      normalize_by=expected_batch_size,
   )
-  plan = config.make(grad_fn)
 
   optimizer = optax.sgd(learning_rate)
-  privatizer = plan.noise_addition_transform
+  noise_transform = config.plan.noise_addition_transform
 
   @jax.jit
   def dp_train_step(
@@ -281,22 +280,24 @@ def main(argv: Sequence[str]) -> None:
       opt_state: Any,
   ) -> Tuple[Mapping[str, Any], Any, jax.Array, Any]:
     batch_x, batch_y = batch_data
-    grads, aux = grad_fn(
+    clipped_grad_sum, aux = grad_fn(
         model_params, batch_x, batch_y, is_padding_example=is_padding_example
     )
     loss = aux.values.mean()
-    noisy_grads, noise_state = privatizer.update(grads, noise_state)
-    updates, opt_state = optimizer.update(noisy_grads, opt_state)
+    noisy_grad, noise_state = noise_transform.update(
+        clipped_grad_sum, noise_state
+    )
+    updates, opt_state = optimizer.update(noisy_grad, opt_state)
     model_params = optax.apply_updates(model_params, updates)
     return model_params, opt_state, loss, noise_state
 
-  noise_state = privatizer.init(model_params)
+  noise_state = noise_transform.init(model_params)
   opt_state = optimizer.init(model_params)
 
   print('Training Transformer with DP-SGD...')
 
   for step, batch_idx in enumerate(
-      plan.batch_selection_strategy.batch_iterator(train_size)
+      config.plan.batch_selection_strategy.batch_iterator(train_size)
   ):
 
     idx = batch_selection.pad_to_multiple_of(batch_idx, padding_multiple)
