@@ -70,7 +70,7 @@ def minsep_true_max_participations(
 def max_participation_for_linear_fn(
     x: jnp.ndarray, min_sep: int = 1, max_participations: Optional[int] = None
 ) -> float:
-  """Returns max_u <x, u>, where u respects the given participation pattern.
+  r"""Returns max_u <x, u>, where u respects the given participation pattern.
 
   The vector `u` is represented by a set of indices that satisfy min_sep
   and max_participations. Note that the signs of the entries in x matter
