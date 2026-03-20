@@ -99,7 +99,6 @@ def minimum_samples_to_calibrate(base_delta: float, target_delta: float) -> int:
   # There are some stability issues in going back-and-forth between base_delta
   # and target_delta, so to be conservative we enforce both that we have a valid
   # base_delta and that we achieve the target_delta.
-  # TODO: Investigate using log-space to improve stability.
   def _enough_samples(num_samples):
     try:
       get_base_delta(num_samples, target_delta)
