@@ -67,7 +67,7 @@ class StreamingMatrix(Generic[State]):
   to `A` having a lower-triangular matrix representation in the standard basis.
 
   In general, `A` and `x` may both be infinite; thus we sidestep the
-  question of how many elements of `Ax` one wishes to compute by assuming the
+  question of how many elements of `A x` one wishes to compute by assuming the
   user provides a range.
 
   Attributes:
@@ -90,7 +90,7 @@ class StreamingMatrix(Generic[State]):
 
     This class method expects the `init_multiply_fn` and `multiply_next_fn` to
     be defined w.r.t. a single `jax.Array` input.  These implementations will
-    be "lifted" to operate on pytrees of `jax.Array`s.
+    be "lifted" to operate on pytrees of arrays.
 
     Args:
       init_multiply_fn: a function that returns the initial state given the
@@ -99,7 +99,7 @@ class StreamingMatrix(Generic[State]):
         (next_input, current_state).
 
     Returns:
-      A StreamingMatrix object that operates over PyTrees of `jax.Array`s.
+      A StreamingMatrix object that operates over PyTrees of `jax.Array` objects.
     """
 
     def tree_unzip(tree, treedef):
@@ -187,14 +187,14 @@ def scale_rows_and_columns(
   """Returns a new `StreamingMatrix` with scaled rows and/or cols.
 
   Assumes row_scale and col_scale can be indexed into for as many outputs
-  are generated from matrix. If `jax.Array`s are used, note
+  are generated from matrix. If `jax.Array` objects are used, note
   row_scale[i] for i > len(row_scale) will return row_scale[-1].
 
   Args:
     matrix: The matrix to wrap.
     row_scale: Multipliers to apply to the rows of `matrix`, equivalent to
       jnp.diag(row_scale) @ matrix.
-    col_scale: Multipliers to apply to the columns of `matrix, equivalent to
+    col_scale: Multipliers to apply to the columns of `matrix`, equivalent to
       matrix @ jnp.diag(col_scale).
 
   Returns:

@@ -246,8 +246,8 @@ def optimize(
     equal_norm = True.
 
   * Multi-participation with amplification via subsampled fixed-epoch order:
-    [Choquette-Choo et al., 2022](https://arxiv.org/abs/2211.06530). This can
-    be accomplished by setting epochs=1, bands<separation, and equal_norm=True.
+    [Choquette-Choo et al., 2022](https://arxiv.org/abs/2211.06530).  This can be
+    accomplished by setting epochs = 1, bands < separation, and equal_norm = True.
 
   Args:
     n: the number of iterations the strategy should encode.

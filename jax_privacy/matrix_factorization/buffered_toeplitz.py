@@ -142,7 +142,7 @@ class StreamingMatrixBuilder:
   def build_inverse(
       self,
   ) -> streaming_matrix.StreamingMatrix:
-    """Returns a `StreamingMatrix representing C^{-1}.
+    """Returns a `StreamingMatrix` representing C^{-1}.
 
     This implements Alg 3 of https://arxiv.org/pdf/2408.08868
     """
@@ -471,7 +471,7 @@ class BufferedToeplitz:
   def inverse_as_streaming_matrix(
       self,
   ) -> streaming_matrix.StreamingMatrix:
-    """Returns a `StreamingMatrix representing C^{-1}."""
+    """Returns a `StreamingMatrix` representing C^{-1}."""
     check_float64_dtype(self)
     return self._streaming_matrix_builder().build_inverse()
 
@@ -622,6 +622,7 @@ class LossFn:
       c_inv_coef = blt.inverse().toeplitz_coefs(n)
 
     is orders of magnitude faster (on GPUs) than
+
     ::
 
       c_inv_coef = toeplitz.inverse_coef(blt.toeplitz_coefs(n))
@@ -1521,7 +1522,7 @@ def iteration_error(inv_blt: BufferedToeplitz, i: chex.Array) -> jax.Array:
   through `i` is achieved on iteration `i`, so this equivalently computes
   the max error for `i+1` iterations.
 
-  Here "error" is the squared error introduced in the `n`th iterate (partial
+  Here "error" is the squared error introduced in the `n`-th iterate (partial
   sum) assuming unit-variance noise. This generally scales as O(n), and
   so optimization routines might normalize by an additional factor of n.
 

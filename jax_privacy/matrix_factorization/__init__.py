@@ -18,14 +18,14 @@
    :toctree: _autosummary_output
    :nosignatures:
 
-   jax_privacy.matrix_factorization.banded
-   jax_privacy.matrix_factorization.buffered_toeplitz
-   jax_privacy.matrix_factorization.checks
-   jax_privacy.matrix_factorization.dense
-   jax_privacy.matrix_factorization.optimization
-   jax_privacy.matrix_factorization.sensitivity
-   jax_privacy.matrix_factorization.streaming_matrix
-   jax_privacy.matrix_factorization.toeplitz
+   banded
+   buffered_toeplitz
+   checks
+   dense
+   optimization
+   sensitivity
+   streaming_matrix
+   toeplitz
 """
 
 from .streaming_matrix import StreamingMatrix

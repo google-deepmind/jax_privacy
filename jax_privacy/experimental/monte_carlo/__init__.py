@@ -18,6 +18,6 @@
    :toctree: _autosummary_output
    :nosignatures:
 
-   jax_privacy.experimental.monte_carlo.delta_calculation
-   jax_privacy.experimental.monte_carlo.sample_generation
+   delta_calculation
+   sample_generation
 """
