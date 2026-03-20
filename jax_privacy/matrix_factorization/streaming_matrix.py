@@ -99,7 +99,7 @@ class StreamingMatrix(Generic[State]):
         (next_input, current_state).
 
     Returns:
-      A StreamingMatrix object that operates over PyTrees of `jax.Array` objects.
+      A StreamingMatrix that operates over PyTrees of `jax.Array` objects.
     """
 
     def tree_unzip(tree, treedef):
