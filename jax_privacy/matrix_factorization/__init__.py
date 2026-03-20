@@ -12,20 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Public API for matrix factorization.
+"""Public API for matrix factorization."""
 
-.. autosummary::
-   :toctree: _autosummary_output
-   :nosignatures:
+from jax_privacy.matrix_factorization import banded as banded
+from jax_privacy.matrix_factorization import buffered_toeplitz as buffered_toeplitz
+from jax_privacy.matrix_factorization import checks as checks
+from jax_privacy.matrix_factorization import dense as dense
+from jax_privacy.matrix_factorization import optimization as optimization
+from jax_privacy.matrix_factorization import sensitivity as sensitivity
+from jax_privacy.matrix_factorization import streaming_matrix as streaming_matrix
+from jax_privacy.matrix_factorization import toeplitz as toeplitz
+from jax_privacy.matrix_factorization.streaming_matrix import StreamingMatrix
 
-   banded
-   buffered_toeplitz
-   checks
-   dense
-   optimization
-   sensitivity
-   streaming_matrix
-   toeplitz
-"""
-
-from .streaming_matrix import StreamingMatrix
+__all__ = [
+    'banded',
+    'buffered_toeplitz',
+    'checks',
+    'dense',
+    'optimization',
+    'sensitivity',
+    'streaming_matrix',
+    'toeplitz',
+    'StreamingMatrix',
+]

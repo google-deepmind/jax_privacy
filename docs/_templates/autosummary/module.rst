@@ -24,6 +24,7 @@
 
 .. autosummary::
    :toctree:
+   :template: autosummary/module.rst
 
 {% for item in modules %}
    {{ item }}
@@ -63,6 +64,7 @@
 
 .. autosummary::
    :toctree:
+   :template: autosummary/class.rst
 
 {% for item in classes %}
    {{ item }}
