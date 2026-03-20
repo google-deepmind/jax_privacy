@@ -232,21 +232,22 @@ def optimize(
   Currently only MSE (mean error) is supported.
 
   This function can be used to optimize matrices under
-  * Single-participation:
-  [Denisov et al., 2022](https://arxiv.org/abs/2202.08312).  This can be
-  accomplished by running with default arguments.
 
-  * Multi-participation with fixed-epoch order
-  [Choquette-Choo et al., 2022](https://arxiv.org/abs/2211.06530).
-  This can be accomplished by setting epochs=k.
+  * Single-participation:
+    [Denisov et al., 2022](https://arxiv.org/abs/2202.08312).  This can be
+    accomplished by running with default arguments.
+
+  * Multi-participation with fixed-epoch order:
+    [Choquette-Choo et al., 2022](https://arxiv.org/abs/2211.06530).
+    This can be accomplished by setting epochs=k.
 
   * Multi-participation with min-separation (useful for federated training
-  scenarios).  This can be accomplished by setting bands = min_sep and
-  equal_norm = True.
+    scenarios).  This can be accomplished by setting bands = min_sep and
+    equal_norm = True.
 
-  * Multi-participation with amplification via subsampled fixed-epoch order
-  [Choquette-Choo et al., 2022](https://arxiv.org/abs/2211.06530).  This can be
-  accomplished by setting epochs = 1, bands < separation, and equal_norm = True.
+  * Multi-participation with amplification via subsampled fixed-epoch order:
+    [Choquette-Choo et al., 2022](https://arxiv.org/abs/2211.06530).  This can be
+    accomplished by setting epochs = 1, bands < separation, and equal_norm = True.
 
   Args:
     n: the number of iterations the strategy should encode.

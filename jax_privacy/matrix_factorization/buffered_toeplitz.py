@@ -169,13 +169,13 @@ class BufferedToeplitz:
 
   If buf_decay = [d1, d2] and output_scale = [s1, s2], for n = 5
   this class represents
-  ```
-  1   0  0  0  0             t0 = 1
-  t1  1  0  0  0             t1 = s1       + s2
-  t2 t1  1  0  0    where    t2 = s1*d1**1 + s2*d2**1
-  t3 t2 t1  1  0             t3 = s1*d1**2 + s2*d2**2
-  t4 t3 t2 t1  1             t4 = s1*d1**3 + s2*d2**3
-  ```
+  ::
+
+    1   0  0  0  0             t0 = 1
+    t1  1  0  0  0             t1 = s1       + s2
+    t2 t1  1  0  0    where    t2 = s1*d1**1 + s2*d2**1
+    t3 t2 t1  1  0             t3 = s1*d1**2 + s2*d2**2
+    t4 t3 t2 t1  1             t4 = s1*d1**3 + s2*d2**3
 
   These Toeplitz parameters are returned by `toeplitz_coefs(n=5)`.
   """
@@ -617,13 +617,14 @@ class LossFn:
     `toeplitz.py`, as described in https://arxiv.org/abs/2408.08868. This is
     still significantly faster than computing the error directly from the
     Toeplitz coefficients of C, because
-    ```
-    c_inv_coef = blt.inverse().toeplitz_coefs(n)
-    ```
+    ::
+
+      c_inv_coef = blt.inverse().toeplitz_coefs(n)
+
     is orders of magnitude faster (on GPUs) than
-    ```
-    c_inv_coef = toeplitz.inverse_coef(blt.toeplitz_coefs(n))
-    ```
+    ::
+
+      c_inv_coef = toeplitz.inverse_coef(blt.toeplitz_coefs(n))
 
     Args:
       n: The number of iterations the mechanism is optimized for.
@@ -1182,7 +1183,7 @@ def geometric_sum(
 
   Args:
     a: Scale factor (or vector of scale factors).
-    r: ratio between successive terms, requires |r| < 1
+    r: ratio between successive terms, requires :math:`|r| < 1`.
     num: How many terms to add, or jnp.inf for the limit.
 
   Returns:

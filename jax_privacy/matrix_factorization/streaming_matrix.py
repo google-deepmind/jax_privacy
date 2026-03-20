@@ -149,13 +149,13 @@ class StreamingMatrix(Generic[State]):
     scan history in memory during backpropagation.  The number of checkpoints
     determines the computation / memory tradeoff.
 
-    ```
-    scan_fn = functools.partial(
-      equinox.internal.scan,
-      kind='checkpointed',
-      checkpoints=8,
-    )
-    ```
+    ::
+
+      scan_fn = functools.partial(
+        equinox.internal.scan,
+        kind='checkpointed',
+        checkpoints=8,
+      )
 
     Args:
       n: The number of rows to compute squared-norms of.

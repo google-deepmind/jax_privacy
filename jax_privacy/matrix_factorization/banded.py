@@ -45,19 +45,19 @@ class ColumnNormalizedBanded:
 
   Below we show how params relates to the matrix (before column normalization):
 
-  ```
-  params = [a b c]
-           [d e f]
-           [g h i]
-           [j k -]
-           [m - -]
+  ::
 
-  C = [a        ]
-      [b d      ]
-      [c e g    ]
-      [  f h j  ]
-      [    i k m]
-  ```
+    params = [a b c]
+             [d e f]
+             [g h i]
+             [j k -]
+             [m - -]
+
+    C = [a        ]
+        [b d      ]
+        [c e g    ]
+        [  f h j  ]
+        [    i k m]
   """
 
   params: jnp.ndarray

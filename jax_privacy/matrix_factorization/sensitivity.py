@@ -85,7 +85,7 @@ def max_participation_for_linear_fn(
   Arguments:
     x: A vector of values to optimize over.
     min_sep: Minimum separation between selected indices, e.g., if i and j are
-      selected we must have |i - j| >= min_sep, so e.g. min_sep=1 means adjacent
+      selected we must have :math:`|i - j| \ge` min_sep, so e.g. min_sep=1 means adjacent
       indices can be selected.
     max_participations: Optional, the maximum number of participations. If None,
       then max_participations is determined from len(x) and min_sep.
@@ -211,7 +211,7 @@ def get_sensitivity_banded_for_X(
   Note: The C from which x is derived being lower-triangular with at most
   min_sep non-zero bands including the main diagonal is a sufficient but not
   necessary condition for this calculation to hold. All that is necessary is
-  that for two columns i and j with |i - j| > min_sep are orthogonal,
+  that for two columns i and j with :math:`|i - j| >` min_sep are orthogonal,
   np.dot(h[:, i], h[:, j]) == 0.
 
   Args:

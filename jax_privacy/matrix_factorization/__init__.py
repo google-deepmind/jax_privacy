@@ -25,7 +25,6 @@
    jax_privacy.matrix_factorization.optimization
    jax_privacy.matrix_factorization.sensitivity
    jax_privacy.matrix_factorization.streaming_matrix
-   jax_privacy.matrix_factorization.test_utils
    jax_privacy.matrix_factorization.toeplitz
 """
 
