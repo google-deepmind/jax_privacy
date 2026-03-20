@@ -25,7 +25,7 @@ def _kl(q: float, p: float) -> float:
 
 
 def _hoeffding_bound(num_samples: int, tau: float, delta: float) -> float:
-  """Upper bound on probability that average of num_samples samples of variable with mean > tau * delta is <= delta, where tau >= 1."""
+  """Bound on prob that sample mean <= delta if true mean > tau * delta."""
   # Fact 4.2 of https://arxiv.org/pdf/2412.16802.
   assert tau >= 1
   return np.exp(-num_samples * _kl(delta, tau * delta))
@@ -99,7 +99,6 @@ def minimum_samples_to_calibrate(base_delta: float, target_delta: float) -> int:
   # There are some stability issues in going back-and-forth between base_delta
   # and target_delta, so to be conservative we enforce both that we have a valid
   # base_delta and that we achieve the target_delta.
-  # TODO: Investigate using log-space to improve stability.
   def _enough_samples(num_samples):
     try:
       get_base_delta(num_samples, target_delta)
@@ -219,7 +218,7 @@ def perform_calibration_from_samples(
     negative_samples: Sequence[Sequence[float]] | None = None,
     negative_counts: Sequence[Sequence[float]] | None = None,
 ) -> tuple[bool, int | float]:
-  """Perform calibration to find the highest-utility hyperparameter satisfying the target DP guarantee.
+  """Perform calibration to find highest-utility parameter for DP target.
 
   This is Algorithm 5 in https://arxiv.org/pdf/2602.09338.
 

@@ -198,9 +198,9 @@ def truncated_dpsgd_event(
   information about this mechanism:
 
   * [Scalable DP-SGD: Shuffling vs. Poisson
-  Subsampling](https://arxiv.org/abs/2411.04205)
+    Subsampling](https://arxiv.org/abs/2411.04205)
   * [Tighter Privacy Analysis for Truncated Poisson
-  Sampling](https://arxiv.org/abs/2508.15089)
+    Sampling](https://arxiv.org/abs/2508.15089)
 
   Args:
     noise_multiplier: The noise multiplier of the mechanism.
@@ -236,7 +236,7 @@ def amplified_bandmf_event(
   will be formed by sampling within each group. See this paper for more details:
 
   * [(Amplified) Banded Matrix Factorization: A unified approach to private
-  training](https://arxiv.org/abs/2306.08153) for more details.
+    training](https://arxiv.org/abs/2306.08153) for more details.
 
   Args:
     noise_multiplier: The noise multiplier to use, assuming the strategy matrix
@@ -246,8 +246,8 @@ def amplified_bandmf_event(
     sampling_prob: The Poisson sampling probability of the mechanism, i.e., the
       probability an example will be included in each batch. Note that because
       the examples are partitioned into `num_bands` groups, the expected batch
-      size is actually `dataset_size * sampling_prob / num_bands` (i.e.,
-      a factor of `num_bands` smaller than DP-SGD).
+      size is actually `dataset_size * sampling_prob / num_bands` (i.e., a
+      factor of `num_bands` smaller than DP-SGD).
 
   Returns:
     A DpEvent object.

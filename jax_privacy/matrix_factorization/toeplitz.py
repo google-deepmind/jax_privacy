@@ -141,8 +141,8 @@ def optimal_max_error_strategy_coefs(n: int) -> jax.Array:
   https://arxiv.org/pdf/2202.11205),
   and proved to be optimal for max error under single participations by
   Dvijotham, McMahan, Pillutla, Steinke, and Thakurta in
-   in "Efficient and Near-Optimal Noise Generation for Streaming Differential
-   Privacy" (https://arxiv.org/abs/2404.16706).
+  "Efficient and Near-Optimal Noise Generation for Streaming Differential
+  Privacy" (https://arxiv.org/abs/2404.16706).
 
   Args:
     n: The number of coefficients to return.
