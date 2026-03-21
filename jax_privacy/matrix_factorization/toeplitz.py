@@ -23,7 +23,7 @@ doing the calculations on the materialized `n**2` matrices.
 import concurrent
 import dataclasses
 import functools
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 import dp_accounting
 import jax
 import jax.numpy as jnp
@@ -386,6 +386,12 @@ def per_query_error(
 ) -> jax.Array:
   """Expected per-query squared error for a (banded) Toeplitz mechanism.
 
+  This function returns the squared error on a per-iteration basis.  To compute
+  the mean-squared error or max squared error, use jnp.mean or jnp.max on the
+  output of this function. Note: for toeplitz workloads / strategies, the max
+  squared error is equal to the last iterate squared error, and might be more
+  efficient to compute under jax transformations.
+
   Exactly one of `strategy_coef` and `noising_coef` should be provided.
 
   Args:
@@ -428,101 +434,11 @@ def per_query_error(
   return jnp.cumsum(B_coef**2)
 
 
-def max_error(
-    *,
-    strategy_coef: jax.Array | None = None,
-    noising_coef: jax.Array | None = None,
-    n: int | None = None,
-    workload_coef: jax.Array | None = None,
-    skip_checks: bool = False,
-) -> jax.Array:
-  """Max-over-iterations squared error for a (banded) Toeplitz mechanism.
-
-  Exactly one of `strategy_coef` and `noising_coef` should be provided.
-
-  Args:
-    strategy_coef: Toeplitz coefficients of the strategy matrix.
-    noising_coef: Toeplitz coefficients of the noising matrix.
-    n: The size of the implied matrices (defaults to the length of the Toeplitz
-      coefficient array).
-    workload_coef: Toeplitz coefficients of the workload matrix. Defaults to the
-      vector of 1s, corresponding to the prefix matrix.
-    skip_checks: If True, don't perform input verification. It may be necessary
-      to set skip_checks=True when this function is jitted.
-
-  Returns:
-    The expected max-over-iterations squared error.
-  """
-  # It is a special property of Toeplitz matrices that the max error always
-  # occurs on the last iteration. Thus, for max_error materializing the full
-  # per_query_error is not necessary. However, benchmarking indicates
-  # that this is not a significant performance hit. In particular,
-  # when computing max_error given noising_coefs (and so not including the
-  # expensive inverse calculation), with n=100_000 on CPU
-  # we see this is about 7% slower, and on GPUs there is no performance
-  # penalty (possibly due to better compiler optimizations?).
-  return per_query_error(
-      strategy_coef=strategy_coef,
-      noising_coef=noising_coef,
-      n=n,
-      workload_coef=workload_coef,
-      skip_checks=skip_checks,
-  )[-1]
-
-
-def mean_error(
-    *,
-    strategy_coef: jax.Array | None = None,
-    noising_coef: jax.Array | None = None,
-    n: int | None = None,
-    workload_coef: jax.Array | None = None,
-    skip_checks: bool = False,
-) -> jax.Array:
-  """Mean-over-iterations squared error for a (banded) Toeplitz mechanism.
-
-  Exactly one of `strategy_coef` and `noising_coef` should be provided.
-
-  Args:
-    strategy_coef: Toeplitz coefficients of the strategy matrix.
-    noising_coef: Toeplitz coefficients of the noising matrix.
-    n: The size of the implied matrices (defaults to the length of the Toeplitz
-      coefficient array).
-    workload_coef: Toeplitz coefficients of the workload matrix. Defaults to the
-      vector of 1s, corresponding to the prefix matrix.
-    skip_checks: If True, don't perform input verification. It may be necessary
-      to set skip_checks=True when this function is jitted.
-
-  Returns:
-    The expected mean-over-iterations squared error.
-  """
-  return jnp.mean(
-      per_query_error(
-          strategy_coef=strategy_coef,
-          noising_coef=noising_coef,
-          n=n,
-          workload_coef=workload_coef,
-          skip_checks=skip_checks,
-      )
-  )
-
-
-class ErrorOrLossFn(Protocol):
-  """Protocol for error functions used in `loss()` below."""
-
-  def __call__(
-      self,
-      *,
-      strategy_coef: jax.Array,
-      n: int | None = None,
-  ) -> jax.Array:
-    ...
-
-
 @functools.partial(jax.jit, static_argnums=[1, 2])
 def loss(
     strategy_coef: jax.Array,
     n: int | None = None,
-    error_fn: ErrorOrLossFn = mean_error,
+    reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
 ) -> jax.Array:
   """Error of C on prefix workload under single participation.
 
@@ -537,21 +453,22 @@ def loss(
       only the first n coefficients are used.
     n: Optional, the size of the matrix C (see `coef` above). If None, the size
       of the matrix is equal to the number of coefficients.
-    error_fn: The objective function to use (e.g., mean_error or max_error).
+    reduction_fn: A function that converts per query squared errors to a scalar.
+      Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
+      squared error (which is equivalent toor lambda v: v[-1] in this case).
 
   Returns:
     The total squared error times sensitivity of the toeplitz C on the
     prefix-sum workload under single participation.
   """
+  # Special property of Toeplitz matrices: max error occurs on last iterate.
+  if reduction_fn is jnp.max:
+    reduction_fn = lambda v: v[-1]
   # This is the maximum column norm of C, i.e., single-epoch sensitivity.
   strategy_coef, n = _reconcile(strategy_coef, n)
-  error = error_fn(strategy_coef=strategy_coef, n=n)
+  error = reduction_fn(per_query_error(strategy_coef=strategy_coef, n=n))
   sens_squared = sensitivity_squared(strategy_coef, n)
   return error * sens_squared
-
-
-mean_loss = functools.partial(loss, error_fn=mean_error)
-max_loss = functools.partial(loss, error_fn=max_error)
 
 
 def optimize_banded_toeplitz(
@@ -559,7 +476,7 @@ def optimize_banded_toeplitz(
     bands: int,
     strategy_coef: jax.Array | None = None,
     max_optimizer_steps: int = 250,
-    loss_fn: ErrorOrLossFn = mean_loss,
+    reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
 ) -> jax.Array:
   """Optimize over the space of banded Toeplitz strategies on a Prefix workload.
 
@@ -581,14 +498,16 @@ def optimize_banded_toeplitz(
     bands: The number of bands in the Toeplitz matrix.
     strategy_coef: Optional toeplitz coefficients to initialize optimization.
     max_optimizer_steps: The maximum number of LBFGS iterations.
-    loss_fn: The loss function to use (e.g., mean_loss or max_loss). Should
-      consume `coefs` with len(coefs) == bands and `n` as arguments.
+    reduction_fn: A function that converts per query squared errors to a scalar.
+      Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
+      squared error, or lambda v: v[-1] to optimize last iterate squared error.
+      Defaults to jnp.mean.
 
   Returns:
     The coefficeints of the optimal banded Toeplitz strategy, guaranteed to
     have L2 norm 1.
   """
-  loss_fn = functools.partial(loss_fn, n=n)
+  loss_fn = functools.partial(loss, n=n, reduction_fn=reduction_fn)
 
   if strategy_coef is None:
     strategy_coef = optimal_max_error_strategy_coefs(bands)
@@ -625,7 +544,7 @@ class _AmplifiedBandMFHelper:
   epsilon: float
   delta: float
 
-  loss_fn: ErrorOrLossFn = max_loss
+  reduction_fn: Callable[[jax.Array], jax.Array] = jnp.max
   make_fresh_accountant: Callable[[], dp_accounting.PrivacyAccountant] = (
       dp_accounting.rdp.RdpAccountant
   )
@@ -690,7 +609,9 @@ class _AmplifiedBandMFHelper:
 
   def amplified_bandmf_loss(self, coef: jax.Array):
     """The loss in the estimate of the *average* prefix sum."""
-    error_times_sens = jnp.sqrt(self.loss_fn(strategy_coef=coef, n=self.n))
+    error_times_sens = jnp.sqrt(
+        loss(strategy_coef=coef, n=self.n, reduction_fn=self.reduction_fn)
+    )
     # Note: loss = error * single_participation_sensitivity
     # We would normally take
     #  stddev = total_nm * single_participation_sensitivity
@@ -737,7 +658,7 @@ class _AmplifiedBandMFHelper:
 
     def run_task(b):
       coef = optimize_banded_toeplitz(
-          n=self.n, bands=b, loss_fn=self.loss_fn, **optimizer_kwargs
+          n=self.n, bands=b, reduction_fn=self.reduction_fn, **optimizer_kwargs
       )
       loss_value = self.amplified_bandmf_loss(coef)
       return {'bands': b, 'coef': coef, 'loss': loss_value}
@@ -763,7 +684,7 @@ def optimize_coefs_for_amplifications(
     epsilon: float,
     delta: float,
     max_optimizer_steps: int = 250,
-    loss_fn: ErrorOrLossFn = mean_loss,
+    reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
 ) -> tuple[jax.Array, float]:
   """Select num_bands (and coefs) to minimize loss subject to a privacy target.
 
@@ -793,8 +714,9 @@ def optimize_coefs_for_amplifications(
     delta: The privacy target is (epsilon, delta)-DP.
     max_optimizer_steps: The maximum number of LBFGS iterations, passed to
       `optimize_banded_toeplitz`.
-    loss_fn: The loss function to use (e.g., mean_loss or max_loss), passed to
-      `optimize_banded_toeplitz`.
+    reduction_fn: A function that converts per query squared errors to a scalar.
+      Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
+      squared error, or lambda v: v[-1] to optimize last iterate squared error.
 
   Returns:
     A tuple `(coefs, stddev)` where:
@@ -807,7 +729,7 @@ def optimize_coefs_for_amplifications(
         guarantee).
   """
   helper = _AmplifiedBandMFHelper(
-      n, dataset_size, expected_batch_size, epsilon, delta, loss_fn
+      n, dataset_size, expected_batch_size, epsilon, delta, reduction_fn
   )
   coef = helper.optimize_bands(max_optimizer_steps=max_optimizer_steps)['coef']
   stddev = helper.required_stddev(coef)

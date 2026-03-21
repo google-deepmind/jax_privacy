@@ -349,64 +349,7 @@ def _per_query_error(
   return dense.per_query_error(strategy_matrix=C, workload_matrix=A)
 
 
-def _mean_error(coef: jnp.ndarray, n: int | None) -> jnp.ndarray:
-  coef, n = toeplitz._reconcile(coef, n)
-  C = toeplitz.materialize_lower_triangular(coef, n=n)
-  return dense.mean_error(strategy_matrix=C)
-
-
-def _mean_error_for_inv(c_inv_coef: jnp.ndarray) -> jnp.ndarray:
-  c_inv_coef, n = toeplitz._reconcile(c_inv_coef, None)
-  C_inv = toeplitz.materialize_lower_triangular(c_inv_coef, n=n)
-  return dense.mean_error(noising_matrix=C_inv)
-
-
-def _max_error(coef: jnp.ndarray, n: int | None) -> jnp.ndarray:
-  coef, n = toeplitz._reconcile(coef, n)
-  C = toeplitz.materialize_lower_triangular(coef, n=n)
-  return dense.max_error(strategy_matrix=C)
-
-
-def _max_error_for_inv(c_inv_coef: jnp.ndarray) -> jnp.ndarray:
-  c_inv_coef, n = toeplitz._reconcile(c_inv_coef, None)
-  C_inv = toeplitz.materialize_lower_triangular(c_inv_coef, n=n)
-  return dense.max_error(noising_matrix=C_inv)
-
-
 class ToeplitzErrorTest(parameterized.TestCase):
-
-  @hypothesis.given(n=st.integers(1, 14))
-  def test_mean_error_identity(self, n):
-    expected = _mean_error(coef=[1], n=n)
-    # We can also compute this directly as n(n+1) / 2 / n
-    np.testing.assert_allclose(expected, (n + 1) / 2)
-    # Test both implicit and explicit coefs
-    coef = jnp.zeros(n).at[0].set(1.0)
-    np.testing.assert_allclose(
-        toeplitz.mean_error(strategy_coef=coef), expected
-    )
-    np.testing.assert_allclose(
-        toeplitz.mean_error(strategy_coef=[1], n=n), expected
-    )
-
-    # The inverse coefficients are the same for the identity matrix:
-    np.testing.assert_allclose(toeplitz.mean_error(noising_coef=coef), expected)
-
-  @hypothesis.given(n=st.integers(1, 14))
-  def test_max_error_identity(self, n):
-    expected = _max_error([1], n=n)
-    # We can also compute this directly as n
-    np.testing.assert_allclose(expected, n)
-
-    # Test both implicit and explicit coefs
-    coef = jnp.zeros(n).at[0].set(1.0)
-    np.testing.assert_allclose(toeplitz.max_error(strategy_coef=coef), expected)
-    np.testing.assert_allclose(
-        toeplitz.max_error(strategy_coef=[1], n=n), expected
-    )
-
-    # The inverse coefficients are the same for the identity matrix:
-    np.testing.assert_allclose(toeplitz.max_error(noising_coef=coef), expected)
 
   @hypothesis.given(
       name_coef_n_tuple=st.sampled_from(NAMED_C_MATRIX_PARAMS),
@@ -463,33 +406,33 @@ class ToeplitzErrorTest(parameterized.TestCase):
         err_msg='Failure computing error for noising_coef',
     )
 
-  @parameterized.named_parameters(NAMED_C_MATRIX_PARAMS)
-  def test_mean_error(self, coef, n):
-    expected = _mean_error(coef, n)
-    np.testing.assert_allclose(
-        toeplitz.mean_error(strategy_coef=coef, n=n), expected
-    )
+  @hypothesis.given(
+      name_coef_n_tuple=st.sampled_from(NAMED_C_MATRIX_PARAMS),
+      workload=st.sampled_from(
+          ['default', 'prefix_sum', 'eye', 'banded', 'extra_entries']
+      ),
+  )
+  @hypothesis.settings(max_examples=test_utils.scale_max_examples(10))
+  def test_max_error_is_last_iterate(self, name_coef_n_tuple, workload):
+    _, coef, n = name_coef_n_tuple
+    _, true_n = toeplitz._reconcile(coef, n)
+    if workload == 'default':
+      workload_coef = None
+    elif workload == 'prefix_sum':
+      workload_coef = jnp.ones(true_n)
+    elif workload == 'eye':
+      workload_coef = jnp.ones(1)  # Rest implicitly 0
+    elif workload == 'banded':
+      workload_coef = jnp.array([1, 0.9, 0.5, 0.1])
+    elif workload == 'extra_entries':
+      workload_coef = jnp.linspace(0.99, 0.1, num=true_n + 5)
+    else:
+      raise ValueError(f'Unknown workload: {workload}')
 
-  @parameterized.named_parameters(NAMED_C_MATRIX_PARAMS)
-  def test_max_error(self, coef, n):
-    expected = _max_error(coef, n)
-    np.testing.assert_allclose(
-        toeplitz.max_error(strategy_coef=coef, n=n), expected
+    err = toeplitz.per_query_error(
+        strategy_coef=jnp.array(coef), n=n, workload_coef=workload_coef
     )
-
-  @parameterized.named_parameters(NAMED_C_INV_MATRIX_PARAMS)
-  def test_mean_error_for_inv(self, c_inv_coef):
-    expected = _mean_error_for_inv(c_inv_coef)
-    np.testing.assert_allclose(
-        toeplitz.mean_error(noising_coef=c_inv_coef), expected
-    )
-
-  @parameterized.named_parameters(NAMED_C_INV_MATRIX_PARAMS)
-  def test_max_error_for_inv(self, c_inv_coef):
-    expected = _max_error_for_inv(c_inv_coef)
-    np.testing.assert_allclose(
-        toeplitz.max_error(noising_coef=c_inv_coef), expected
-    )
+    np.testing.assert_allclose(jnp.max(err), err[-1])
 
   @hypothesis.settings(deadline=None, max_examples=10)
   @hypothesis.given(
@@ -497,13 +440,17 @@ class ToeplitzErrorTest(parameterized.TestCase):
   )
   def test_mean_loss(self, n):
     coef = jnp.array([1.0, 0.4, 0.3, 0.1])
-    loss = toeplitz.mean_loss(coef, n)
+    loss = toeplitz.loss(strategy_coef=coef, n=n)
 
-    expected = _sensitivity_squared(coef, n) * _mean_error(coef, n)
+    expected = _sensitivity_squared(coef, n) * jnp.mean(
+        _per_query_error(coef, n)
+    )
     np.testing.assert_allclose(loss, expected)
 
     # Confirm loss is scale invariant
-    np.testing.assert_allclose(loss, toeplitz.mean_loss(2.3 * coef, n))
+    np.testing.assert_allclose(
+        loss, toeplitz.loss(strategy_coef=2.3 * coef, n=n)
+    )
 
 
 class ToeplitzOptimizationTest(parameterized.TestCase):
@@ -513,7 +460,8 @@ class ToeplitzOptimizationTest(parameterized.TestCase):
     coef1 = toeplitz.optimize_banded_toeplitz(16, b, max_optimizer_steps=25)
     coef2 = toeplitz.optimize_banded_toeplitz(16, b + 1, max_optimizer_steps=25)
     self.assertLessEqual(
-        toeplitz.mean_loss(coef2, 16), toeplitz.mean_loss(coef1, 16)
+        toeplitz.loss(strategy_coef=coef2, n=16),
+        toeplitz.loss(strategy_coef=coef1, n=16),
     )
 
 

@@ -275,12 +275,6 @@ def per_query_error(
   return B.row_norms_squared(C.n, scan_fn=scan_fn)
 
 
-# TODO: b/329444015 - either delete or document these helper functions
-mean_error = lambda *args, **kwargs: jnp.mean(per_query_error(*args, **kwargs))
-last_error = lambda *args, **kwargs: per_query_error(*args, **kwargs)[-1]
-max_error = lambda *args, **kwargs: jnp.max(per_query_error(*args, **kwargs))
-
-
 # TODO: b/329444015 - rethink how the objective should be specified
 def optimize(
     n: int,

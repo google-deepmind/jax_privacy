@@ -36,6 +36,7 @@ import jax.numpy as jnp
 from jax_privacy.matrix_factorization import banded
 from jax_privacy.matrix_factorization import buffered_toeplitz
 from jax_privacy.matrix_factorization import dense
+from jax_privacy.matrix_factorization import optimization
 from jax_privacy.matrix_factorization import streaming_matrix
 from jax_privacy.matrix_factorization import toeplitz
 
@@ -90,33 +91,34 @@ def optimize_strategy(
   if objective not in ['mean', 'max']:
     raise ValueError(f'Unknown objective {objective}')
 
+  reduction_fn = jnp.mean if objective == 'mean' else jnp.max
   match strategy:
     case 'banded-toeplitz':
       # https://arxiv.org/abs/2405.15913
-      loss_fn = toeplitz.mean_loss if objective == 'mean' else toeplitz.max_loss
       strategy_coef = toeplitz.optimize_banded_toeplitz(
-          n, bands=sep, max_optimizer_steps=1000, loss_fn=loss_fn
+          n, bands=sep, max_optimizer_steps=1000, reduction_fn=reduction_fn
       )
       sensitivity_squared = toeplitz.minsep_sensitivity_squared(
           strategy_coef, min_sep=sep, max_participations=participations
       )
-      loss = loss_fn(strategy_coef=strategy_coef, n=n) * sensitivity_squared
+      pqe = toeplitz.per_query_error(strategy_coef=strategy_coef, n=n)
+      loss = reduction_fn(pqe) * sensitivity_squared
 
     case 'normalized-banded-toeplitz':
       # https://arxiv.org/abs/2405.15913
-      loss_reduction_fn = jnp.mean if objective == 'mean' else jnp.max
-
-      def loss_fn(coef, n):  # pylint: disable=function-redefined
+      def loss_fn(coef):  # pylint: disable=function-redefined
         C_inv = toeplitz.inverse_as_streaming_matrix(
             coef, column_normalize_for_n=n
         )
         A = streaming_matrix.prefix_sum()
         B = A @ C_inv
-        return loss_reduction_fn(B.row_norms_squared(n))
+        return reduction_fn(B.row_norms_squared(n))
 
-      strategy_coef = toeplitz.optimize_banded_toeplitz(
-          n, bands=sep, max_optimizer_steps=1000, loss_fn=loss_fn
+      initial_strategy_coef = toeplitz.optimal_max_error_strategy_coefs(sep)
+      strategy_coef = optimization.optimize(
+          loss_fn, initial_strategy_coef, max_optimizer_steps=1000
       )
+
       # this is just equal to # participations
       sensitivity_squared = toeplitz.minsep_sensitivity_squared(
           # Strategy is normalized in toeplitz.inverse_as_streaming_matrix.
@@ -124,17 +126,17 @@ def optimize_strategy(
           min_sep=sep,
           max_participations=participations,
       )
-      loss = loss_fn(strategy_coef, n) * sensitivity_squared
+      loss = loss_fn(strategy_coef) * sensitivity_squared
 
     case 'banded-sqrt':
       # https://arxiv.org/abs/2202.11205
       # https://arxiv.org/abs/2405.13763
       strategy_coef = toeplitz.optimal_max_error_strategy_coefs(sep)
-      loss_fn = toeplitz.mean_loss if objective == 'mean' else toeplitz.max_loss
       sensitivity_squared = toeplitz.minsep_sensitivity_squared(
           strategy_coef, min_sep=sep, max_participations=participations
       )
-      loss = loss_fn(strategy_coef=strategy_coef, n=n) * sensitivity_squared
+      pqe = toeplitz.per_query_error(strategy_coef=strategy_coef, n=n)
+      loss = reduction_fn(pqe) * sensitivity_squared
 
     case 'banded':
       # https://arxiv.org/abs/2306.08153
@@ -160,7 +162,7 @@ def optimize_strategy(
       if objective == 'max':
         raise ValueError('Max Error is not supported for dense strategies.')
       C = dense.optimize(n, epochs=_PARTICIPATIONS.value, equal_norm=False)
-      loss = dense.mean_error(strategy_matrix=C)  # sensitivity = 1
+      loss = dense.per_query_error(strategy_matrix=C).mean()  # sensitivity = 1
 
     case 'blt':
       # https://arxiv.org/abs/2404.16706

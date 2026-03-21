@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Public API for matrix factorization."""
+"""Public API for matrix factorization.
+
+For a good introductory overview of the matrix factorization API and usages,
+see jax_privacy/examples/dpmf_strategy_optimization.py.
+"""
 
 from . import banded
 from . import buffered_toeplitz

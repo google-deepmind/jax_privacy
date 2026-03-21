@@ -643,12 +643,12 @@ class LossFn:
     """
 
     if error == 'mean':
-      error_fn = lambda inv_blt: toeplitz.mean_error(
-          noising_coef=inv_blt.toeplitz_coefs(n)
+      error_fn = lambda inv_blt: jnp.mean(
+          toeplitz.per_query_error(noising_coef=inv_blt.toeplitz_coefs(n))
       )
     elif error == 'max':
-      error_fn = lambda inv_blt: toeplitz.max_error(
-          noising_coef=inv_blt.toeplitz_coefs(n)
+      error_fn = lambda inv_blt: jnp.max(
+          toeplitz.per_query_error(noising_coef=inv_blt.toeplitz_coefs(n))
       )
 
     else:
