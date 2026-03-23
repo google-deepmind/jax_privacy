@@ -38,7 +38,7 @@ from flax import nnx
 import jax
 import jax.extend.backend
 import jax.numpy as jnp
-from jax_privacy.clipping import clipped_grad
+from jax_privacy import clipped_grad
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
@@ -79,45 +79,28 @@ def create_tokenizer(text: str) -> Dict[str, int]:
     text: The input text to build the vocabulary from.
 
   Returns:
-    stoi: A dictionary mapping characters to integer indices.
+    A dictionary mapping characters to integer indices.
   """
   chars = sorted(list(set(text)))
-  stoi = {ch: i for i, ch in enumerate(chars)}
-  return stoi
+  return {ch: i for i, ch in enumerate(chars)}
 
 
-def encode(text: str, stoi: Dict[str, int]) -> np.ndarray:
-  """Encodes text using the tokenizer.
+def encode(text: str, stoi: Dict[str, int], context_length: int) -> np.ndarray:
+  """Encodes text into a 2D array of non-overlapping sequences.
 
   Args:
     text: The text to encode.
     stoi: The string-to-index mapping.
-
-  Returns:
-    A numpy array of integer indices.
-  """
-  return np.array([stoi[ch] for ch in text], dtype=np.int32)
-
-
-def get_batch(
-    data: np.ndarray, batch_size: int, context_length: int
-) -> Tuple[np.ndarray, np.ndarray]:
-  """Gets a random batch of data.
-
-  Args:
-    data: The entire dataset encoded as integers.
-    batch_size: The number of examples in the batch.
     context_length: The length of each sequence.
 
   Returns:
-    A tuple (x, y) where:
-      - x: Input sequences of shape (batch_size, context_length).
-      - y: Target sequences of shape (batch_size, context_length).
+    A 2D numpy array of shape (num_sequences, context_length).
   """
-  ix = np.random.randint(len(data) - context_length, size=(batch_size,))
-  x = np.stack([data[i : i + context_length] for i in ix])
-  y = np.stack([data[i + 1 : i + context_length + 1] for i in ix])
-  return x, y
+  data1d = np.array([stoi[ch] for ch in text], dtype=np.int32)
+  num_sequences = len(data1d) // context_length
+  return data1d[: num_sequences * context_length].reshape(
+      (num_sequences, context_length)
+  )
 
 
 class TransformerBlock(nnx.Module):
@@ -288,18 +271,20 @@ def main(argv: list[str]) -> None:
   )
   stoi = create_tokenizer(text)
   vocab_size = len(stoi)
-  data = encode(text, stoi)
-  print(f"Dataset has {len(data)} tokens, {vocab_size} vocab size.")
+  data = encode(text, stoi, CONTEXT_LENGTH)
+  print(
+      f"Dataset has {len(data)} sequences of length {CONTEXT_LENGTH},"
+      f" {vocab_size} vocab size."
+  )
 
   # Model and optimizer
-  rngs = nnx.Rngs(0)
   model = TransformerLM(
       vocab_size=vocab_size,
       embed_size=EMBED_SIZE,
       context_length=CONTEXT_LENGTH,
       num_heads=NUM_HEADS,
       num_layers=NUM_LAYERS,
-      rngs=rngs,
+      rngs=nnx.Rngs(0),
   )
   optimizer = optax.sgd(LEARNING_RATE)
 
@@ -316,13 +301,12 @@ def main(argv: list[str]) -> None:
       l2_clip_norm=CLIP_NORM,
       batch_argnums=(1, 2),  # x and y are batched
       prng_argnum=3,  # Explicitly vmap the PRNG key per batch example
-      keep_batch_dim=True,  # Return per-example gradients
       return_values=True,  # Return loss values for logging
   )
 
   # Execution Plan Configuration
-  dataset_size = len(data) - CONTEXT_LENGTH
-  config = execution_plan.BandMFExecutionPlanConfig(
+  dataset_size = len(data)
+  config = execution_plan.BandMFExecutionPlanConfig.default(
       iterations=NUM_STEPS,
       num_bands=1,
       epsilon=None,
@@ -330,17 +314,16 @@ def main(argv: list[str]) -> None:
       noise_multiplier=NOISE_MULTIPLIER,
       sampling_prob=BATCH_SIZE / dataset_size,
   )
-  plan = config.make(grad_fn)
+  plan = config.plan
   privatizer = plan.noise_addition_transform
   noise_state = privatizer.init(params)
 
-  @jax.jit
+  @jax.jit(donate_argnums=(0, 1, 4))
   def train_step(
       params: nnx.State,
       opt_state: optax.OptState,
       batch: Tuple[jax.Array, jax.Array],
       prng_key: jax.Array,
-      *,
       noise_state: Any,
   ) -> Tuple[nnx.State, optax.OptState, Any, jax.Array]:
     """Performs a single training step with DP-SGD.
@@ -357,21 +340,31 @@ def main(argv: list[str]) -> None:
     """
     x, y = batch
 
-    # Compute clipped gradients and per-example loss values
-    grads, loss = grad_fn(params, x, y, prng_key)
+    # Handle zero-sized batch explicitly to avoid tracing crash in optax
+    if x.shape[0] == 0:
+      grads = jax.tree_util.tree_map(jnp.zeros_like, params)
+      mean_loss = jnp.array(0.0)
+    else:
+      # Compute clipped gradients and per-example loss values
+      grads, loss = grad_fn(params, x, y, prng_key)
+      mean_loss = loss.values.mean()
 
-    # Manually aggregate the per-example clipped gradients using sum
-    summed_grads = jax.tree_util.tree_map(lambda g: jnp.sum(g, axis=0), grads)
+    assert all(
+        g.shape == p.shape
+        for g, p in zip(
+            jax.tree_util.tree_leaves(grads), jax.tree_util.tree_leaves(params)
+        )
+    ), "Gradient shapes must match parameter shapes."
 
     # Add Privacy Noise
-    noisy_grads, noise_state = privatizer.update(summed_grads, noise_state)
+    noisy_grads, noise_state = privatizer.update(grads, noise_state)
 
     # Apply updates using Optax
     updates, opt_state = optimizer.update(noisy_grads, opt_state)
     params = optax.apply_updates(params, updates)
 
     # loss is an Aux object containing 'values'
-    return params, opt_state, noise_state, loss.values.mean()
+    return params, opt_state, noise_state, mean_loss
 
   # Training loop
   print(f"Training for {NUM_STEPS} steps...")
@@ -381,17 +374,19 @@ def main(argv: list[str]) -> None:
     if step >= NUM_STEPS:
       break
 
-    if len(batch_indices) == 0:
-      continue
-
     # Construct batch from indices
-    x = np.stack([data[i : i + CONTEXT_LENGTH] for i in batch_indices])
-    y = np.stack([data[i + 1 : i + CONTEXT_LENGTH + 1] for i in batch_indices])
+    if len(batch_indices) == 0:
+      x = np.zeros((0, CONTEXT_LENGTH), dtype=np.int32)
+      y = np.zeros((0, CONTEXT_LENGTH), dtype=np.int32)
+    else:
+      batch_seqs = data[batch_indices]
+      x = batch_seqs[:, :-1]
+      y = batch_seqs[:, 1:]
     batch = (x, y)
 
     prng_key, subkey = jax.random.split(prng_key)
     params, opt_state, noise_state, loss = train_step(
-        params, opt_state, batch, subkey, noise_state=noise_state
+        params, opt_state, batch, subkey, noise_state
     )
 
     print(f"Step {step + 1}/{NUM_STEPS}, Loss: {loss:.4f}")
