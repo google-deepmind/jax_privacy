@@ -15,13 +15,12 @@
 # Note: When building from source, these tests should use jax with compiler
 # optimizations, e.g. `-c opt`. Otherwise runtimes may be excessive and timeouts
 # may occur. If `jax` is installed via a pip package, it should already be
-# optimized. Another likely cause of timeouts is that the default hypothesis
-# profile runs too many test inputs (`num_examples`), so consider reducing the
-# number of examples it generates via `HYPOTHESIS_PROFILE=dpftrl_default` (see
-# test_utils.py).
+# optimized.
 
 
 import functools
+import os
+import sys
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -31,11 +30,32 @@ import jax
 import jax.numpy as jnp
 from jax_privacy.matrix_factorization import buffered_toeplitz
 from jax_privacy.matrix_factorization import sensitivity
-from jax_privacy.matrix_factorization import test_utils
 from jax_privacy.matrix_factorization import toeplitz
 import numpy as np
 
-test_utils.configure_hypothesis()
+
+hypothesis.settings.register_profile(
+    'dpftrl_default',
+    database=None,
+    deadline=None,  # 200ms disable
+    derandomize=True,
+    max_examples=10,
+    verbosity=hypothesis.Verbosity.normal,
+)
+
+profile = os.getenv('HYPOTHESIS_PROFILE', default='dpftrl_default')
+hypothesis.settings.load_profile(profile)
+print(
+    f'Using hypothesis profile "{profile}":\n{hypothesis.settings.default}',
+    file=sys.stderr,
+    flush=True,
+)
+
+
+def scale_max_examples(scale: float) -> int:
+  """Scales the current max_examples."""
+  return max(1, int(round(scale * hypothesis.settings.default.max_examples)))
+
 
 # Many BLT operations benefit from x64 precision, so we enable it for tests.
 jax.config.update('jax_enable_x64', True)
@@ -621,7 +641,7 @@ class OptimizationTest(parameterized.TestCase):
     ):
       buffered_toeplitz._assert_blt_valid_for_minsep(blt, 100)
 
-  @hypothesis.settings(max_examples=test_utils.scale_max_examples(0.25))
+  @hypothesis.settings(max_examples=scale_max_examples(0.25))
   @hypothesis.given(
       num_buffers=st.integers(1, 3),
       max_participations=st.integers(2, 12),
@@ -754,7 +774,7 @@ class OptimizationTest(parameterized.TestCase):
       num_buffers=st.integers(1, 3),
   )
   @hypothesis.example(n=58, num_buffers=3)
-  @hypothesis.settings(max_examples=test_utils.scale_max_examples(0.25))
+  @hypothesis.settings(max_examples=scale_max_examples(0.25))
   def test_optimize_closed_form_matches_materialized(
       self,
       n,

@@ -21,10 +21,7 @@ import hypothesis
 from hypothesis import strategies as st
 import jax
 from jax_privacy.matrix_factorization import dense
-from jax_privacy.matrix_factorization import test_utils
 import numpy as np
-
-test_utils.configure_hypothesis()
 
 
 # Disabling pylint so we can use single-letter capitals to denote matrices
@@ -121,7 +118,7 @@ class DenseTest(parameterized.TestCase):
       test_case=st.sampled_from(ERROR_TEST_CASES),
       config=st.sampled_from(['jit', 'skip_checks=True', 'skip_checks=False']),
   )
-  @hypothesis.settings(max_examples=test_utils.scale_max_examples(5))
+  @hypothesis.settings(deadline=None, derandomize=True, max_examples=50)
   def test_error(self, test_case, config):
 
     if config == 'jit':

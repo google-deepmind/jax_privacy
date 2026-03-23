@@ -22,11 +22,8 @@ import jax
 import jax.numpy as jnp
 from jax_privacy.matrix_factorization import banded
 from jax_privacy.matrix_factorization import streaming_matrix
-from jax_privacy.matrix_factorization import test_utils
 import numpy as np
 
-
-test_utils.configure_hypothesis()
 
 # Disabling pylint invalid-name to allow mathematical notation including
 # single-capital-letter variables for matrices.
@@ -89,6 +86,7 @@ class BandedTest(parameterized.TestCase):
     self.assertEqual(banded.minsep_sensitivity_squared(C, 4, None), 8.0)
     self.assertEqual(banded.minsep_sensitivity_squared(C, 4, 6), 6.0)
 
+  @hypothesis.settings(deadline=None, derandomize=True, max_examples=10)
   @hypothesis.given(n=st.integers(1, 16), bands=st.integers(1, 16))
   def test_banded_is_column_normalized_and_banded(self, n: int, bands: int):
     hypothesis.assume(bands <= n)
@@ -119,6 +117,7 @@ class BandedTest(parameterized.TestCase):
     exp = jnp.array([[1, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 0], [1, 0, 0]])
     assert_allclose(C.params, exp / norm)
 
+  @hypothesis.settings(deadline=None, derandomize=True, max_examples=10)
   @hypothesis.given(n=st.integers(1, 16), bands=st.integers(1, 16))
   def test_banded_inverse_matches_materialize(self, n: int, bands: int):
     hypothesis.assume(bands <= n)

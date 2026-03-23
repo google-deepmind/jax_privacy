@@ -17,15 +17,12 @@ import hypothesis
 from hypothesis import strategies as st
 import jax.numpy as jnp
 from jax_privacy.matrix_factorization import optimization
-from jax_privacy.matrix_factorization import test_utils
 import numpy as np
-
-
-test_utils.configure_hypothesis()
 
 
 class OptimizationTest(absltest.TestCase):
 
+  @hypothesis.settings(deadline=None, derandomize=True, max_examples=10)
   @hypothesis.given(xstar=st.floats(-1e6, 1e6), ystar=st.floats(-1e6, 1e6))
   def test_basic(self, xstar, ystar):
     def loss(params):

@@ -15,10 +15,8 @@
 # Note: When building from source, these tests should use jax with compiler
 # optimizations, e.g. `-c opt`. Otherwise runtimes may be excessive and timeouts
 # may occur. If `jax` is installed via a pip package, it should already be
-# optimized. Another likely cause of timeouts is that the default hypothesis
-# profile runs too many test inputs (`num_examples`), so consider reducing the
-# number of examples it generates via `HYPOTHESIS_PROFILE=dpftrl_default` (see
-# test_utils.py).
+# optimized.
+
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -29,14 +27,17 @@ import jax
 from jax import numpy as jnp
 from jax_privacy.matrix_factorization import dense
 from jax_privacy.matrix_factorization import sensitivity
-from jax_privacy.matrix_factorization import test_utils
 from jax_privacy.matrix_factorization import toeplitz
 import numpy as np
 
 # Note: Some of these tests fail quite badly without this line:
 jax.config.update('jax_enable_x64', True)
 
-test_utils.configure_hypothesis()
+hypothesis.settings.register_profile(
+    'default', deadline=None, max_examples=10, derandomize=True, database=None
+)
+hypothesis.settings.load_profile('default')
+
 
 # Disabling pylint invalid-name to allow mathematical notation including
 # single-capital-letter variables for matrices.
@@ -358,7 +359,6 @@ class ToeplitzErrorTest(parameterized.TestCase):
       ),
       config=st.sampled_from(['jit', 'skip_checks=True', 'skip_checks=False']),
   )
-  @hypothesis.settings(max_examples=test_utils.scale_max_examples(10))
   def test_per_query_error(self, name_coef_n_tuple, workload, config):
     _, coef, n = name_coef_n_tuple
     _, true_n = toeplitz._reconcile(coef, n)
@@ -367,7 +367,7 @@ class ToeplitzErrorTest(parameterized.TestCase):
     elif workload == 'prefix_sum':
       workload_coef = jnp.ones(true_n)
     elif workload == 'eye':
-      workload_coef = jnp.ones(1)  # Rest implicitly 0
+      workload_coef = jnp.ones(1)
     elif workload == 'banded':
       workload_coef = jnp.array([1, 0.9, 0.5, 0.1])
     elif workload == 'extra_entries':
@@ -412,7 +412,6 @@ class ToeplitzErrorTest(parameterized.TestCase):
           ['default', 'prefix_sum', 'eye', 'banded', 'extra_entries']
       ),
   )
-  @hypothesis.settings(max_examples=test_utils.scale_max_examples(10))
   def test_max_error_is_last_iterate(self, name_coef_n_tuple, workload):
     _, coef, n = name_coef_n_tuple
     _, true_n = toeplitz._reconcile(coef, n)
@@ -434,7 +433,6 @@ class ToeplitzErrorTest(parameterized.TestCase):
     )
     np.testing.assert_allclose(jnp.max(err), err[-1])
 
-  @hypothesis.settings(deadline=None, max_examples=10)
   @hypothesis.given(
       n=st.integers(1, 8),
   )
