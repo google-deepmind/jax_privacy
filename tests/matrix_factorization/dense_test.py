@@ -47,6 +47,8 @@ class ErrorTestCase:
   C: np.ndarray
   C_inv: np.ndarray
   expected_per_query_error: np.ndarray
+  expected_max_error: np.ndarray
+  expected_mean_error: np.ndarray
 
 
 def diagonal_error_test_cases():
@@ -57,12 +59,15 @@ def diagonal_error_test_cases():
     bd = np.linspace(1.5, 4.0 / n, num=n)
     C = np.diag(1 / bd)
     C_inv = np.diag(bd)
+    expected_per_query_error = bd**2
     test_cases.append(
         ErrorTestCase(
             A=A,
             C=C,
             C_inv=C_inv,
             expected_per_query_error=bd**2,
+            expected_max_error=np.max(expected_per_query_error),
+            expected_mean_error=np.mean(expected_per_query_error),
         )
     )
   return test_cases
@@ -76,6 +81,8 @@ ERROR_TEST_CASES = diagonal_error_test_cases() + [
         C_inv=np.array([[1, 0], [-0.5, 1]]),
         # B = [[1, 0], [0.5, 1]]
         expected_per_query_error=np.array([1, 1.25]),
+        expected_max_error=np.array(1.25),
+        expected_mean_error=np.array((1 + 1.25) / 2),
     ),
     # A non-square example (n=2 tree aggregation):
     ErrorTestCase(
@@ -84,6 +91,8 @@ ERROR_TEST_CASES = diagonal_error_test_cases() + [
         # "Full Honaker C_inv (also, the Moore-Penrose pseudoinverse)"
         C_inv=np.array([[2 / 3, -1 / 3, 1 / 3], [-1 / 3, 2 / 3, 1 / 3]]),
         expected_per_query_error=np.array([2 / 3, 2 / 3]),
+        expected_max_error=np.array(2 / 3),
+        expected_mean_error=np.array(2 / 3),
     ),
 ]
 
@@ -145,6 +154,8 @@ class DenseTest(parameterized.TestCase):
     )
 
     per_query_error = maybe_jit(dense.per_query_error)
+    max_error = maybe_jit(dense.max_error)
+    mean_error = maybe_jit(dense.mean_error)
 
     # Test errors for C (if C is square):
     if test_case.C.shape[0] == test_case.C.shape[1]:
@@ -153,12 +164,32 @@ class DenseTest(parameterized.TestCase):
           test_case.expected_per_query_error,
           err_msg='Failure computing per-query error for strategy_matrix',
       )
+      assert_allclose(
+          max_error(strategy_matrix=test_case.C, **kwargs),
+          test_case.expected_max_error,
+          err_msg='Failure computing max error for strategy_matrix',
+      )
+      assert_allclose(
+          mean_error(strategy_matrix=test_case.C, **kwargs),
+          test_case.expected_mean_error,
+          err_msg='Failure computing mean error for strategy_matrix',
+      )
 
     # Test errors from C^{-1}
     assert_allclose(
         per_query_error(noising_matrix=test_case.C_inv, **kwargs),
         test_case.expected_per_query_error,
         err_msg='Failure computing per_query error for noising_matrix',
+    )
+    assert_allclose(
+        max_error(noising_matrix=test_case.C_inv, **kwargs),
+        test_case.expected_max_error,
+        err_msg='Failure computing max error for noising_matrix',
+    )
+    assert_allclose(
+        mean_error(noising_matrix=test_case.C_inv, **kwargs),
+        test_case.expected_mean_error,
+        err_msg='Failure computing mean error for noising_matrix',
     )
 
   # pylint:disable=bad-whitespace
@@ -168,12 +199,10 @@ class DenseTest(parameterized.TestCase):
       ('full_batch',   16, None, False),
       ('multi_epoch',  4,  None, False),
       ('banded',       4,  4,    False),
-      ('equal_norm',   4,  None, True),
-      ('custom',       16, None, False, lambda x: x.mean()),
-  )
+      ('equal_norm',   4,  None, True))
   # fmt:on
   # pylint:enable=bad-whitespace
-  def test_optimization_worked(self, epochs, bands, equal_norm, reduce_fn=None):
+  def test_optimization_worked(self, epochs, bands, equal_norm):
     A = np.tri(16)
     callback = StoreStateCallback()
     C = dense.optimize(
@@ -184,7 +213,6 @@ class DenseTest(parameterized.TestCase):
         A=A,
         max_optimizer_steps=250,
         callback=callback,
-        reduction_fn=reduce_fn or jax.numpy.mean,
     )
     X = C.T @ C
     self.check_symmetric(X)

@@ -99,11 +99,11 @@ BLT_TUPLES = (
 
 
 def direct_max_error_for_inv(inv_blt, n):
-  return toeplitz.per_query_error(noising_coef=inv_blt.toeplitz_coefs(n)).max()
+  return toeplitz.max_error(noising_coef=inv_blt.toeplitz_coefs(n))
 
 
 def brute_force_mse_for_inv(inv_blt, n):
-  return toeplitz.per_query_error(noising_coef=inv_blt.toeplitz_coefs(n)).mean()
+  return toeplitz.mean_error(noising_coef=inv_blt.toeplitz_coefs(n))
 
 
 def brute_force_max_loss(blt, n, min_sep=1, max_participations=None):
@@ -114,7 +114,7 @@ def brute_force_max_loss(blt, n, min_sep=1, max_participations=None):
       max_participations=max_participations,
       skip_checks=False,
   )
-  error = jnp.max(toeplitz.per_query_error(strategy_coef=coef))
+  error = toeplitz.max_error(strategy_coef=coef)
   return sens_squared * error
 
 
@@ -993,9 +993,7 @@ class ClosedFormsTest(parameterized.TestCase):
 
     # Direct loss calculation:
 
-    loss2 = toeplitz.loss(
-        strategy_coef=blt.toeplitz_coefs(n), reduction_fn=jnp.max
-    )
+    loss2 = toeplitz.max_loss(strategy_coef=blt.toeplitz_coefs(n))
 
     assert_allclose(
         loss, loss2, err_msg='max_loss does not match direct calculation'
@@ -1012,8 +1010,8 @@ class ClosedFormsTest(parameterized.TestCase):
     hypothesis.assume(jnp.all(blt.output_scale > 0))
 
     grad1 = jax.grad(buffered_toeplitz.max_loss)(blt, n)
-    brute_force_loss = lambda blt, n: toeplitz.loss(
-        strategy_coef=blt.toeplitz_coefs(n), reduction_fn=jnp.max
+    brute_force_loss = lambda blt, n: toeplitz.max_loss(
+        strategy_coef=blt.toeplitz_coefs(n)
     )
     grad2 = jax.grad(brute_force_loss)(blt, n)
 

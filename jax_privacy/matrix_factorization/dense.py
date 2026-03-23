@@ -17,8 +17,6 @@
 See `sensitivity.py` for sensitivity calculations for dense strategies.
 """
 
-from collections.abc import Callable
-
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
@@ -86,6 +84,66 @@ def per_query_error(
       checks.check(A=A, B=B)
 
   return jnp.sum(B * B, axis=1)
+
+
+def max_error(
+    *,
+    strategy_matrix: jax.Array | None = None,
+    noising_matrix: jax.Array | None = None,
+    workload_matrix: jax.Array | None = None,
+    skip_checks: bool = False,
+) -> jax.Array:
+  """Max-over-iterations squared error for a general matrix mechanism.
+
+  Exactly one of `strategy_matrix` and `noising_matrix` should be provided.
+
+  Args:
+    strategy_matrix: The (square) strategy matrix C defining the mechanism.
+    noising_matrix: The (possibly non-square) noising matrix C^{-1}.
+    workload_matrix: The workload matrix. Defaults to `jnp.tri`, the prefix sum
+      workload matrix.
+    skip_checks: If True, don't perform input verification. It may be necessary
+      to set skip_checks=True when this function is jitted.
+
+  Returns:
+    The expected max-over-iterations squared error (a scalar).
+  """
+  return per_query_error(
+      strategy_matrix=strategy_matrix,
+      noising_matrix=noising_matrix,
+      workload_matrix=workload_matrix,
+      skip_checks=skip_checks,
+  ).max()
+
+
+def mean_error(
+    *,
+    strategy_matrix: jax.Array | None = None,
+    noising_matrix: jax.Array | None = None,
+    workload_matrix: jax.Array | None = None,
+    skip_checks: bool = False,
+) -> jax.Array:
+  """Mean-over-iterations squared error for a general matrix mechanism.
+
+  Exactly one of `strategy_matrix` and `noising_matrix` should be provided.
+
+  Args:
+    strategy_matrix: The (square) strategy matrix C defining the mechanism.
+    noising_matrix: The (possibly non-square) noising matrix C^{-1}.
+    workload_matrix: The workload matrix. Defaults to `jnp.tri`, the prefix sum
+      workload matrix.
+    skip_checks: If True, don't perform input verification. It may be necessary
+      to set skip_checks=True when this function is jitted.
+
+  Returns:
+    The expected mean-over-iterations squared error (a scalar).
+  """
+  return per_query_error(
+      strategy_matrix=strategy_matrix,
+      noising_matrix=noising_matrix,
+      workload_matrix=workload_matrix,
+      skip_checks=skip_checks,
+  ).mean()
 
 
 def get_orthogonal_mask(n: int, epochs: int = 1) -> jax.Array:
@@ -167,14 +225,11 @@ def optimize(
     equal_norm: bool = False,
     A: jax.Array | None = None,
     max_optimizer_steps: int = 10000,
-    reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
     callback: optimization.CallbackFnType = pg_tol_termination_fn,
 ) -> jax.Array:
-  """Optimizes a strategy matrix C for a given reduction_fn and participation.
+  """Optimizes a strategy matrix C for mean loss and a participation pattern.
 
-  Note: While the function accepts a reduction_fn keyword argument, it has been
-  tuned and tested rigorously only for mean-squared error (i.e.,
-  reduction_fn=jnp.mean).
+  Currently only MSE (mean error) is supported.
 
   This function can be used to optimize matrices under
 
@@ -204,9 +259,6 @@ def optimize(
       strategy will be column normalized either way.
     A: The workload matrix (defaults to Prefix).
     max_optimizer_steps: The maximum number of LBFGS steps to take.
-    reduction_fn: A function that converts per query squared errors to a scalar.
-      Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
-      squared error, or any other differentiable function writtten in Jax.
     callback: An optional callback function to monitor optimization progress.
       The default callback terminates the optimization early if the projected
       gradient is near-zero.
@@ -219,20 +271,8 @@ def optimize(
   if bands is not None:
     mask = mask * sensitivity.banded_symmetric_mask(n, bands)
 
-  @jax.value_and_grad
-  def loss_and_grad(X):
-    # It's better to calculate this w.r.t. X than go through per_query_error.
-    H = jsp.linalg.solve(X, A.T, assume_a='pos')
-    per_query = jnp.sum(A * H.T, axis=1)
-    return reduction_fn(per_query)
-
   def loss_and_projected_grad(X):
-    if reduction_fn is jnp.mean:
-      # Use an exact analytical formula for jnp.mean for max performance.
-      loss, dX = _mean_loss_and_gradient(X, A)
-    else:
-      loss, dX = loss_and_grad(X)
-
+    loss, dX = _mean_loss_and_gradient(X, A)
     if equal_norm:
       diag = 0
     else:

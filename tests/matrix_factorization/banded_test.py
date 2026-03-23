@@ -147,7 +147,7 @@ class BandedTest(parameterized.TestCase):
     self.maybe_skip(scan_fn)
     C0 = banded.ColumnNormalizedBanded.default(9, 1)
     A = streaming_matrix.prefix_sum()
-    self.assertEqual(banded.per_query_error(C0, A, scan_fn=scan_fn).mean(), 5.0)
+    self.assertEqual(banded.mean_error(C0, A, scan_fn=scan_fn), 5.0)
 
   @parameterized.named_parameters(
       # ('equinox', 'equinox'),  # TODO: b/377404877 - Broken at head.
@@ -161,10 +161,7 @@ class BandedTest(parameterized.TestCase):
     C = banded.optimize(
         8, bands=4, C=C0, A=A, max_optimizer_steps=10, scan_fn=scan_fn
     )
-    self.assertLess(
-        jnp.mean(banded.per_query_error(C, A)),
-        jnp.mean(banded.per_query_error(C0, A)),
-    )
+    self.assertLess(banded.mean_error(C, A), banded.mean_error(C0, A))
 
 
 if __name__ == '__main__':
