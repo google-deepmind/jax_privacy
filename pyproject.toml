@@ -55,7 +55,6 @@ test = [
     "hypothesis",
     "crc32c",
     "keras",
-    # Add the environment marker to flax here:
     "flax; sys_platform != 'win32'", 
 ]
 
