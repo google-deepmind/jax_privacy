@@ -127,7 +127,7 @@ def main(argv: list[str]) -> None:
 
   # 2. Batch Selection & Execution Plan
   # Using BandMFExecutionPlanConfig to configure privacy and strategy
-  config = execution_plan.BandMFExecutionPlanConfig(
+  config = execution_plan.BandMFExecutionPlanConfig.default(
       iterations=STEPS,
       num_bands=1,
       epsilon=EPSILON,
@@ -157,7 +157,7 @@ def main(argv: list[str]) -> None:
   )
 
   # Create Plan
-  plan = config.make(grad_fn)
+  plan = config.plan
   privatizer = plan.noise_addition_transform
   noise_state = privatizer.init(params)
 
@@ -169,7 +169,7 @@ def main(argv: list[str]) -> None:
       examples_per_user_per_batch=EXAMPLES_PER_USER,
   )
 
-  @jax.jit
+  @jax.jit(donate_argnums=(0, 1, 4))
   def train_step(params, opt_state, batch_data, batch_labels, noise_state):
     grads = grad_fn(params, batch_data, batch_labels)
 
