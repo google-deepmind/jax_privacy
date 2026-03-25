@@ -131,14 +131,12 @@ def inverse_as_streaming_matrix(
   return Cinv
 
 
-def optimal_max_error_strategy_coefs(n: int) -> jax.Array:
-  """Returns the coefs of the optimal Toeplitz strategy matrix C for max error.
+def optimal_max_error_factorization(n: int) -> tuple[jax.Array, jax.Array]:
+  """Returns the optimal strategy and noising Toeplitz coefs for max error.
 
   These coefficients were introduced by Fichtenberger, Henzinger, and Upadhyay
   in "Constant Matters: Fine-grained Error Bound on Differentially Private
-  Continual Observation"
-  (https://proceedings.mlr.press/v202/fichtenberger23a/fichtenberger23a.pdf,
-  https://arxiv.org/pdf/2202.11205),
+  Continual Observation" (https://arxiv.org/abs/2202.11205),
   and proved to be optimal for max error under single participations by
   Dvijotham, McMahan, Pillutla, Steinke, and Thakurta in
   "Efficient and Near-Optimal Noise Generation for Streaming Differential
@@ -148,28 +146,15 @@ def optimal_max_error_strategy_coefs(n: int) -> jax.Array:
     n: The number of coefficients to return.
 
   Returns:
-    The coefficients of the lower-triangular Toeplitz matrix C that
-    factorizes the prefix sum matrix A as A = C @ C.
+    A tuple containing the coefficients of the lower triangular Toeplitz
+    matrices C and C^{-1} that factorize the prefix sum matrix A as A = C @ C.
   """
   k = jnp.arange(n)
-  return jnp.cumprod(((2 * k - 1) / (2 * k)).at[0].set(1))
-
-
-def optimal_max_error_noising_coefs(n: int) -> jax.Array:
-  """Returns the coefs of the optimal Toeplitz noise matrix for max error.
-
-  Args:
-    n: The number of coefficients to return.
-
-  Returns:
-    The coefficients of the lower-triangular Toeplitz matrix C^{-1} that
-    is the inverse of the matrix returned by `optimal_max_error_strategy_coefs`.
-  """
-  # This factorization of A = B C where A is the prefix-sum matrix is symmetric,
-  # in that C = B = A C^{-1}, so C^{-1} = A^{-1} C, where A^{-1}
-  # computes differences.
-  c = optimal_max_error_strategy_coefs(n)
-  return c.at[1:n].subtract(c[:-1])
+  strategy_coef = jnp.cumprod(((2 * k - 1) / (2 * k)).at[0].set(1))
+  # This factorization of A = B C where A is the prefix-sum matrix is symmetric;
+  # C = B = A C^{-1}, so C^{-1} = A^{-1} C, where A^{-1} computes differences.
+  noising_coef = strategy_coef.at[1:n].subtract(strategy_coef[:-1])
+  return strategy_coef, noising_coef
 
 
 def materialize_lower_triangular(
@@ -277,11 +262,10 @@ def multiply(
 
 
 def inverse_coef(coef: jax.Array, n: int | None = None) -> jax.Array:
-  """Finds the inverse coefficients of a lower-triangularToeplitz matrix.
+  """Finds the inverse coefficients of a lower-triangular Toeplitz matrix.
 
   If C is a lower-triangular Toeplitz matrix, then so is C^{-1}; this function
   returns the Toeplitz coefficients of this inverse.
-
 
   Args:
     coef: The nonzero coefficients of a lower-triangular Toeplitz matrix C, that
@@ -510,7 +494,7 @@ def optimize_banded_toeplitz(
   loss_fn = functools.partial(loss, n=n, reduction_fn=reduction_fn)
 
   if strategy_coef is None:
-    strategy_coef = optimal_max_error_strategy_coefs(bands)
+    strategy_coef, _ = optimal_max_error_factorization(bands)
   if strategy_coef.shape[0] != bands:
     raise ValueError(f'{strategy_coef.shape=} != {bands=}')
 
