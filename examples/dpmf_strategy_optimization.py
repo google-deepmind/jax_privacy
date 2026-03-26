@@ -114,7 +114,7 @@ def optimize_strategy(
         B = A @ C_inv
         return reduction_fn(B.row_norms_squared(n))
 
-      initial_strategy_coef, _ = toeplitz.optimal_max_error_factorization(sep)
+      initial_strategy_coef = toeplitz.optimal_max_error_strategy_coefs(sep)
       strategy_coef = optimization.optimize(
           loss_fn, initial_strategy_coef, max_optimizer_steps=1000
       )
@@ -131,7 +131,7 @@ def optimize_strategy(
     case 'banded-sqrt':
       # https://arxiv.org/abs/2202.11205
       # https://arxiv.org/abs/2405.13763
-      strategy_coef, _ = toeplitz.optimal_max_error_factorization(sep)
+      strategy_coef = toeplitz.optimal_max_error_strategy_coefs(sep)
       sensitivity_squared = toeplitz.minsep_sensitivity_squared(
           strategy_coef, min_sep=sep, max_participations=participations
       )

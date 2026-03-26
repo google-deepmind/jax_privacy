@@ -126,7 +126,7 @@ class ToeplitzTest(parameterized.TestCase):
 
   @parameterized.named_parameters((f'{n=}', n) for n in [1, 2, 10, 100])
   def test_fhu_coefs(self, n):
-    coef, _ = toeplitz.optimal_max_error_factorization(n)
+    coef = toeplitz.optimal_max_error_strategy_coefs(n)
     C = toeplitz.materialize_lower_triangular(coef)
     np.testing.assert_allclose(
         np.tri(n),
@@ -136,8 +136,9 @@ class ToeplitzTest(parameterized.TestCase):
 
   @parameterized.named_parameters((f'{n=}', n) for n in [1, 2, 10, 100])
   def test_fhu_inv_coefs(self, n):
-    coef, inv_coef = toeplitz.optimal_max_error_factorization(n)
+    coef = toeplitz.optimal_max_error_strategy_coefs(n)
     C = toeplitz.materialize_lower_triangular(coef)
+    inv_coef = toeplitz.optimal_max_error_noising_coefs(n)
     C_inv = toeplitz.materialize_lower_triangular(inv_coef)
     np.testing.assert_allclose(
         np.eye(n),
@@ -557,7 +558,7 @@ class ToeplitzAmplificationTest(parameterized.TestCase):
     # assuming bands-min-sep participation.
     k = n // max_bands
     assert k * max_bands == n
-    coef, _ = toeplitz.optimal_max_error_factorization(max_bands)
+    coef = toeplitz.optimal_max_error_strategy_coefs(max_bands)
 
     b_min_sep_sens = jnp.sqrt(
         toeplitz.minsep_sensitivity_squared(

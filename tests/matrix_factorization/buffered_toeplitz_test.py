@@ -273,10 +273,10 @@ class BufferedToeplitzTest(parameterized.TestCase):
     blt = buffered_toeplitz.BufferedToeplitz.from_rational_approx_to_sqrt_x(
         num_buffers=num_buffers, max_buf_decay=1.0
     )
-    opt_toeplitz_coefs, _ = toeplitz.optimal_max_error_factorization(n=n)
+    opt_toeplitz_strategy_coefs = toeplitz.optimal_max_error_strategy_coefs(n=n)
     blt_coefs = blt.toeplitz_coefs(n)
     np.testing.assert_allclose(
-        blt_coefs, opt_toeplitz_coefs, rtol=rtols[num_buffers - 1]
+        blt_coefs, opt_toeplitz_strategy_coefs, rtol=rtols[num_buffers - 1]
     )
 
   @hypothesis.given(

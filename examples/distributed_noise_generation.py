@@ -136,7 +136,7 @@ def generate_noise(
   print(f'[BandMF] Per Chip Memory: {per_device_memory} GiB')
 
   iterations = 1_000
-  strategy_coefs, _ = toeplitz.optimal_max_error_factorization(bands)
+  strategy_coefs = toeplitz.optimal_max_error_strategy_coefs(bands)
   privatizer = noise_addition.matrix_factorization_privatizer(
       noising_matrix=toeplitz.inverse_as_streaming_matrix(
           strategy_coefs, column_normalize_for_n=iterations
