@@ -55,12 +55,12 @@ test = [
     "hypothesis",
     "crc32c",
     "keras",
+    "flax; sys_platform != 'win32'", 
 ]
 
 examples = [
     "dinosaur",
     "equinox",
-    # orbax pulls orbax-checkpoint → uvloop (not supported on Windows)
     "orbax; sys_platform != 'win32'",
     "scikit-learn==1.5.0",
     "grain",
@@ -68,6 +68,7 @@ examples = [
     "tensorflow",
     "tensorflow_datasets",
     "randomgen",
+    "flax; sys_platform != 'win32'",
 ]
 
 docs = [
