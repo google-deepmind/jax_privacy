@@ -172,6 +172,23 @@ def optimal_max_error_noising_coefs(n: int) -> jax.Array:
   return c.at[1:n].subtract(c[:-1])
 
 
+def sgd_workload_inverse_coef(
+    alpha: float = 1.0, beta: float = 0.0
+) -> jax.Array:
+  """Returns Toeplitz coefficients of the inverse SGD workload matrix."""
+  return jnp.array([1.0, -(alpha + beta), alpha * beta])
+
+
+def sgd_workload_coef(
+    n: int, alpha: float = 1.0, beta: float = 0.0
+) -> jax.Array:
+  """Returns Toeplitz coefficients of the SGD workload matrix."""
+  k = jnp.arange(n, dtype=jnp.result_type(alpha, beta, 1.0))
+  if alpha == beta:
+    return (k + 1) * alpha**k
+  return (alpha ** (k + 1) - beta ** (k + 1)) / (alpha - beta)
+
+
 def materialize_lower_triangular(
     coef: jax.Array, n: int | None = None
 ) -> jax.Array:
@@ -298,6 +315,35 @@ def inverse_coef(coef: jax.Array, n: int | None = None) -> jax.Array:
   return solve_banded(coef, jnp.zeros(n).at[0].set(1))
 
 
+def _square_root_coef(coef: jax.Array, n: int | None = None) -> jax.Array:
+  """Returns coefficients of a Toeplitz square root."""
+  coef, n = _reconcile(coef, n)
+  coef = pad_coefs_to_n(coef, n)
+  if coef[0] <= 0:
+    raise ValueError('Expected coef[0] to be positive.')
+  result = jnp.zeros_like(coef)
+  result = result.at[0].set(jnp.sqrt(coef[0]))
+  for k in range(1, n):
+    correction = jnp.dot(result[1:k], result[1:k][::-1])
+    result = result.at[k].set((coef[k] - correction) / (2 * result[0]))
+  return result
+
+
+def compute_banded_inverse_square_root(
+    bands: int,
+    *,
+    workload_inverse_coef: jax.Array | None = None,
+    alpha: float = 1.0,
+    beta: float = 0.0,
+) -> jax.Array:
+  """Returns BISR noising coefficients for a Toeplitz SGD workload."""
+  if bands <= 0:
+    raise ValueError(f'Expected bands > 0, found {bands}.')
+  if workload_inverse_coef is None:
+    workload_inverse_coef = sgd_workload_inverse_coef(alpha=alpha, beta=beta)
+  return _square_root_coef(workload_inverse_coef, n=bands)
+
+
 def sensitivity_squared(coef: jax.Array, n: int | None = None) -> jax.Array:
   """Sensitivity^2 under single participation."""
   coef, _ = _reconcile(coef, n)
@@ -374,6 +420,36 @@ def minsep_sensitivity_squared(
       vector[min_sep * k :] - vector[: -min_sep * k]
   )
   return vector[:n] @ vector[:n]
+
+
+def compute_banded_inverse_sensitivity(
+    noising_coef: jax.Array,
+    min_sep: int,
+    max_participations: int | None = None,
+    *,
+    n: int | None = None,
+    use_x_sensitivity_upper_bound: bool = False,
+) -> jax.Array:
+  """Returns a safe sensitivity upper bound for inverse Toeplitz factors."""
+  strategy_coef = inverse_coef(noising_coef, n=n)
+  if use_x_sensitivity_upper_bound:
+    strategy_matrix = materialize_lower_triangular(strategy_coef, n=n)
+    gram = strategy_matrix.T @ strategy_matrix
+    return jnp.array(
+        sensitivity.get_min_sep_sensitivity_upper_bound_for_X(
+            gram, min_sep=min_sep, max_participations=max_participations
+        )
+    )
+  monotone_upper_bound = jax.lax.cummax(jnp.abs(strategy_coef), reverse=True)
+  return jnp.sqrt(
+      minsep_sensitivity_squared(
+          monotone_upper_bound,
+          min_sep=min_sep,
+          max_participations=max_participations,
+          n=n,
+          skip_checks=True,
+      )
+  )
 
 
 def per_query_error(
@@ -471,6 +547,38 @@ def loss(
   return error * sens_squared
 
 
+def inverse_loss(
+    noising_coef: jax.Array,
+    *,
+    min_sep: int,
+    max_participations: int | None = None,
+    n: int | None = None,
+    workload_coef: jax.Array | None = None,
+    reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
+    use_x_sensitivity_upper_bound: bool = False,
+) -> jax.Array:
+  """Error of C^{-1} on a Toeplitz workload under repeated participation."""
+  if reduction_fn is jnp.max:
+    reduction_fn = lambda v: v[-1]
+  noising_coef, n = _reconcile(noising_coef, n)
+  error = reduction_fn(
+      per_query_error(
+          noising_coef=noising_coef,
+          n=n,
+          workload_coef=workload_coef,
+          skip_checks=True,
+      )
+  )
+  sensitivity_value = compute_banded_inverse_sensitivity(
+      noising_coef,
+      min_sep=min_sep,
+      max_participations=max_participations,
+      n=n,
+      use_x_sensitivity_upper_bound=use_x_sensitivity_upper_bound,
+  )
+  return error * sensitivity_value**2
+
+
 def optimize_banded_toeplitz(
     n: int,
     bands: int,
@@ -518,6 +626,52 @@ def optimize_banded_toeplitz(
       loss_fn, strategy_coef, max_optimizer_steps=max_optimizer_steps
   )
   return params / jnp.linalg.norm(params)
+
+
+def optimize_banded_inverse_toeplitz(
+    n: int,
+    bands: int,
+    *,
+    min_sep: int,
+    max_participations: int | None = None,
+    noising_coef: jax.Array | None = None,
+    workload_coef: jax.Array | None = None,
+    workload_inverse_coef: jax.Array | None = None,
+    alpha: float = 1.0,
+    beta: float = 0.0,
+    max_optimizer_steps: int = 250,
+    reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
+    use_x_sensitivity_upper_bound: bool = False,
+) -> jax.Array:
+  """Optimize over banded inverse Toeplitz matrices for a Toeplitz workload."""
+  if noising_coef is None:
+    if workload_inverse_coef is not None or workload_coef is None:
+      noising_coef = compute_banded_inverse_square_root(
+          bands,
+          workload_inverse_coef=workload_inverse_coef,
+          alpha=alpha,
+          beta=beta,
+      )
+    else:
+      noising_coef = optimal_max_error_noising_coefs(bands)
+  if noising_coef.shape[0] != bands:
+    raise ValueError(f'{noising_coef.shape=} != {bands=}')
+  if workload_coef is None:
+    workload_coef = sgd_workload_coef(n=n, alpha=alpha, beta=beta)
+  objective = functools.partial(
+      inverse_loss,
+      n=n,
+      min_sep=min_sep,
+      max_participations=max_participations,
+      workload_coef=workload_coef,
+      reduction_fn=reduction_fn,
+      use_x_sensitivity_upper_bound=use_x_sensitivity_upper_bound,
+  )
+  return optimization.optimize(
+      objective,
+      noising_coef,
+      max_optimizer_steps=max_optimizer_steps,
+  )
 
 
 def _factors(n):
