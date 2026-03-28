@@ -408,6 +408,7 @@ class ToeplitzErrorTest(parameterized.TestCase):
         )
     )
     np.testing.assert_allclose(sensitivity_value, expected)
+
   @hypothesis.given(
       name_coef_n_tuple=st.sampled_from(NAMED_C_MATRIX_PARAMS),
       workload=st.sampled_from(
