@@ -97,6 +97,12 @@ Implemented in [`toeplitz.py`](toeplitz.py). Structure $$C \in R^{n \times n}$$
 lower-triangular Toeplitz matrix. Parameters n, the size of $$C$$ coef, the
 non-zero Toeplitz coefficients of $$C$$. See [BandMF24].
 
+This module also supports inverse-Toeplitz variants where the noising matrix
+$$C^{-1}$$ is parameterized directly. The explicit inverse-square-root
+construction is exposed as BISR, while the numerically optimized inverse-coef
+variant is exposed as BandInvMF. For a concrete usage example of both, see
+[`examples/dpmf_strategy_optimization.py`](../../examples/dpmf_strategy_optimization.py).
+
 TODO: b/329444015 - Markdown example where n = 4 and coef = [1, 0.5]) for
 example.
 
@@ -141,6 +147,9 @@ see the [LTI24].
 1.  **[UseBLTs24]** *A Hassle-free Algorithm for Private Learning in Practice:
     Don't Use Tree Aggregation, Use BLTs.* EMNLP Industry Track 2024
 
+1.  **[BISR26]** *Back to Square Roots: An Optimal Bound on the Matrix
+    Factorization Error for Multi-Epoch Differentially Private SGD.* ICLR 2026.
+
 [SingleEpoch22]: https://arxiv.org/abs/2202.08312
 [FHU23]: https://arxiv.org/abs/2202.11205
 [MultiEpoch23]: https://arxiv.org/abs/2211.06530
@@ -150,3 +159,4 @@ see the [LTI24].
 [BandedSqrt24]: https://arxiv.org/abs/2405.13763
 [BandMF24]: https://arxiv.org/abs/2405.15913
 [UseBLTs24]: https://arxiv.org/abs/2408.08868
+[BISR26]: https://arxiv.org/abs/2505.12128
