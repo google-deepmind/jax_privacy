@@ -374,8 +374,8 @@ class ToeplitzErrorTest(parameterized.TestCase):
     np.testing.assert_allclose(toeplitz.sgd_workload_coef(8), jnp.ones(8))
 
   @parameterized.named_parameters(
-      ('prefix', jnp.array([1.0, -1.0]), 8),
-      ('momentum_like', jnp.array([1.0, -1.0, 0.09]), 8),
+      ('prefix', np.array([1.0, -1.0]), 8),
+      ('momentum_like', np.array([1.0, -1.0, 0.09]), 8),
   )
   def test_banded_inverse_square_root_matches_inverse_workload(self, x, n):
     inv_sqrt = toeplitz.compute_banded_inverse_square_root(
