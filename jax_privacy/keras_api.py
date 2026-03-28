@@ -79,7 +79,7 @@ class DPKerasConfig:
         noise). You should set this value before training and only based on the
         privacy guarantees you have to achieve. You should not increase the
         delta only because of poor model performance.
-      clipping_norm: The clipping norm for the gradients.
+      clipping_norm: The clipping norm for the per-example gradients.
       batch_size: The batch size used by the DP optimizer. When
         `poisson_sampling_in_fit=True`, this is the expected batch size of the
         internal Poisson sampler. Otherwise it must match the batch size
@@ -496,6 +496,8 @@ def _pad_batch_indices(indices: np.ndarray, multiple: int) -> np.ndarray:
 def _tree_batch_size(tree: chex.ArrayTree) -> int:
   """Returns and validates the batch size of a pytree of arrays."""
   leaves = jax.tree.leaves(tree)
+  # Expected input: a non-empty pytree of random-access arrays whose leaves all
+  # share the same leading batch dimension.
   if not leaves:
     raise ValueError('Expected at least one array leaf in the training data.')
   batch_size = None
@@ -504,7 +506,7 @@ def _tree_batch_size(tree: chex.ArrayTree) -> int:
       raise ValueError(
           'DP Keras training requires random-access array-like inputs.'
       )
-    if len(leaf.shape) == 0:
+    if not leaf.shape:
       raise ValueError(
           'DP Keras training requires each input leaf to have a batch'
           ' dimension.'
@@ -527,7 +529,7 @@ def _tree_batch_size(tree: chex.ArrayTree) -> int:
 
 
 def _take_batch_from_leaf(leaf: chex.Array, indices: np.ndarray) -> np.ndarray:
-  """Slices one array leaf, turning padded ``-1`` indices into zeros."""
+  """Slices one batched leaf and zero-fills padded ``-1`` index positions."""
   leaf = np.asarray(leaf)
   valid_positions = indices >= 0
   batch = np.zeros((indices.shape[0],) + leaf.shape[1:], dtype=leaf.dtype)
@@ -575,7 +577,9 @@ def _maybe_symbolically_build_private_model(
   # _symbolic_build is a private Keras helper, not a JAX-specific concept.
   # It lets Keras infer shapes and create state from a standard
   # (x, y, sample_weight) batch before the wrapped fit() path starts yielding
-  # Poisson-sampled batches from the PyDataset.
+  # Poisson-sampled batches from the PyDataset. Without this eager build step,
+  # lazily-built models can reach the wrapped fit() path before Keras has
+  # created the model and optimizer state from a standard batch.
   x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(dataset[0])
   model._symbolic_build(data_batch=(x, y, sample_weight))  # pylint: disable=protected-access
 
@@ -989,12 +993,12 @@ def _noised_clipped_grads(
 
   noisy_grads, new_noise_state = privatizer.update(clipped_grad, noise_state)
 
-  # Open question: should these aggregates be means or sums?
+  # Use masked means so padded Poisson examples do not affect the logs.
   loss = _masked_mean(per_example_aux.values, is_padding_example)
   unscaled_loss = _masked_mean(per_example_aux.aux[0], is_padding_example)
   y_pred = per_example_aux.aux[1]
   non_trainable_variables = [new_noise_state[0]] + non_trainable_variables[1:]
-  # Open question: confirm that masked means are the right metric reduction.
+  # Metrics follow the same masked-mean reduction as the loss values above.
   new_metrics = jax.tree.map(
       lambda x: _masked_mean(x, is_padding_example),
       per_example_aux.aux[3],
