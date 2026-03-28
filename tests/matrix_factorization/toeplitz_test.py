@@ -350,8 +350,64 @@ def _per_query_error(
   return dense.per_query_error(strategy_matrix=C, workload_matrix=A)
 
 
+def _inverse_mean_loss(
+    c_inv_coef: jnp.ndarray,
+    *,
+    n: int,
+    min_sep: int,
+    max_participations: int,
+    workload_coef: jax.Array | None = None,
+) -> jnp.ndarray:
+  return toeplitz.inverse_loss(
+      c_inv_coef,
+      n=n,
+      min_sep=min_sep,
+      max_participations=max_participations,
+      workload_coef=workload_coef,
+      reduction_fn=jnp.mean,
+  )
+
+
 class ToeplitzErrorTest(parameterized.TestCase):
 
+  def test_sgd_workload_coef_prefix_sum(self):
+    np.testing.assert_allclose(toeplitz.sgd_workload_coef(8), jnp.ones(8))
+
+  @parameterized.named_parameters(
+      ('prefix', jnp.array([1.0, -1.0]), 8),
+      ('momentum_like', jnp.array([1.0, -1.0, 0.09]), 8),
+  )
+  def test_banded_inverse_square_root_matches_inverse_workload(self, x, n):
+    inv_sqrt = toeplitz.compute_banded_inverse_square_root(
+        n, workload_inverse_coef=x
+    )
+    expected = toeplitz.pad_coefs_to_n(x, n)
+    actual = toeplitz.multiply(inv_sqrt, inv_sqrt, n=n)
+    np.testing.assert_allclose(actual, expected, atol=1e-12)
+
+  def test_banded_inverse_square_root_prefix_matches_fhu_inverse(self):
+    expected = toeplitz.optimal_max_error_noising_coefs(8)
+    actual = toeplitz.compute_banded_inverse_square_root(8)
+    np.testing.assert_allclose(actual, expected)
+
+  def test_compute_banded_inverse_sensitivity_prefix(self):
+    noising_coef = toeplitz.compute_banded_inverse_square_root(6)
+    sensitivity_value = toeplitz.compute_banded_inverse_sensitivity(
+        noising_coef,
+        min_sep=2,
+        max_participations=3,
+        n=12,
+    )
+    strategy_coef = toeplitz.inverse_coef(noising_coef, n=12)
+    expected = jnp.sqrt(
+        toeplitz.minsep_sensitivity_squared(
+            strategy_coef,
+            min_sep=2,
+            max_participations=3,
+            n=12,
+        )
+    )
+    np.testing.assert_allclose(sensitivity_value, expected)
   @hypothesis.given(
       name_coef_n_tuple=st.sampled_from(NAMED_C_MATRIX_PARAMS),
       workload=st.sampled_from(
@@ -460,6 +516,35 @@ class ToeplitzOptimizationTest(parameterized.TestCase):
     self.assertLessEqual(
         toeplitz.loss(strategy_coef=coef2, n=16),
         toeplitz.loss(strategy_coef=coef1, n=16),
+    )
+
+  def test_optimize_banded_inverse_toeplitz_improves_over_bisr_init(self):
+    n = 16
+    bands = 3
+    min_sep = 4
+    max_participations = 4
+    init = toeplitz.compute_banded_inverse_square_root(bands)
+    optimized = toeplitz.optimize_banded_inverse_toeplitz(
+        n=n,
+        bands=bands,
+        min_sep=min_sep,
+        max_participations=max_participations,
+        noising_coef=init,
+        max_optimizer_steps=25,
+    )
+    self.assertLessEqual(
+        _inverse_mean_loss(
+            optimized,
+            n=n,
+            min_sep=min_sep,
+            max_participations=max_participations,
+        ),
+        _inverse_mean_loss(
+            init,
+            n=n,
+            min_sep=min_sep,
+            max_participations=max_participations,
+        ),
     )
 
 

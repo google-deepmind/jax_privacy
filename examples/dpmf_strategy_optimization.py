@@ -50,6 +50,8 @@ _STRATEGY = flags.DEFINE_enum(
         'dense',
         'banded',
         'banded-toeplitz',
+        'banded-inverse-toeplitz',
+        'bisr',
         'blt',
         'banded-sqrt',
         'normalized-banded-toeplitz',
@@ -74,6 +76,18 @@ _OBJECTIVE = flags.DEFINE_enum(
     ['mean', 'max'],
     'Objective to optimize.',
 )
+_ALPHA = flags.DEFINE_float(
+    'alpha',
+    1.0,
+    'First root of the Toeplitz SGD workload recurrence. The default value'
+    ' recovers the prefix-sum workload.',
+)
+_BETA = flags.DEFINE_float(
+    'beta',
+    0.0,
+    'Second root of the Toeplitz SGD workload recurrence. The default value'
+    ' recovers the prefix-sum workload.',
+)
 
 
 def optimize_strategy(
@@ -82,11 +96,14 @@ def optimize_strategy(
     n: int,
     participations: int = 1,
     objective: str = 'mean',
+    alpha: float = 1.0,
+    beta: float = 0.0,
 ):
   """Compute matrix factorization+error metrics for the given configuration."""
   sep = n // participations
   t0 = time.time()
   loss = None
+  workload_coef = toeplitz.sgd_workload_coef(n=n, alpha=alpha, beta=beta)
 
   if objective not in ['mean', 'max']:
     raise ValueError(f'Unknown objective {objective}')
@@ -103,6 +120,51 @@ def optimize_strategy(
       )
       pqe = toeplitz.per_query_error(strategy_coef=strategy_coef, n=n)
       loss = reduction_fn(pqe) * sensitivity_squared
+
+    case 'banded-inverse-toeplitz':
+      noising_coef = toeplitz.optimize_banded_inverse_toeplitz(
+          n=n,
+          bands=sep,
+          min_sep=sep,
+          max_participations=participations,
+          workload_coef=workload_coef,
+          workload_inverse_coef=toeplitz.sgd_workload_inverse_coef(
+              alpha=alpha, beta=beta
+          ),
+          alpha=alpha,
+          beta=beta,
+          reduction_fn=reduction_fn,
+          max_optimizer_steps=1000,
+      )
+      sensitivity_value = toeplitz.compute_banded_inverse_sensitivity(
+          noising_coef,
+          min_sep=sep,
+          max_participations=participations,
+          n=n,
+      )
+      pqe = toeplitz.per_query_error(
+          noising_coef=noising_coef,
+          n=n,
+          workload_coef=workload_coef,
+      )
+      loss = reduction_fn(pqe) * sensitivity_value**2
+
+    case 'bisr':
+      noising_coef = toeplitz.compute_banded_inverse_square_root(
+          sep, alpha=alpha, beta=beta
+      )
+      sensitivity_value = toeplitz.compute_banded_inverse_sensitivity(
+          noising_coef,
+          min_sep=sep,
+          max_participations=participations,
+          n=n,
+      )
+      pqe = toeplitz.per_query_error(
+          noising_coef=noising_coef,
+          n=n,
+          workload_coef=workload_coef,
+      )
+      loss = reduction_fn(pqe) * sensitivity_value**2
 
     case 'normalized-banded-toeplitz':
       # https://arxiv.org/abs/2405.15913
@@ -187,6 +249,8 @@ def main(_) -> None:
       n=_ITERATIONS.value,
       participations=_PARTICIPATIONS.value,
       objective=_OBJECTIVE.value,
+      alpha=_ALPHA.value,
+      beta=_BETA.value,
   )
 
 
