@@ -274,36 +274,62 @@ class KerasApiTest(parameterized.TestCase):
     ):
       keras_api._validate_optimizer(model, dp_params)
 
-  # pylint: disable=g-bad-todo
-  # TODO: Add test when input is tf batched dataset dict
-  # (as in Gemma), try to make a test as similar as possible to Gemma.
-  # Also good to add tests for all possible setups we know (especially for all
-  # possible setups of input data we know (tf dataset, np array,
-  # python generators, etc.). Might make sense to have a separate test file for
-  # that.
-  def test_dp_training_e2e_work(self):
-    np.random.seed(42)
-    train_size = 200
-    batch_size = 100
-    epochs = 5
-    train_steps = 10  # 5 * (200 / 100)
-    x, y = np.random.uniform(0, 1, (train_size, 4)), np.random.uniform(
-        0, 1, train_size
+  def test_fit_with_weighted_metrics(self):
+    """Verifies that fit with weighted_metrics works.
+
+    There was once a failure related to weighted_metrics introducing shape
+    mismatches in auxiliary outputs, therefore we've added this test case.
+    """
+    batch_size = 2
+    epochs = 1
+    train_size = 4
+
+    input_dim = 3
+    features = 2
+    classes = 4
+
+    inputs = keras.Input(shape=(input_dim, features), dtype="float32")
+    dense = keras.layers.Dense(classes)(inputs)
+
+    model = keras.Model(
+        inputs=inputs,
+        outputs=dense,
     )
-    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+
+    # Inputs (x): (train_size, input_dim, features)
+    x = np.zeros((train_size, input_dim, features), dtype=np.float32)
+    # Targets (y): (train_size, input_dim) - per-step class indices
+    y = np.zeros((train_size, input_dim), dtype=np.int32)
+    # Sample weights: (train_size, input_dim) - per-step weights
+    sample_weight = np.ones((train_size, input_dim), dtype=np.float32)
+
     dp_params = keras_api.DPKerasConfig(
-        epsilon=1.1,
+        epsilon=100.0,
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
         gradient_accumulation_steps=1,
-        train_steps=train_steps,
+        train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
     )
+
     model = keras_api.make_private(model, dp_params)
-    model.compile(loss="mse", optimizer="adam")
-    model.fit(x, y, epochs=epochs, batch_size=batch_size)  # pylint: disable=not-callable
-    self.assertAlmostEqual(model.evaluate(x, y), 2, delta=2)
+
+    model.compile(
+        loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        optimizer=keras.optimizers.Adam(learning_rate=0.01),
+        weighted_metrics=[keras.metrics.SparseCategoricalAccuracy()],
+    )
+
+    # Act
+    history = model.fit(
+        x, y, batch_size=batch_size, epochs=epochs, sample_weight=sample_weight
+    )
+
+    # Assert
+    accuracy_key = "sparse_categorical_accuracy"
+    self.assertIn(accuracy_key, history.history)
+    self.assertGreaterEqual(history.history[accuracy_key][-1], 0.0)
 
   def test_dp_training_exceeds_privacy_budget_raises_error(self):
     train_size = 200

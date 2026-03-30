@@ -49,12 +49,14 @@ def init_model_params() -> Mapping[str, jax.Array]:
   return {"w": w, "b": b}
 
 
-def model(params: Mapping[str, jax.Array], x: int) -> int:
+def model(params: Mapping[str, jax.Array], x: jax.Array) -> jax.Array:
   """Defines the linear regression model."""
   return params["w"] * x + params["b"]
 
 
-def loss_fn(params: Mapping[str, jax.Array], x: int, y: int) -> jax.Array:
+def loss_fn(
+    params: Mapping[str, jax.Array], x: jax.Array, y: jax.Array
+) -> jax.Array:
   """Calculates the mean squared error loss."""
   predictions = model(params, x)
   return jnp.mean((predictions - y) ** 2)
@@ -209,6 +211,13 @@ def main(_):
       f" b={model_params['b']:.4f}"
   )
   print(f"True parameters: w={true_w:.4f}, b={true_b:.4f}")
+
+  if use_dp:
+    assert abs(model_params["w"] - true_w) < 0.6, "w is too far from true_w!"
+    assert abs(model_params["b"] - true_b) < 0.6, "b is too far from true_b!"
+  else:
+    assert abs(model_params["w"] - true_w) < 0.1, "w is too far from true_w!"
+    assert abs(model_params["b"] - true_b) < 0.1, "b is too far from true_b!"
 
 
 if __name__ == "__main__":

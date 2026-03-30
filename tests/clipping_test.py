@@ -224,6 +224,29 @@ class ClipTransformTest(parameterized.TestCase):
     expected_dtype = output_dtype or arg_dtype
     self.assertEqual(value.dtype, expected_dtype)
 
+  def test_aux_shape_keep_batch_dim(self):
+    def fun(batched_data):
+      # With keep_batch_dim=True, data shape inside vmap is (1, D)
+      scalar = jnp.sum(batched_data)
+      array_1d = batched_data[:, 0, 0, 0]
+      array_2d = batched_data[:, :, 0, 0]
+      array_3d = batched_data[:, :, :, 1]
+      return scalar, (scalar, array_1d, array_2d, array_3d, batched_data)
+
+    data = jnp.zeros((15, 4, 9, 10))
+
+    sum_clip_mean = clipping.clipped_fun(
+        fun, has_aux=True, keep_batch_dim=True, batch_argnums=0
+    )
+    _, (aux_scalar, aux_1d, aux_2d, aux_3d, aux_4d) = sum_clip_mean(data)
+
+    self.assertEqual(aux_scalar.shape, (15,))
+    # In assertions below dimension of size 1 is dropped.
+    self.assertEqual(aux_1d.shape, (15,))
+    self.assertEqual(aux_2d.shape, (15, 4))
+    self.assertEqual(aux_3d.shape, (15, 4, 9))
+    self.assertEqual(aux_4d.shape, (15, 4, 9, 10))
+
 
 if __name__ == '__main__':
   absltest.main()

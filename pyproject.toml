@@ -55,6 +55,7 @@ test = [
     "hypothesis",
     "crc32c",
     "keras",
+    "tensorflow",
 ]
 
 examples = [
@@ -68,6 +69,7 @@ examples = [
     "tensorflow",
     "tensorflow_datasets",
     "randomgen",
+    "importlib_resources",
 ]
 
 docs = [

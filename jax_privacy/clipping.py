@@ -227,6 +227,31 @@ def _num_real_microbatches(
   return jnp.argmax(is_real_batch + jnp.linspace(0, 1, is_real_batch.size))
 
 
+def _maybe_squeeze_axis_1(x: jax.Array) -> jax.Array:
+  """Squeezes the second axis if it is of size 1.
+
+  We need a guard check because some leaves in the pytree might be scalars or
+  have only 1 dimension (e.g., if the model reduces over the batch dimension of
+  size 1 to return a single loss scalar). In JAX, calling jnp.squeeze(axis=1) on
+  a scalar or 1D array throws an out-of-bounds error. Additionally, jnp.squeeze
+  errors out if the specified axis is not of size 1. This check ensures we only
+  squeeze valid 2D+ arrays that actually have size 1 at index 1.
+
+  Note that this will also squeeze axis 1 for auxiliary outputs that naturally
+  have a shape like `(Batch, 1, ...)`. Callers should be aware of this potential
+  side effect.
+
+  Args:
+    x: The input array.
+
+  Returns:
+    The input array with the second axis squeezed if it is of size 1.
+  """
+  if hasattr(x, 'shape') and len(x.shape) >= 2 and x.shape[1] == 1:
+    return jnp.squeeze(x, axis=1)
+  return x
+
+
 def clipped_fun(
     fun: Callable,
     has_aux: bool = False,
@@ -360,6 +385,18 @@ def clipped_fun(
     )
 
     clipped_values, aux, norms = microbatched_vmap_fun(*args, **kwargs)
+    if keep_batch_dim:
+      # If keep_batch_dim is True, we artificially added a dimension of size 1
+      # to the batch arguments before passing them to the vmap'ed function.
+      # While vmap and micro_vmap take a single example's slice, it preserves
+      # the output shapes of the inner function. If the inner function (e.g.
+      # your model) returns something that still contains this size 1 batch
+      # dimension, vmap will stack these outputs (not concatenate), resulting
+      # in a shape like (B, 1, ...). If the caller expects standard shapes
+      # (B, ...), this extra axis at index 1 can cause broadcasting issues
+      # downstream (e.g. in Keras metrics). To fix this, we squeeze the axis 1
+      # of aux outputs.
+      aux = jax.tree.map(_maybe_squeeze_axis_1, aux)
     if normalize_by != 1.0:
       clipped_values = jax.tree.map(lambda x: x / normalize_by, clipped_values)
 

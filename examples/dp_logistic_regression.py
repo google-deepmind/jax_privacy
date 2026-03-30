@@ -173,6 +173,15 @@ def main(_):
   optimal_loss = logistic_loss(true_params, train_features, train_labels)
   print(f'Optimal training loss: {optimal_loss:.3f}')
 
+  assert final_loss < init_loss, (
+      f'Final loss {final_loss:.3f} is not less than initial loss'
+      f' {init_loss:.3f}'
+  )
+  assert final_loss < optimal_loss + 0.2, (
+      f'Final loss {final_loss:.3f} is too far from optimal loss'
+      f' {optimal_loss:.3f}'
+  )
+
   # Calculate scores (Initial Loss - Final Loss)
   audit_held_in_features = train_features[:audit_users]
   audit_held_in_labels = train_labels[:audit_users]
@@ -208,6 +217,13 @@ def main(_):
   print(f'Estimated Epsilon:   {estimated_epsilon:.2f}')
   print(f'Estimated Epsilon (99% CI): {estimated_epsilon_99:.2f}')
   print(f'AUROC (99% CI):      {auroc_99:.4f}')
+
+  assert (
+      estimated_epsilon < EPSILON + 5.0
+  ), f'Estimated epsilon {estimated_epsilon:.2f} is too high!'
+  assert (
+      estimated_epsilon_99 < EPSILON + 10.0
+  ), f'Estimated epsilon (99% CI) {estimated_epsilon_99:.2f} is too high!'
 
 
 if __name__ == '__main__':

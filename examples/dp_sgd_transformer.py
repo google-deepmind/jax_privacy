@@ -104,21 +104,13 @@ def transformer_block(
 
   num_heads = 4
   head_dim = q.shape[-1] // num_heads
-  q = q.reshape(q.shape[0], q.shape[1], num_heads, head_dim).transpose(
-      0, 2, 1, 3
-  )
-  k = k.reshape(k.shape[0], k.shape[1], num_heads, head_dim).transpose(
-      0, 2, 1, 3
-  )
-  v = v.reshape(v.shape[0], v.shape[1], num_heads, head_dim).transpose(
-      0, 2, 1, 3
-  )
+  q = q.reshape(q.shape[0], q.shape[1], num_heads, head_dim)
+  k = k.reshape(k.shape[0], k.shape[1], num_heads, head_dim)
+  v = v.reshape(v.shape[0], v.shape[1], num_heads, head_dim)
 
   out = jax.nn.dot_product_attention(q, k, v, mask=mask)
 
-  out = out.transpose(0, 2, 1, 3).reshape(
-      batch_x.shape[0], batch_x.shape[1], -1
-  )
+  out = out.reshape(batch_x.shape[0], batch_x.shape[1], -1)
   out = jnp.dot(out, model_params['attn']['proj'])
 
   batch_x = batch_x + out
@@ -153,7 +145,7 @@ def model(model_params: Mapping[str, Any], batch_x: jax.Array) -> jax.Array:
       + model_params['pos_embedding'][:seq_len]
   )
 
-  mask = jnp.tri(seq_len)
+  mask = jnp.tri(seq_len, dtype=bool)
   mask = mask[None, None, :, :]
 
   for layer in model_params['layers']:
@@ -239,7 +231,8 @@ def main(argv: Sequence[str]) -> None:
   epsilon = 1.0
   delta = 1e-5
   max_len = 128
-  iterations = 500
+  # You can increase it to 500 for better qualityl.
+  iterations = 100
   expected_batch_size = 1000
   padding_multiple = 32
 
@@ -308,7 +301,7 @@ def main(argv: Sequence[str]) -> None:
     batch_x = batch_data[:, :-1]
     batch_y = batch_data[:, 1:]
 
-    model_params, opt_state, _, noise_state = dp_train_step(
+    model_params, opt_state, loss, noise_state = dp_train_step(
         model_params,
         (batch_x, batch_y),
         is_padding_example,
@@ -316,8 +309,10 @@ def main(argv: Sequence[str]) -> None:
         opt_state,
     )
 
-    if step % 100 == 0:
-      print(f'Step {step}')
+    if step % 20 == 0:
+      print(f'Step {step}, Loss: {loss:.4f}')
+
+  assert loss < 4.8, f'Final loss {loss:.3f} is too high!'
 
   # Generate sample text with a seed from Shakespeare
   seed_text = 'ROMEO:'

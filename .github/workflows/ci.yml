@@ -120,7 +120,7 @@ jobs:
       - name: Run Standard Tests (Linux)
         if: runner.os == 'Linux'
         run: |
-          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
+          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test and not keras_api_e2e_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
           pytest -n auto tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml --cov=jax_privacy --cov-report=xml --cov-append
           pytest -n auto tests/ -k "sharding_utils_test" --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
 
@@ -166,9 +166,46 @@ jobs:
         env:
           HYPOTHESIS_PROFILE: dpftrl_default
         run: |
-          pytest -n auto tests/ -k "matrix_factorization" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
+          pytest -n auto tests/ -k "matrix_factorization or keras_api_e2e_test" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
         shell: bash
 
+
+  examples:
+    name: "Examples: Python 3.11 on Linux"
+    needs: [check_rebase, lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: "actions/checkout@v6"
+      - uses: "actions/setup-python@v6"
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[examples]"
+      - name: Run Examples
+        run: |
+          echo "::group::keras_api_example"
+          python examples/keras_api_example.py
+          echo "::endgroup::"
+          echo "::group::jax_api_example"
+          python examples/jax_api_example.py
+          echo "::endgroup::"
+          echo "::group::dp_logistic_regression"
+          python examples/dp_logistic_regression.py
+          echo "::endgroup::"
+          echo "::group::dp_sgd_transformer"
+          python examples/dp_sgd_transformer.py
+          echo "::endgroup::"
+          echo "::group::dpmf_strategy_optimization"
+          python examples/dpmf_strategy_optimization.py
+          echo "::endgroup::"
+          echo "::group::balls_in_bins_accounting"
+          python examples/balls_in_bins_accounting.py
+          echo "::endgroup::"
 
   docs:
     name: "Docs: Python 3.11"
