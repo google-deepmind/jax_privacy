@@ -57,3 +57,6 @@ jobs:
           echo "::group::balls_in_bins_accounting"
           python examples/balls_in_bins_accounting.py
           echo "::endgroup::"
+          echo "::group::data_loading"
+          python examples/data_loading.py
+          echo "::endgroup::"
