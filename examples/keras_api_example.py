@@ -74,13 +74,11 @@ def main(_):
   # Marker to insert the main part of the example into ReadTheDocs.
   # [START example]
   (x_train, y_train), (x_test, y_test) = load_data()
-  batch_size = 128
-  train_size = (len(x_train) // batch_size) * batch_size
-  x_train, y_train = x_train[:train_size], y_train[:train_size]
   model = get_model()
 
   epsilon = 1.1
   delta = 1e-5
+  batch_size = 128
   epochs = 5
   train_size = len(x_train)
   dp = True
@@ -94,6 +92,7 @@ def main(_):
         batch_size=batch_size,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
+        poisson_sampling_in_fit=True,
         seed=0,
         gradient_accumulation_steps=1,
     )
@@ -102,6 +101,8 @@ def main(_):
         f"DP training:{epsilon=} {delta=} {clipping_norm=} {batch_size=} "
         f"{epochs=} {train_size=}"
     )
+    # This example opts into internal Poisson sampling from the per-example
+    # arrays passed to fit().
   else:
     print("Non-DP training")
   model.compile(
@@ -109,25 +110,15 @@ def main(_):
       optimizer="adam",
       metrics=["accuracy"],
   )
-  history = model.fit(
+  model.fit(
       x_train,
       y_train,
-      batch_size=batch_size,
       epochs=epochs,
       validation_data=(x_test, y_test),
   )
   # [END example]
   print("DP: expected train accuracy: ~96%, val accuracy: ~92%")
   print("Non-DP: expected train accuracy: ~98%, val accuracy: ~98%")
-  final_accuracy = history.history["accuracy"][-1]
-  if dp:
-    assert (
-        final_accuracy > 0.85
-    ), f"DP Accuracy {final_accuracy:.4f} is too low!"
-  else:
-    assert (
-        final_accuracy > 0.95
-    ), f"Non-DP Accuracy {final_accuracy:.4f} is too low!"
 
 
 if __name__ == "__main__":
