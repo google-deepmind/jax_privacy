@@ -74,6 +74,13 @@ class KerasApiTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, "Train size .* must be positive"):
       dataclasses.replace(valid_params, train_size=0)
 
+    # Batch size must not exceed train size.
+    with self.assertRaisesRegex(
+        ValueError,
+        "Batch size 1001 must be less than or equal to train size 1000",
+    ):
+      dataclasses.replace(valid_params, batch_size=1001)
+
     # Invalid noise multiplier
     with self.assertRaisesRegex(
         ValueError, "Noise multiplier .* must be positive"
@@ -100,6 +107,22 @@ class KerasApiTest(parameterized.TestCase):
         "Gradient accumulation steps 0 must be positive",
     ):
       dataclasses.replace(valid_params, gradient_accumulation_steps=0)
+
+    # Invalid microbatch size
+    with self.assertRaisesRegex(
+        ValueError,
+        "Microbatch size 0 must be positive",
+    ):
+      dataclasses.replace(valid_params, microbatch_size=0)
+
+    with self.assertRaisesRegex(
+        ValueError,
+        "Microbatch size 11 must be less than or equal to batch size 10",
+    ):
+      dataclasses.replace(valid_params, microbatch_size=11)
+
+  def test_poisson_sampling_in_fit_defaults_to_disabled(self):
+    self.assertFalse(self._get_params().poisson_sampling_in_fit)
 
   def test_effective_batch_size(self):
     params1 = dataclasses.replace(self._get_params(), batch_size=5)
@@ -311,6 +334,8 @@ class KerasApiTest(parameterized.TestCase):
         gradient_accumulation_steps=1,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
+        poisson_sampling_in_fit=True,
+        seed=0,
     )
 
     model = keras_api.make_private(model, dp_params)
@@ -321,15 +346,194 @@ class KerasApiTest(parameterized.TestCase):
         weighted_metrics=[keras.metrics.SparseCategoricalAccuracy()],
     )
 
-    # Act
     history = model.fit(
         x, y, batch_size=batch_size, epochs=epochs, sample_weight=sample_weight
     )
 
-    # Assert
     accuracy_key = "sparse_categorical_accuracy"
     self.assertIn(accuracy_key, history.history)
     self.assertGreaterEqual(history.history[accuracy_key][-1], 0.0)
+
+  def test_poisson_sampled_training_dataset_batches_and_masks_padding(self):
+    x = np.arange(24).reshape(12, 2)
+    y = np.arange(12)
+    sample_weight = np.linspace(1.0, 2.1, 12)
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=4,
+        gradient_accumulation_steps=1,
+        train_steps=20,
+        train_size=len(x),
+        noise_multiplier=10.0,
+        seed=0,
+    )
+    dataset = keras_api._PoissonSampledTrainingDataset(
+        x,
+        y,
+        sample_weight,
+        dp_params=dp_params,
+        steps_per_epoch=8,
+    )
+
+    realized_batch_sizes = []
+    for i, padded_indices in enumerate(dataset._epoch_batches):
+      batch_x, batch_y, batch_sample_weight = (
+          keras.utils.unpack_x_y_sample_weight(dataset[i])
+      )
+      is_padding_example = keras_api._padding_mask_from_sample_weight(
+          batch_sample_weight
+      )
+      valid_positions = padded_indices >= 0
+
+      self.assertEqual(batch_x.shape[0] % dp_params.batch_size, 0)
+      np.testing.assert_array_equal(is_padding_example, ~valid_positions)
+      np.testing.assert_array_equal(
+          batch_x[valid_positions], x[padded_indices[valid_positions]]
+      )
+      np.testing.assert_array_equal(
+          batch_y[valid_positions], y[padded_indices[valid_positions]]
+      )
+      np.testing.assert_array_equal(
+          batch_sample_weight[valid_positions],
+          sample_weight[padded_indices[valid_positions]],
+      )
+      np.testing.assert_array_equal(
+          batch_x[is_padding_example],
+          np.zeros_like(batch_x[is_padding_example]),
+      )
+      np.testing.assert_array_equal(
+          batch_sample_weight[is_padding_example],
+          np.zeros_like(batch_sample_weight[is_padding_example]),
+      )
+      realized_batch_sizes.append(int(valid_positions.sum()))
+
+    self.assertGreater(len(set(realized_batch_sizes)), 1)
+
+  def test_poisson_sampled_training_dataset_generates_mask_sample_weights(self):
+    x = np.arange(12).reshape(6, 2)
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=3,
+        gradient_accumulation_steps=1,
+        train_steps=20,
+        train_size=len(x),
+        noise_multiplier=10.0,
+        seed=0,
+    )
+    dataset = keras_api._PoissonSampledTrainingDataset(
+        x,
+        None,
+        None,
+        dp_params=dp_params,
+        steps_per_epoch=4,
+    )
+
+    _, _, batch_sample_weight = keras.utils.unpack_x_y_sample_weight(dataset[0])
+    is_padding_example = keras_api._padding_mask_from_sample_weight(
+        batch_sample_weight
+    )
+
+    np.testing.assert_array_equal(
+        batch_sample_weight,
+        (~np.asarray(is_padding_example)).astype(np.float32),
+    )
+
+  def test_pad_batch_indices_reifies_empty_poisson_draw(self):
+    padded_indices = keras_api._pad_batch_indices(
+        np.array([], dtype=np.int32), multiple=4
+    )
+
+    np.testing.assert_array_equal(
+        padded_indices, np.array([-1, -1, -1, -1], dtype=np.int32)
+    )
+
+  def test_padding_mask_from_2d_sample_weight(self):
+    sample_weight = np.array(
+        [[1.0, 0.5], [0.0, 0.0], [2.0, 3.0]], dtype=np.float32
+    )
+    padding_mask = keras_api._padding_mask_from_sample_weight(sample_weight)
+
+    np.testing.assert_array_equal(padding_mask, np.array([False, True, False]))
+
+  def test_padding_mask_from_1d_sample_weight(self):
+    sample_weight = np.array([1.0, 0.0, 2.0], dtype=np.float32)
+    padding_mask = keras_api._padding_mask_from_sample_weight(sample_weight)
+
+    np.testing.assert_array_equal(padding_mask, np.array([False, True, False]))
+
+  def test_prepare_fit_kwargs_for_poisson_dataset(self):
+    fit_kwargs = {
+        "x": np.arange(6).reshape(3, 2),
+        "y": np.arange(3),
+        "sample_weight": np.ones(3),
+        "batch_size": 3,
+        "shuffle": True,
+        "validation_split": 0.0,
+        "steps_per_epoch": None,
+        "epochs": 5,
+    }
+    poisson_dataset = object()
+
+    rewritten_kwargs = keras_api._prepare_fit_kwargs_for_poisson_dataset(
+        fit_kwargs,
+        poisson_dataset=poisson_dataset,
+    )
+
+    self.assertEqual(rewritten_kwargs["x"], poisson_dataset)
+    self.assertEqual(rewritten_kwargs["epochs"], 5)
+    self.assertNotIn("y", rewritten_kwargs)
+    self.assertNotIn("sample_weight", rewritten_kwargs)
+    self.assertNotIn("batch_size", rewritten_kwargs)
+    self.assertNotIn("shuffle", rewritten_kwargs)
+    self.assertNotIn("validation_split", rewritten_kwargs)
+    self.assertNotIn("steps_per_epoch", rewritten_kwargs)
+    self.assertEqual(fit_kwargs["x"].shape, (3, 2))
+
+  def test_masked_mean_ignores_padding_examples(self):
+    values = jnp.array([[1.0, 10.0], [3.0, 30.0], [5.0, 50.0]])
+    is_padding_example = jnp.array([False, True, False])
+
+    mean = keras_api._masked_mean(values, is_padding_example)
+
+    np.testing.assert_allclose(mean, np.array([3.0, 30.0]))
+
+  def test_masked_mean_returns_zero_for_all_padding(self):
+    values = jnp.array([[1.0, 10.0], [3.0, 30.0]])
+    is_padding_example = jnp.array([True, True])
+
+    mean = keras_api._masked_mean(values, is_padding_example)
+
+    np.testing.assert_allclose(mean, np.array([0.0, 0.0]))
+
+  def test_dp_training_e2e_work(self):
+    np.random.seed(42)
+    train_size = 200
+    batch_size = 100
+    epochs = 5
+    train_steps = 10  # 5 * (200 / 100)
+    x, y = np.random.uniform(0, 1, (train_size, 4)), np.random.uniform(
+        0, 1, train_size
+    )
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=1,
+        train_steps=train_steps,
+        train_size=train_size,
+        poisson_sampling_in_fit=True,
+        seed=0,
+    )
+    model = keras_api.make_private(model, dp_params)
+    model.compile(loss="mse", optimizer="adam")
+    model.fit(x, y, epochs=epochs, batch_size=batch_size)  # pylint: disable=not-callable
+    self.assertAlmostEqual(model.evaluate(x, y), 2, delta=2)
 
   def test_dp_training_exceeds_privacy_budget_raises_error(self):
     train_size = 200
@@ -347,6 +551,7 @@ class KerasApiTest(parameterized.TestCase):
         gradient_accumulation_steps=1,
         train_steps=train_steps,
         train_size=train_size,
+        seed=0,
     )
     model = keras_api.make_private(model, dp_params)
     model.compile(loss="mse", optimizer="adam")
@@ -386,6 +591,7 @@ class KerasApiTest(parameterized.TestCase):
         clipping_norm=1.0,
         train_steps=train_steps,
         train_size=train_size,
+        seed=0,
     )
     x, y = np.random.uniform(0, 1, (train_size, 4)), np.random.uniform(
         0, 1, train_size
@@ -439,6 +645,7 @@ class KerasApiTest(parameterized.TestCase):
         clipping_norm=1.0,
         train_steps=28,
         train_size=200,
+        seed=0,
     )
     model = keras_api.make_private(model, dp_params)
     model.compile()
@@ -449,39 +656,113 @@ class KerasApiTest(parameterized.TestCase):
     ):
       model.fit(batch_size=101)  # pylint: disable=not-callable
 
-  @parameterized.named_parameters(
-      ("plain arg", np.zeros((101, 4)), np.zeros((101,))),
-      ("tuple", (np.zeros((101, 4)),), np.zeros((101,))),
-      ("list", [np.zeros((101, 4))], np.zeros((101,))),
-      ("dict", {"x": np.zeros((101, 4))}, np.zeros((101,))),
-  )
-  def test_fit_raises_error_when_dp_batch_size_not_equal_to_actual_data_batch_size(  # pylint: disable=line-too-long
-      self, batched_x, batched_y
-  ):
+  def test_fit_rejects_non_random_access_training_data(self):
     model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
-    dp_batch_size = 100  # actual batch size is 101
     dp_params = keras_api.DPKerasConfig(
-        batch_size=dp_batch_size,
+        batch_size=100,
         gradient_accumulation_steps=1,
         epsilon=1.1,
         delta=1e-5,
         clipping_norm=1.0,
         train_steps=28,
         train_size=200,
+        poisson_sampling_in_fit=True,
+        seed=0,
     )
     model = keras_api.make_private(model, dp_params)
 
     def data_generator():
       while True:
-        yield batched_x, batched_y
+        yield np.zeros((100, 4)), np.zeros((100,))
 
     model.compile()
     with self.assertRaisesRegex(
         ValueError,
-        "The batch size in the DP parameters is not equal to the batch size of"
-        " the actual data",
+        "random-access array-like inputs",
     ):
       model.fit(data_generator())  # pylint: disable=not-callable
+
+  def test_fit_allows_generator_when_poisson_sampling_in_fit_disabled(self):
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        batch_size=100,
+        gradient_accumulation_steps=1,
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        train_steps=2,
+        train_size=200,
+        seed=0,
+    )
+    model = keras_api.make_private(model, dp_params)
+
+    def data_generator():
+      while True:
+        yield np.zeros((100, 4)), np.zeros((100,))
+
+    model.compile(loss="mse", optimizer="adam")
+    history = model.fit(  # pylint: disable=not-callable
+        data_generator(),
+        steps_per_epoch=1,
+        epochs=1,
+    )
+
+    self.assertIn("loss", history.history)
+
+  def test_fit_rejects_train_size_mismatch(self):
+    train_size = 200
+    x, y = np.random.uniform(0, 1, (train_size, 4)), np.random.uniform(
+        0, 1, train_size
+    )
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        batch_size=100,
+        gradient_accumulation_steps=1,
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        train_steps=28,
+        train_size=train_size - 1,
+        poisson_sampling_in_fit=True,
+        seed=0,
+    )
+    model = keras_api.make_private(model, dp_params)
+    model.compile(loss="mse", optimizer="adam")
+
+    with self.assertRaisesRegex(
+        ValueError,
+        "The train size in the DP parameters is not equal to the size of the"
+        " training data passed to fit",
+    ):
+      model.fit(x, y, batch_size=100)  # pylint: disable=not-callable
+
+  def test_fit_rejects_validation_split(self):
+    train_size = 200
+    x, y = np.random.uniform(0, 1, (train_size, 4)), np.random.uniform(
+        0, 1, train_size
+    )
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        batch_size=100,
+        gradient_accumulation_steps=1,
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        train_steps=28,
+        train_size=train_size,
+        poisson_sampling_in_fit=True,
+        seed=0,
+    )
+    model = keras_api.make_private(model, dp_params)
+    model.compile(loss="mse", optimizer="adam")
+
+    with self.assertRaisesRegex(
+        ValueError,
+        "validation_split is not supported for DP Keras training",
+    ):
+      model.fit(  # pylint: disable=not-callable
+          x, y, batch_size=100, validation_split=0.1
+      )
 
   def test_train_step_call_noised_clipped_grads(self):
     train_size = 200
@@ -500,6 +781,8 @@ class KerasApiTest(parameterized.TestCase):
         gradient_accumulation_steps=1,
         train_steps=train_steps,
         train_size=train_size,
+        poisson_sampling_in_fit=True,
+        seed=0,
     )
     model = keras_api.make_private(model, dp_params)
     model.compile(loss="mse", optimizer="adam")

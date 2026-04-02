@@ -159,6 +159,8 @@ def pad_to_multiple_of(indices: np.ndarray, multiple: int) -> np.ndarray:
   """
   if indices.ndim > 1:
     raise ValueError('pad_to_multiple_of currently expects 1D indices.')
+  if multiple <= 0:
+    raise ValueError(f'Padding multiple must be positive, got {multiple}.')
   curr_size = indices.shape[0]
   pad_size = (multiple - curr_size) % multiple
   new_indices = np.full(curr_size + pad_size, -1, dtype=indices.dtype)
@@ -191,7 +193,7 @@ class BatchSelectionStrategy(abc.ABC):
 class CyclicPoissonSampling(BatchSelectionStrategy):
   """Implements Poisson sampling, possibly with cyclic sampling and truncation.
 
-  This generalizes several common sampling strategies [1,2,3,4],
+  This generalizes several common sampling strategies [1,2,3,4].
 
   References:
   [1] https://arxiv.org/abs/2211.06530

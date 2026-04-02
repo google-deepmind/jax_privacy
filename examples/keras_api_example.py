@@ -82,7 +82,6 @@ def main(_):
   epsilon = 1.1
   delta = 1e-5
   epochs = 5
-  train_size = len(x_train)
   dp = True
   clipping_norm = 1.0
 
@@ -94,6 +93,7 @@ def main(_):
         batch_size=batch_size,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
+        poisson_sampling_in_fit=True,
         seed=0,
         gradient_accumulation_steps=1,
     )
@@ -102,6 +102,8 @@ def main(_):
         f"DP training:{epsilon=} {delta=} {clipping_norm=} {batch_size=} "
         f"{epochs=} {train_size=}"
     )
+    # This example opts into internal Poisson sampling from the per-example
+    # arrays passed to fit().
   else:
     print("Non-DP training")
   model.compile(
@@ -109,13 +111,15 @@ def main(_):
       optimizer="adam",
       metrics=["accuracy"],
   )
-  history = model.fit(
-      x_train,
-      y_train,
-      batch_size=batch_size,
+  fit_kwargs = dict(
+      x=x_train,
+      y=y_train,
       epochs=epochs,
       validation_data=(x_test, y_test),
   )
+  if not dp:
+    fit_kwargs["batch_size"] = batch_size
+  history = model.fit(**fit_kwargs)
   # [END example]
   print("DP: expected train accuracy: ~96%, val accuracy: ~92%")
   print("Non-DP: expected train accuracy: ~98%, val accuracy: ~98%")
