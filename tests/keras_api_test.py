@@ -297,6 +297,63 @@ class KerasApiTest(parameterized.TestCase):
     ):
       keras_api._validate_optimizer(model, dp_params)
 
+  def test_fit_with_weighted_metrics(self):
+    """Verifies that fit with weighted_metrics works.
+
+    There was once a failure related to weighted_metrics introducing shape
+    mismatches in auxiliary outputs, therefore we've added this test case.
+    """
+    batch_size = 2
+    epochs = 1
+    train_size = 4
+
+    input_dim = 3
+    features = 2
+    classes = 4
+
+    inputs = keras.Input(shape=(input_dim, features), dtype="float32")
+    dense = keras.layers.Dense(classes)(inputs)
+
+    model = keras.Model(
+        inputs=inputs,
+        outputs=dense,
+    )
+
+    # Inputs (x): (train_size, input_dim, features)
+    x = np.zeros((train_size, input_dim, features), dtype=np.float32)
+    # Targets (y): (train_size, input_dim) - per-step class indices
+    y = np.zeros((train_size, input_dim), dtype=np.int32)
+    # Sample weights: (train_size, input_dim) - per-step weights
+    sample_weight = np.ones((train_size, input_dim), dtype=np.float32)
+
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=1,
+        train_steps=epochs * (train_size // batch_size),
+        train_size=train_size,
+        poisson_sampling_in_fit=True,
+        seed=0,
+    )
+
+    model = keras_api.make_private(model, dp_params)
+
+    model.compile(
+        loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        optimizer=keras.optimizers.Adam(learning_rate=0.01),
+        weighted_metrics=[keras.metrics.SparseCategoricalAccuracy()],
+    )
+
+    history = model.fit(
+        x, y, batch_size=batch_size, epochs=epochs, sample_weight=sample_weight
+    )
+
+    accuracy_key = "sparse_categorical_accuracy"
+    self.assertIn(accuracy_key, history.history)
+    self.assertGreaterEqual(history.history[accuracy_key][-1], 0.0)
+
   def test_poisson_sampled_training_dataset_batches_and_masks_padding(self):
     x = np.arange(24).reshape(12, 2)
     y = np.arange(12)
