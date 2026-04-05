@@ -38,7 +38,7 @@ from flax import nnx
 import jax
 import jax.extend.backend
 import jax.numpy as jnp
-from jax_privacy import clipped_grad
+from jax_privacy import batch_selection
 from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
@@ -56,6 +56,7 @@ CLIP_NORM = 1.0
 NOISE_MULTIPLIER = 1.0
 EPSILON = 10.0
 DELTA = 1e-6
+PADDING_MULTIPLE = 8
 
 
 # Data loading and preparation
@@ -295,15 +296,6 @@ def main(argv: list[str]) -> None:
 
   opt_state = optimizer.init(params)
 
-  # Configure DP Gradient Clipping
-  grad_fn = clipped_grad(
-      functools.partial(pure_loss_fn, graphdef=graphdef, other=other),
-      l2_clip_norm=CLIP_NORM,
-      batch_argnums=(1, 2),  # x and y are batched
-      prng_argnum=3,  # Explicitly vmap the PRNG key per batch example
-      return_values=True,  # Return loss values for logging
-  )
-
   # Execution Plan Configuration
   dataset_size = len(data)
   config = execution_plan.BandMFExecutionPlanConfig.default(
@@ -318,6 +310,14 @@ def main(argv: list[str]) -> None:
   privatizer = plan.noise_addition_transform
   noise_state = privatizer.init(params)
 
+  # Configure DP Gradient Clipping
+  grad_fn = plan.clipped_grad(
+      functools.partial(pure_loss_fn, graphdef=graphdef, other=other),
+      batch_argnums=(1, 2),  # x and y are batched
+      prng_argnum=3,  # Explicitly vmap the PRNG key per batch example
+      return_values=True,  # Return loss values for logging
+  )
+
   @jax.jit(donate_argnums=(0, 1, 4))
   def train_step(
       params: nnx.State,
@@ -325,6 +325,7 @@ def main(argv: list[str]) -> None:
       batch: Tuple[jax.Array, jax.Array],
       prng_key: jax.Array,
       noise_state: Any,
+      is_padding_example: jax.Array,
   ) -> Tuple[nnx.State, optax.OptState, Any, jax.Array]:
     """Performs a single training step with DP-SGD.
 
@@ -334,20 +335,19 @@ def main(argv: list[str]) -> None:
       batch: A tuple (x, y) of input and target data.
       prng_key: A pseudorandom number generator key.
       noise_state: Current state of the noise mechanism.
+      is_padding_example: Boolean mask indicating padding rows.
 
     Returns:
       Updated params, opt_state, noise_state, and the mean loss for the batch.
     """
+    print(f"DEBUG: Compiling train_step for batch size {batch[0].shape[0]}")
     x, y = batch
 
-    # Handle zero-sized batch explicitly to avoid tracing crash in optax
-    if x.shape[0] == 0:
-      grads = jax.tree_util.tree_map(jnp.zeros_like, params)
-      mean_loss = jnp.array(0.0)
-    else:
-      # Compute clipped gradients and per-example loss values
-      grads, loss = grad_fn(params, x, y, prng_key)
-      mean_loss = loss.values.mean()
+    # Compute clipped gradients and per-example loss values
+    grads, loss = grad_fn(
+        params, x, y, prng_key, is_padding_example=is_padding_example
+    )
+    mean_loss = loss.values.mean()
 
     assert all(
         g.shape == p.shape
@@ -371,22 +371,17 @@ def main(argv: list[str]) -> None:
   iterator = plan.batch_selection_strategy.batch_iterator(dataset_size)
   prng_key = jax.random.key(42)
   for step, batch_indices in enumerate(iterator):
-    if step >= NUM_STEPS:
-      break
-
-    # Construct batch from indices
-    if len(batch_indices) == 0:
-      x = np.zeros((0, CONTEXT_LENGTH), dtype=np.int32)
-      y = np.zeros((0, CONTEXT_LENGTH), dtype=np.int32)
-    else:
-      batch_seqs = data[batch_indices]
-      x = batch_seqs[:, :-1]
-      y = batch_seqs[:, 1:]
+    idx = batch_selection.pad_to_multiple_of(batch_indices, PADDING_MULTIPLE)
+    is_padding_example = idx == -1
+    safe_idx = np.where(idx == -1, 0, idx)
+    batch_seqs = data[safe_idx]
+    x = batch_seqs[:, :-1]
+    y = batch_seqs[:, 1:]
     batch = (x, y)
 
     prng_key, subkey = jax.random.split(prng_key)
     params, opt_state, noise_state, loss = train_step(
-        params, opt_state, batch, subkey, noise_state
+        params, opt_state, batch, subkey, noise_state, is_padding_example
     )
 
     print(f"Step {step + 1}/{NUM_STEPS}, Loss: {loss:.4f}")

@@ -36,8 +36,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+from jax_privacy import batch_selection
 from jax_privacy.batch_selection import UserSelectionStrategy
-from jax_privacy.clipping import clipped_grad
 from jax_privacy.experimental import execution_plan
 
 
@@ -49,6 +49,7 @@ L2_CLIP_NORM = 1.0
 LEARNING_RATE = 1e-3
 EPSILON = 10.0
 DELTA = 1e-6
+PADDING_MULTIPLE = 8
 
 
 class TransformerDecoder(nn.Module):
@@ -142,24 +143,25 @@ def main(argv: list[str]) -> None:
   # We need the grad_fn first.
 
   # 3. Training Step & Clipping
-  def loss_fn(params, batch_data, batch_labels):
-    logits = model.apply({'params': params}, batch_data, train=True)
-    one_hot_labels = jax.nn.one_hot(batch_labels, num_classes=vocab_size)
+  def loss_fn(params, x, y, prng_key=None):
+    del prng_key  # Unused
+    logits = model.apply({'params': params}, x, train=True)
+    one_hot_labels = jax.nn.one_hot(y, num_classes=vocab_size)
     return jnp.mean(
         optax.softmax_cross_entropy(logits=logits, labels=one_hot_labels)
     )
-
-  grad_fn = clipped_grad(
-      loss_fn,
-      l2_clip_norm=L2_CLIP_NORM,
-      batch_argnums=(1, 2),
-      keep_batch_dim=False,
-  )
 
   # Create Plan
   plan = config.plan
   privatizer = plan.noise_addition_transform
   noise_state = privatizer.init(params)
+
+  grad_fn = plan.clipped_grad(
+      loss_fn,
+      batch_argnums=(1, 2),
+      prng_argnum=3,
+      return_values=True,
+  )
 
   # Wrap the plan's strategy with UserSelectionStrategy
   # We assume plan.batch_selection_strategy is compatible
@@ -170,32 +172,37 @@ def main(argv: list[str]) -> None:
   )
 
   @jax.jit(donate_argnums=(0, 1, 4))
-  def train_step(params, opt_state, batch_data, batch_labels, noise_state):
-    grads = grad_fn(params, batch_data, batch_labels)
+  def train_step(
+      params, opt_state, x, y, noise_state, prng_key, is_padding_example
+  ):
+    print(f'DEBUG: Compiling train_step for batch size {x.shape[0]}')
+    grads, loss = grad_fn(
+        params, x, y, prng_key, is_padding_example=is_padding_example
+    )
 
     # Add Privacy Noise (Using plan's privatizer)
     noisy_grads, noise_state = privatizer.update(grads, noise_state)
 
     updates, opt_state = optimizer.update(noisy_grads, opt_state, params)
     params = optax.apply_updates(params, updates)
-    return params, opt_state, noise_state
+    return params, opt_state, noise_state, loss.values.mean()
 
   # 4. Training Loop
   start_time = time.time()
   batch_iterator = user_strategy.batch_iterator(user_ids, rng=0)
+  prng_key = jax.random.key(42)
   for step, user_batch_indices in enumerate(batch_iterator):
-    if user_batch_indices.size == 0:
-      print(f'Step {step}: Skipping empty batch.')
-      continue
+    idx = batch_selection.pad_to_multiple_of(
+        user_batch_indices, PADDING_MULTIPLE
+    )
+    is_padding_example = idx[:, 0] == -1
+    safe_idx = np.where(idx == -1, 0, idx)
+    x = data[safe_idx]
+    y = labels[safe_idx]
 
-    batch_data = data[user_batch_indices]
-    batch_labels = labels[user_batch_indices]
-
-    # Calculate and print loss
-    loss_val = loss_fn(params, batch_data, batch_labels)
-
-    params, opt_state, noise_state = train_step(
-        params, opt_state, batch_data, batch_labels, noise_state
+    prng_key, subkey = jax.random.split(prng_key)
+    params, opt_state, noise_state, loss_val = train_step(
+        params, opt_state, x, y, noise_state, subkey, is_padding_example
     )
     print(f'Step {step}: Loss: {loss_val:.4f}')
 
