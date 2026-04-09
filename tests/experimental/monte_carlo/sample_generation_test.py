@@ -232,6 +232,268 @@ class SampleGenerationTest(parameterized.TestCase):
     # All within 6 standard deviations
     assert np.all(differences <= 6 * stdev)
 
+  @parameterized.product(
+      sampling_info=[
+          # Test no warm-start, positive case.
+          (
+              True,
+              np.array([1.0, 0.5]),
+              0.5,
+              False,
+              [
+                  np.array([2.0, 1.0, 2.0]),
+                  np.array([2.0, 1.0, 1.0]),
+                  np.array([2.0, 1.0, 0.0]),
+                  np.array([1.0, 0.5, 2.0]),
+                  np.array([1.0, 0.5, 1.0]),
+                  np.array([1.0, 0.5, 0.0]),
+                  np.array([0.0, 2.0, 1.0]),
+                  np.array([0.0, 1.0, 0.5]),
+                  np.array([0.0, 0.0, 2.0]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array(
+                  [x / 128 for x in [2, 4, 10, 2, 12, 18, 4, 24, 5, 14, 33]]
+              ),
+              [
+                  np.array([1.0, 0.0, 1.0]),
+                  np.array([1.0, 0.0, 0.0]),
+                  np.array([0.0, 1.0, 0.0]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([1 / 4, 1 / 4, 1 / 4, 1 / 8, 1 / 8]),
+              2,
+              1,
+          ),
+          # Test no warm-start, positive case, larger dataset.
+          (
+              True,
+              np.array([1.0, 0.5]),
+              0.5,
+              False,
+              [
+                  np.array([2.0, 1.0, 2.0]),
+                  np.array([2.0, 1.0, 1.0]),
+                  np.array([2.0, 1.0, 0.0]),
+                  np.array([1.0, 0.5, 2.0]),
+                  np.array([1.0, 0.5, 1.0]),
+                  np.array([1.0, 0.5, 0.0]),
+                  np.array([0.0, 2.0, 1.0]),
+                  np.array([0.0, 1.0, 0.5]),
+                  np.array([0.0, 0.0, 2.0]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([
+                  x / (9 * 2**9)
+                  for x in [32, 144, 208, 60, 774, 894, 48, 1080, 70, 567, 731]
+              ]),
+              [
+                  np.array([2, 0, 2]),
+                  np.array([2, 0, 1]),
+                  np.array([2, 0, 0]),
+                  np.array([1, 1, 1]),
+                  np.array([1, 1, 0]),
+                  np.array([1, 0, 2]),
+                  np.array([1, 0, 1]),
+                  np.array([0, 2, 0]),
+                  np.array([0, 1, 1]),
+                  np.array([0, 1, 0]),
+                  np.array([0, 0, 2]),
+                  np.array([0, 0, 1]),
+                  np.array([0, 0, 0]),
+              ],
+              np.array(
+                  [x / 64 for x in [4, 8, 4, 8, 8, 4, 8, 4, 4, 4, 1, 2, 1]]
+              ),
+              3,
+              2,
+          ),
+          # Test no warm-start, positive case, dataset size - truncated batch
+          # size > 1.
+          (
+              True,
+              np.array([1.0, 0.5]),
+              0.5,
+              False,
+              [
+                  np.array([2.0, 1.0, 2.0]),
+                  np.array([2.0, 1.0, 1.0]),
+                  np.array([2.0, 1.0, 0.0]),
+                  np.array([1.0, 0.5, 2.0]),
+                  np.array([1.0, 0.5, 1.0]),
+                  np.array([1.0, 0.5, 0.0]),
+                  np.array([0.0, 2.0, 1.0]),
+                  np.array([0.0, 1.0, 0.5]),
+                  np.array([0.0, 0.0, 2.0]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([
+                  x / (9 * 2**9)
+                  for x in [
+                      116,
+                      132,
+                      520,
+                      60,
+                      162,
+                      354,
+                      240,
+                      648,
+                      310,
+                      381,
+                      1685,
+                  ]
+              ]),
+              [
+                  np.array([2, 0, 2]),
+                  np.array([2, 0, 1]),
+                  np.array([2, 0, 0]),
+                  np.array([1, 1, 1]),
+                  np.array([1, 1, 0]),
+                  np.array([1, 0, 2]),
+                  np.array([1, 0, 1]),
+                  np.array([0, 2, 0]),
+                  np.array([0, 1, 1]),
+                  np.array([0, 1, 0]),
+                  np.array([0, 0, 2]),
+                  np.array([0, 0, 1]),
+                  np.array([0, 0, 0]),
+              ],
+              np.array(
+                  [x / 64 for x in [4, 8, 4, 8, 8, 4, 8, 4, 4, 4, 1, 2, 1]]
+              ),
+              3,
+              1,
+          ),
+          # Test yes warm-start, positive case.
+          (
+              True,
+              np.array([1.0, 0.5]),
+              0.5,
+              True,
+              [
+                  np.array([2.0, 1.0, 2.0]),
+                  np.array([2.0, 1.0, 1.0]),
+                  np.array([2.0, 1.0, 0.0]),
+                  np.array([1.0, 0.5, 2.0]),
+                  np.array([1.0, 0.5, 1.0]),
+                  np.array([1.0, 0.5, 0.0]),
+                  np.array([0.0, 2.0, 1.0]),
+                  np.array([0.0, 1.0, 0.5]),
+                  np.array([0.0, 0.0, 2.0]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array(
+                  [x / 144 for x in [1, 2, 5, 2, 12, 18, 8, 32, 5, 18, 41]]
+              ),
+              [
+                  np.array([1.0, 0.0, 1.0]),
+                  np.array([1.0, 0.0, 0.0]),
+                  np.array([0.0, 1.0, 0.0]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([1 / 6, 1 / 6, 1 / 3, 1 / 6, 1 / 6]),
+              2,
+              1,
+          ),
+          # Test no warm-start, negative case.
+          (
+              False,
+              np.array([1.0, 0.5]),
+              0.5,
+              False,
+              [
+                  np.array([-1.0, -0.5, -1.0]),
+                  np.array([-1.0, -0.5, 0.0]),
+                  np.array([0.0, -1.0, -0.5]),
+                  np.array([0.0, 0.0, -1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([x / 128 for x in [2, 14, 4, 7, 101]]),
+              [
+                  np.array([1.0, 0.0, 1.0]),
+                  np.array([1.0, 0.0, 0.0]),
+                  np.array([0.0, 1.0, 0.0]),
+                  np.array([0.0, 0.0, 1.0]),
+                  np.array([0.0, 0.0, 0.0]),
+              ],
+              np.array([1 / 4, 1 / 4, 1 / 4, 1 / 8, 1 / 8]),
+              2,
+              1,
+          ),
+      ],
+      use_vectorized=[True, False],
+  )
+  def test_generate_b_min_sep_sample_low_noise_with_truncation(
+      self,
+      sampling_info,
+      use_vectorized,
+  ):
+    (
+        positive_sample,
+        c_col,
+        sampling_prob,
+        warm_start,
+        modes,
+        mode_distribution,
+        rbs_modes,
+        rbs_distribution,
+        dataset_size,
+        truncated_batch_size,
+    ) = sampling_info
+    sampling_scheme = batch_selection.BMinSepSampling(
+        sampling_prob=sampling_prob,
+        min_sep=2,
+        iterations=3,
+        warm_start=warm_start,
+        truncated_batch_size=truncated_batch_size,
+    )
+    mode_counts = np.zeros(len(modes))
+    rbs_counts = np.zeros(len(rbs_modes))
+    noise_multiplier = 1e-9
+    num_samples = 10000
+    if use_vectorized:
+      samples, rbs = sample_generation.generate_sample(
+          sampling_scheme,
+          noise_multiplier,
+          c_col,
+          positive_sample=positive_sample,
+          num_samples=num_samples,
+          dataset_size=dataset_size,
+      )
+    else:
+      samples = np.zeros((3, num_samples))
+      rbs = np.zeros((3, num_samples))
+      for i in range(num_samples):
+        samples[:, i], rbs[:, i] = sample_generation.generate_sample(
+            sampling_scheme,
+            noise_multiplier,
+            c_col,
+            positive_sample=positive_sample,
+            dataset_size=dataset_size,
+        )
+    for i, mode in enumerate(modes):
+      for j in range(num_samples):
+        if np.allclose(samples[:, j], mode, atol=1e-6):
+          mode_counts[i] += 1
+    for i, rbs_mode in enumerate(rbs_modes):
+      for j in range(num_samples):
+        if np.allclose(rbs[:, j], rbs_mode, atol=1e-6):
+          rbs_counts[i] += 1
+
+    differences = np.abs(mode_counts - num_samples * mode_distribution)
+    stdev = np.sqrt(num_samples * mode_distribution * (1 - mode_distribution))
+    assert np.all(differences <= 6 * stdev)
+
+    differences = np.abs(rbs_counts - num_samples * rbs_distribution)
+    stdev = np.sqrt(num_samples * rbs_distribution * (1 - rbs_distribution))
+    assert np.all(differences <= 6 * stdev)
+
   @parameterized.parameters([
       (
           np.array([1.0, 0.0, 1.0, 0.0]),
