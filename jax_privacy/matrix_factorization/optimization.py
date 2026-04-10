@@ -115,7 +115,7 @@ def optimize(
 
   # MF-style strategy optimization problems are numerically sensitive to
   # precision, so we use f64 internally.
-  original_dtypes = jax.tree.map(jnp.dtype, params)
+  original_dtypes = jax.tree.map(lambda x: x.dtype, params)
 
   params = jax.tree.map(jnp.float64, params)
   state = optimizer.init(params)
