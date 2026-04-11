@@ -50,8 +50,10 @@ _STRATEGY = flags.DEFINE_enum(
         'dense',
         'banded',
         'banded-toeplitz',
+        'banded-inverse-toeplitz',
         'blt',
         'banded-sqrt',
+        'banded-inverse-sqrt',
         'normalized-banded-toeplitz',
     ],
     'Strategy class to optimize over.  See code for details.',
@@ -104,6 +106,35 @@ def optimize_strategy(
       pqe = toeplitz.per_query_error(strategy_coef=strategy_coef, n=n)
       loss = reduction_fn(pqe) * sensitivity_squared
 
+    case 'banded-inverse-toeplitz':
+      # https://arxiv.org/pdf/2505.12128
+      weight_decay = 1.0
+      momentum = 0.0
+      workload_coef = toeplitz.multiply(
+          weight_decay**jnp.arange(n),
+          momentum**jnp.arange(n),
+          n=n,
+          skip_checks=True,
+      )
+      noising_coef = toeplitz.optimize_banded_inverse_toeplitz(
+          n=n,
+          min_sep=sep,
+          num_bands=sep,
+          weight_decay=weight_decay,
+          momentum=momentum,
+          max_optimizer_steps=10,
+      )
+      sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity(
+          n=n,
+          noising_coef=noising_coef,
+          min_sep=sep,
+          max_participations=participations,
+      ) ** 2
+      pqe = toeplitz.per_query_error(
+          noising_coef=noising_coef, n=n, workload_coef=workload_coef
+      )
+      loss = reduction_fn(pqe) * sensitivity_squared
+
     case 'normalized-banded-toeplitz':
       # https://arxiv.org/abs/2405.15913
       def loss_fn(coef):  # pylint: disable=function-redefined
@@ -136,6 +167,30 @@ def optimize_strategy(
           strategy_coef, min_sep=sep, max_participations=participations
       )
       pqe = toeplitz.per_query_error(strategy_coef=strategy_coef, n=n)
+      loss = reduction_fn(pqe) * sensitivity_squared
+
+    case 'banded-inverse-sqrt':
+      # https://arxiv.org/pdf/2505.12128
+      weight_decay = 1.0
+      momentum = 0.0
+      workload_coef = toeplitz.multiply(
+          weight_decay**jnp.arange(n),
+          momentum**jnp.arange(n),
+          n=n,
+          skip_checks=True,
+      )
+      noising_coef = toeplitz.banded_inverse_square_root_noising_coefs(
+          sep, weight_decay=weight_decay, momentum=momentum
+      )
+      sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity(
+          n=n,
+          noising_coef=noising_coef,
+          min_sep=sep,
+          max_participations=participations,
+      ) ** 2
+      pqe = toeplitz.per_query_error(
+          noising_coef=noising_coef, n=n, workload_coef=workload_coef
+      )
       loss = reduction_fn(pqe) * sensitivity_squared
 
     case 'banded':
