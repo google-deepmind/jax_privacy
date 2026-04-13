@@ -214,8 +214,18 @@ class BandMFExecutionPlanConfig:
   ...     sampling_prob=0.4,
   ... )
 
-  References: https://arxiv.org/abs/2306.08153 and
-  https://arxiv.org/abs/2405.15913
+    - num_bands=1
+    - sampling_prob = expected_batch_size / num_examples
+    - partition_type = INDEPENDENT
+    - neighboring_relation = ADD_OR_REMOVE_ONE
+    - accountant = PLDAccountant(ADD_OR_REMOVE_ONE)
+
+  This yields the usual Poisson sampling analysis, and uses uncorrelated
+  Gaussian noise (the BandMF strategy degenerates to the identity matrix).
+
+  References:
+  - https://arxiv.org/abs/2306.08153
+  - https://arxiv.org/abs/2405.15913
 
   Attributes:
     epsilon: The desired privacy budget.
