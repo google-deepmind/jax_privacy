@@ -70,6 +70,7 @@ examples = [
     "tensorflow_datasets",
     "randomgen",
     "importlib_resources",
+    "opencv-python",
 ]
 
 docs = [

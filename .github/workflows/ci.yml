@@ -137,13 +137,6 @@ jobs:
           name: pytest-reports-${{ matrix.os }}
           path: report*.xml
 
-      - name: Upload coverage to Codecov
-        if: runner.os == 'Linux'
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.xml
-
   matrix-tests:
     name: "Heavy Tests: Linux Only"
     needs: [check_rebase, lint]
