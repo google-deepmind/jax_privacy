@@ -767,14 +767,15 @@ def banded_inverse_square_root_noising_coefs(
       weight_decay_coefs, momentum_coefs, n=num_bands, skip_checks=True
   )
 
-def compute_banded_inverse_sensitivity(
+
+def compute_banded_inverse_sensitivity_squared(
     n: int,
     noising_coef: jax.Array,
     min_sep: int,
     max_participations: int | None = None,
     use_matrix_upper_bound: bool = False,
-) -> float:
-  """Returns the sensitivity of a banded inverse Toeplitz noising matrix.
+) -> jax.Array:
+  """Returns the squared sensitivity of a banded inverse Toeplitz noising matrix.
 
   This function takes Toeplitz coefficients of a lower-triangular noising
   matrix $C^{-1}$, computes the implied strategy coefficients for $C$, and then
@@ -800,33 +801,24 @@ def compute_banded_inverse_sensitivity(
       bound.
 
   Returns:
-    The b-min-separated sensitivity of the implied strategy matrix $C$.
+    The squared b-min-separated sensitivity of the implied strategy matrix $C$.
   """
-  noising_coef = pad_coefs_to_n(noising_coef, n)
   strategy_coef = inverse_coef(noising_coef, n)
-  abs_strategy_coef = jnp.abs(strategy_coef)
-  is_nonincreasing = jnp.all(abs_strategy_coef[1:] <= abs_strategy_coef[:-1])
 
   if not use_matrix_upper_bound:
-    coef_for_upper_bound = abs_strategy_coef
-    if not is_nonincreasing:
-      coef_for_upper_bound = jax.lax.cummax(abs_strategy_coef[::-1])[::-1]
-    return float(
-        jnp.sqrt(
-            minsep_sensitivity_squared(
+    coef_for_upper_bound = jax.lax.cummax(jnp.abs(strategy_coef)[::-1])[::-1]
+    return minsep_sensitivity_squared(
                 coef_for_upper_bound,
                 min_sep=min_sep,
                 max_participations=max_participations,
                 n=n,
                 skip_checks=True,
-            )
-        )
     )
 
-  strategy_matrix = materialize_lower_triangular(abs_strategy_coef, n)
+  strategy_matrix = materialize_lower_triangular(jnp.abs(strategy_coef), n)
   return sensitivity.get_min_sep_sensitivity_upper_bound(
       strategy_matrix, min_sep=min_sep, max_participations=max_participations
-  )
+  ) ** 2
 
 
 def optimize_banded_inverse_toeplitz(
@@ -834,17 +826,19 @@ def optimize_banded_inverse_toeplitz(
     min_sep: int,
     num_bands: int,
     noising_coef: jax.Array | None = None,
+    max_participations: int | None = None,
     weight_decay: float = 1.0,
     momentum: float = 0.0,
-    max_optimizer_steps: int = 10,
+    max_optimizer_steps: int = 1000,
+    reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
 ) -> jax.Array:
   """Optimize over banded inverse Toeplitz noising matrices for BandInvMF.
 
   This function optimizes directly over the Toeplitz coefficients of the
   lower-triangular noising matrix $C^{-1}$ for the BandInvMF workload from
-  https://arxiv.org/pdf/2505.12128. The objective is mean per-query squared
-  error on the induced workload times the squared `min_sep` sensitivity of the
-  implied strategy matrix $C$.
+  https://arxiv.org/pdf/2505.12128. The objective is the reduced per-query
+  squared error on the induced workload times the squared `min_sep`
+  sensitivity of the implied strategy matrix $C$.
 
   Args:
     n: The number of iterations that defines the workload.
@@ -854,23 +848,27 @@ def optimize_banded_inverse_toeplitz(
     noising_coef: Optional initialization for the noising coefficients. If not
       provided, initializes from `banded_inverse_square_root_noising_coefs`.
       If longer than `num_bands`, the extra coefficients are ignored.
+    max_participations: Optional cap on the number of participations.
     weight_decay: The weight decay factor defining the workload.
     momentum: The momentum factor defining the workload.
     max_optimizer_steps: The maximum number of L-BFGS iterations.
+    reduction_fn: A function that converts per query squared errors to a scalar.
+      Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
+      squared error, or lambda v: v[-1] to optimize last iterate squared error.
+      Defaults to jnp.mean.
 
   Returns:
     The optimized Toeplitz coefficients of the lower-triangular noising matrix $C^{-1}$.
   """
   workload_coef = multiply(
-      weight_decay**jnp.arange(n),
-      momentum**jnp.arange(n),
+      weight_decay ** jnp.arange(n),
+      momentum ** jnp.arange(n),
       n=n,
       skip_checks=True,
   )
 
   def loss_fn(coef: jax.Array) -> jax.Array:
-    strategy_coef = solve_banded(coef, jnp.zeros(n).at[0].set(1))
-    error = jnp.mean(
+    error = reduction_fn(
         per_query_error(
             noising_coef=coef,
             n=n,
@@ -878,12 +876,12 @@ def optimize_banded_inverse_toeplitz(
             skip_checks=True,
         )
     )
-    sens_squared = minsep_sensitivity_squared(
-        strategy_coef,
-        min_sep=min_sep,
-        max_participations=None,
+    sens_squared = compute_banded_inverse_sensitivity_squared(
         n=n,
-        skip_checks=True,
+        noising_coef=coef,
+        min_sep=min_sep,
+        max_participations=max_participations,
+        use_matrix_upper_bound=False,
     )
 
     return error * sens_squared
@@ -895,6 +893,6 @@ def optimize_banded_inverse_toeplitz(
   noising_coef = pad_coefs_to_n(noising_coef, num_bands)
 
   params = optimization.optimize(
-        loss_fn, noising_coef, max_optimizer_steps=max_optimizer_steps
+      loss_fn, noising_coef, max_optimizer_steps=max_optimizer_steps
   )
   return params / params[0]

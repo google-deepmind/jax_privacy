@@ -111,8 +111,8 @@ def optimize_strategy(
       weight_decay = 1.0
       momentum = 0.0
       workload_coef = toeplitz.multiply(
-          weight_decay**jnp.arange(n),
-          momentum**jnp.arange(n),
+          weight_decay ** jnp.arange(n),
+          momentum ** jnp.arange(n),
           n=n,
           skip_checks=True,
       )
@@ -122,14 +122,15 @@ def optimize_strategy(
           num_bands=sep,
           weight_decay=weight_decay,
           momentum=momentum,
-          max_optimizer_steps=10,
+          max_optimizer_steps=1000,
+          reduction_fn=reduction_fn,
       )
-      sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity(
+      sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity_squared(
           n=n,
           noising_coef=noising_coef,
           min_sep=sep,
           max_participations=participations,
-      ) ** 2
+      ) 
       pqe = toeplitz.per_query_error(
           noising_coef=noising_coef, n=n, workload_coef=workload_coef
       )
@@ -163,6 +164,7 @@ def optimize_strategy(
       # https://arxiv.org/abs/2202.11205
       # https://arxiv.org/abs/2405.13763
       strategy_coef = toeplitz.optimal_max_error_strategy_coefs(sep)
+      strategy_coef = jnp.concatenate([strategy_coef, jnp.zeros(n - sep)])
       sensitivity_squared = toeplitz.minsep_sensitivity_squared(
           strategy_coef, min_sep=sep, max_participations=participations
       )
@@ -174,20 +176,20 @@ def optimize_strategy(
       weight_decay = 1.0
       momentum = 0.0
       workload_coef = toeplitz.multiply(
-          weight_decay**jnp.arange(n),
-          momentum**jnp.arange(n),
+          weight_decay ** jnp.arange(n),
+          momentum ** jnp.arange(n),
           n=n,
           skip_checks=True,
       )
       noising_coef = toeplitz.banded_inverse_square_root_noising_coefs(
           sep, weight_decay=weight_decay, momentum=momentum
       )
-      sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity(
+      sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity_squared(
           n=n,
           noising_coef=noising_coef,
           min_sep=sep,
           max_participations=participations,
-      ) ** 2
+      )
       pqe = toeplitz.per_query_error(
           noising_coef=noising_coef, n=n, workload_coef=workload_coef
       )

@@ -146,6 +146,58 @@ class ToeplitzTest(parameterized.TestCase):
         atol=1e-6,
     )
 
+  def test_banded_inverse_square_root_noising_coefs(self):
+    np.testing.assert_allclose(
+        toeplitz.banded_inverse_square_root_noising_coefs(5),
+        jnp.array([1, -1 / 2, -1 / 8, -1 / 16, -5 / 128]),
+        atol=1e-6,
+    )
+
+  @parameterized.named_parameters((f'{k=}', k) for k in [1, 2, 4, 8, 16])
+  def test_banded_inverse_sensitivity_squared_matches_toeplitz(
+      self, max_participations
+  ):
+    num_bands = 8
+    n = 128
+    min_sep = n // max_participations
+
+    noising_coef = toeplitz.banded_inverse_square_root_noising_coefs(num_bands)
+    strategy_coef = toeplitz.inverse_coef(noising_coef, n=n)
+
+    projected_sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity_squared(
+            n=n,
+            noising_coef=noising_coef,
+            min_sep=min_sep,
+            max_participations=max_participations,
+            use_matrix_upper_bound=False,
+    )
+    matrix_sensitivity_squared = (
+        toeplitz.compute_banded_inverse_sensitivity_squared(
+            n=n,
+            noising_coef=noising_coef,
+            min_sep=min_sep,
+            max_participations=max_participations,
+            use_matrix_upper_bound=True,
+        )
+    )
+    toeplitz_sensitivity_squared = toeplitz.minsep_sensitivity_squared(
+        strategy_coef,
+        min_sep=min_sep,
+        max_participations=max_participations,
+        n=n,
+    )
+
+    np.testing.assert_allclose(
+        projected_sensitivity_squared,
+        toeplitz_sensitivity_squared,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        matrix_sensitivity_squared,
+        toeplitz_sensitivity_squared,
+        atol=1e-6,
+    )
+
   @parameterized.named_parameters(
       ('full', 16, 16),
       ('basic', 15, 6),
@@ -461,6 +513,74 @@ class ToeplitzOptimizationTest(parameterized.TestCase):
         toeplitz.loss(strategy_coef=coef2, n=16),
         toeplitz.loss(strategy_coef=coef1, n=16),
     )
+
+  @parameterized.named_parameters((f'{k=}', k) for k in [1, 2, 4, 8, 16])
+  def test_optimize_banded_inverse_toeplitz_improves_over_bisr(
+      self, max_participations
+  ):
+    n = 128
+    min_sep = n // max_participations
+    num_bands = 8
+    weight_decay = 1.0
+    momentum = 0.0
+
+    workload_coef = toeplitz.multiply(
+        weight_decay ** jnp.arange(n),
+        momentum ** jnp.arange(n),
+        n=n,
+        skip_checks=True,
+    )
+
+    optimized_coef = toeplitz.optimize_banded_inverse_toeplitz(
+        n=n,
+        min_sep=min_sep,
+        num_bands=num_bands,
+        max_participations=max_participations,
+        weight_decay=weight_decay,
+        momentum=momentum,
+        max_optimizer_steps=100,
+        reduction_fn=jnp.mean,
+    )
+    bisr_coef = toeplitz.banded_inverse_square_root_noising_coefs(
+        num_bands, weight_decay=weight_decay, momentum=momentum
+    )
+
+    self.assertTrue(jnp.all(jnp.isfinite(optimized_coef)))
+    np.testing.assert_allclose(optimized_coef[0], 1.0, atol=1e-6)
+
+    optimized_error = jnp.mean(
+        toeplitz.per_query_error(
+            noising_coef=optimized_coef,
+            n=n,
+            workload_coef=workload_coef,
+        )
+    )
+    optimized_sensitivity_squared = (
+        toeplitz.compute_banded_inverse_sensitivity_squared(
+            n=n,
+            noising_coef=optimized_coef,
+            min_sep=min_sep,
+            max_participations=max_participations,
+        )
+    )
+    optimized_loss = optimized_error * optimized_sensitivity_squared
+
+    bisr_error = jnp.mean(
+        toeplitz.per_query_error(
+            noising_coef=bisr_coef,
+            n=n,
+            workload_coef=workload_coef,
+        )
+    )
+    bisr_sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity_squared(
+        n=n,
+        noising_coef=bisr_coef,
+        min_sep=min_sep,
+        max_participations=max_participations,
+    )
+    bisr_loss = bisr_error * bisr_sensitivity_squared
+
+    self.assertLessEqual(optimized_loss, bisr_loss)
 
 
 class ToeplitzAmplificationTest(parameterized.TestCase):
