@@ -130,7 +130,7 @@ def optimize_strategy(
           noising_coef=noising_coef,
           min_sep=sep,
           max_participations=participations,
-      ) 
+      )
       pqe = toeplitz.per_query_error(
           noising_coef=noising_coef, n=n, workload_coef=workload_coef
       )
@@ -164,7 +164,6 @@ def optimize_strategy(
       # https://arxiv.org/abs/2202.11205
       # https://arxiv.org/abs/2405.13763
       strategy_coef = toeplitz.optimal_max_error_strategy_coefs(sep)
-      strategy_coef = jnp.concatenate([strategy_coef, jnp.zeros(n - sep)])
       sensitivity_squared = toeplitz.minsep_sensitivity_squared(
           strategy_coef, min_sep=sep, max_participations=participations
       )
