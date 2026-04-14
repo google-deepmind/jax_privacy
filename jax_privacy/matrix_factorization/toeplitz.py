@@ -775,7 +775,8 @@ def compute_banded_inverse_sensitivity_squared(
     max_participations: int | None = None,
     use_matrix_upper_bound: bool = False,
 ) -> jax.Array:
-  """Returns the squared sensitivity of a banded inverse Toeplitz noising matrix.
+  """Returns the squared sensitivity of a banded inverse Toeplitz noising
+  matrix.
 
   This function takes Toeplitz coefficients of a lower-triangular noising
   matrix $C^{-1}$, computes the implied strategy coefficients for $C$, and then
@@ -863,7 +864,8 @@ def optimize_banded_inverse_toeplitz(
       Defaults to jnp.mean.
 
   Returns:
-    The optimized Toeplitz coefficients of the lower-triangular noising matrix $C^{-1}$.
+    The optimized Toeplitz coefficients of the lower-triangular noising
+    matrix $C^{-1}$.
   """
   workload_coef = multiply(
       weight_decay ** jnp.arange(n),
