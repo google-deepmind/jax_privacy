@@ -741,7 +741,7 @@ def banded_inverse_square_root_noising_coefs(
     weight_decay: float = 1.0,
     momentum: float = 0.0,
 ) -> jax.Array:
-  """Returns Toeplitz noising coefficients for the BISR factorization.
+  r"""Returns Toeplitz noising coefficients for the BISR factorization.
 
   This computes the first `num_bands` coefficients of the lower-triangular
   Toeplitz noising matrix $C^{-1}$ for the Banded Inverse Square Root (BISR)
@@ -808,17 +808,22 @@ def compute_banded_inverse_sensitivity_squared(
   if not use_matrix_upper_bound:
     coef_for_upper_bound = jax.lax.cummax(jnp.abs(strategy_coef)[::-1])[::-1]
     return minsep_sensitivity_squared(
-                coef_for_upper_bound,
-                min_sep=min_sep,
-                max_participations=max_participations,
-                n=n,
-                skip_checks=True,
+        coef_for_upper_bound,
+        min_sep=min_sep,
+        max_participations=max_participations,
+        n=n,
+        skip_checks=True,
     )
 
   strategy_matrix = materialize_lower_triangular(jnp.abs(strategy_coef), n)
-  return sensitivity.get_min_sep_sensitivity_upper_bound(
-      strategy_matrix, min_sep=min_sep, max_participations=max_participations
-  ) ** 2
+  return (
+      sensitivity.get_min_sep_sensitivity_upper_bound(
+          strategy_matrix,
+          min_sep=min_sep,
+          max_participations=max_participations,
+      )
+      ** 2
+  )
 
 
 def optimize_banded_inverse_toeplitz(

@@ -17,6 +17,7 @@
 # may occur. If `jax` is installed via a pip package, it should already be
 # optimized.
 
+"""Tests for toeplitz.py."""
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -164,12 +165,14 @@ class ToeplitzTest(parameterized.TestCase):
     noising_coef = toeplitz.banded_inverse_square_root_noising_coefs(num_bands)
     strategy_coef = toeplitz.inverse_coef(noising_coef, n=n)
 
-    projected_sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity_squared(
+    projected_sensitivity_squared = (
+        toeplitz.compute_banded_inverse_sensitivity_squared(
             n=n,
             noising_coef=noising_coef,
             min_sep=min_sep,
             max_participations=max_participations,
             use_matrix_upper_bound=False,
+        )
     )
     matrix_sensitivity_squared = (
         toeplitz.compute_banded_inverse_sensitivity_squared(
@@ -572,11 +575,13 @@ class ToeplitzOptimizationTest(parameterized.TestCase):
             workload_coef=workload_coef,
         )
     )
-    bisr_sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity_squared(
-        n=n,
-        noising_coef=bisr_coef,
-        min_sep=min_sep,
-        max_participations=max_participations,
+    bisr_sensitivity_squared = (
+        toeplitz.compute_banded_inverse_sensitivity_squared(
+            n=n,
+            noising_coef=bisr_coef,
+            min_sep=min_sep,
+            max_participations=max_participations,
+        )
     )
     bisr_loss = bisr_error * bisr_sensitivity_squared
 
