@@ -20,9 +20,12 @@ benefit of this assumption is that we can compute Cx efficiently via
 convolution. The analysis behind the methods here can be extended to other
 families of C, but that is beyond the current scope of this library.
 
-Docstrings will refer to an example being included or excluded from the dataset,
-i.e. the add-remove adjacency, but this is equivalent to the zero-out adjacency
-as of now for all methods in this library.
+Docstrings will refer to an example being included or excluded from the dataset.
+The intended adjacency to use this library with is the zero-out adjacency, so
+excluded really means the sensitive example is zeroed out. When truncation is
+not used, zero-out is equivalent to add-remove. Otherwise add-remove is
+generally not compatible with truncation due to the need for the dataset size to
+be public.
 """
 
 from jax_privacy import batch_selection
@@ -112,7 +115,7 @@ def _generate_balls_in_bins_sample(
   return rng.normal(loc=mode, scale=noise_multiplier)
 
 
-def _sample_b_min_sep_positive_modes(
+def _sample_b_min_sep_positive_modes_no_truncation(
     strategy: batch_selection.BMinSepSampling,
     c_col: np.ndarray,
     rng: np.random.Generator,
@@ -143,6 +146,128 @@ def _sample_b_min_sep_positive_modes(
   return mode
 
 
+def _sample_b_min_sep_modes_with_truncation(
+    strategy: batch_selection.BMinSepSampling,
+    c_col: np.ndarray,
+    rng: np.random.Generator,
+    num_samples: int,
+    positive_sample: bool,
+    dataset_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+  """Samples Cx from distribution induced by truncated b-min-sep sampling.
+
+  See Appendix D of https://arxiv.org/abs/2602.09338 for a derivation.
+
+  Args:
+    strategy: The b-min-sep sampling strategy to use.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D.
+    rng: The rng or seed to use for sampling.
+    num_samples: The number of samples to generate.
+    positive_sample: If True, we sample from the distribution in the dominating
+      pair corresponding to the case where the sensitive example is included.
+      Otherwise, we sample from the other case in the dominating pair, where the
+      sensitive example is not included.
+    dataset_size: The size of the dataset. This method is only called when
+      strategy.truncated_batch_size is not None.
+
+  Returns:
+    Sample(s) from the distribution induced by truncated b-min-sep sampling.
+    Also returns an extra array stating the pre-truncation batch sizes excluding
+    the sensitive example.
+  """
+
+  # Rename for brevity and alignment with paper.
+  b = strategy.min_sep
+  p = strategy.sampling_prob
+  n = strategy.iterations
+  B_max = strategy.truncated_batch_size  # pylint: disable=invalid-name
+  mode = np.zeros((n, num_samples))
+
+  # Track the batch size only counting non-sensitive examples, prior to
+  # truncation. If we have a warm start, we simulate the warm-start by
+  # initializing batch sizes for rounds -b to -1. So, row i of rest_batch_sizes
+  # corresponds to round i - b for now.
+  rest_batch_sizes = np.zeros((n + b, num_samples), dtype=np.int32)
+
+  # There is a discrepancy in the convention we use for initializing
+  # rest_batch_sizes_total depending on whether warm_start is enabled (and thus
+  # whether we need to account for a history of b rounds). This discrepancy
+  # is resolved by the rest_batch_sizes_total -= rest_batch_sizes[0, :] line
+  # in the first iteration of the loop below.
+  if strategy.warm_start:
+    warm_start_probs = np.zeros(b)
+    warm_start_probs[0] = 1.0 / (1.0 + (b - 1) * p)
+    warm_start_probs[1:] = p * warm_start_probs[0]
+    last_part = rng.choice(b, p=warm_start_probs, size=num_samples) - b
+    rest_batch_sizes[:b, :] = rng.multinomial(
+        n=dataset_size - 1, pvals=warm_start_probs, size=num_samples
+    ).transpose()
+    rest_batch_sizes_total = np.full(
+        num_samples, dataset_size - 1, dtype=np.int32
+    )
+  else:
+    last_part = np.full(num_samples, -b, dtype=np.int32)
+    rest_batch_sizes_total = np.zeros(num_samples, dtype=np.int32)
+  # We only actually care about rest_batch_sizes for rounds where the sensitive
+  # example is included. However, we are not aware of a trick which allows us to
+  # only sample those values without computing the full history of
+  # rest_batch_sizes. So, we just compute the full history for simplicity. Later
+  # we will do a while loop which only considers the rounds where the sensitive
+  # example is included, and index into rest_batch_sizes with those rounds.
+  for i in range(n):
+    rest_batch_sizes_total -= rest_batch_sizes[i, :]
+    rest_batch_sizes[i + b, :] = rng.binomial(
+        n=dataset_size - 1 - rest_batch_sizes_total,
+        p=p,
+    )
+    rest_batch_sizes_total += rest_batch_sizes[i + b, :]
+
+  # We no longer need the rows corresponding to negative rounds.
+  rest_batch_sizes = rest_batch_sizes[b:, :]
+
+  x_truncated = 2.0 if positive_sample else -1.0
+  x_non_truncated = 1.0 if positive_sample else 0.0
+
+  cols = np.broadcast_to(
+      np.arange(num_samples)[:, None], (num_samples, c_col.size)
+  )
+  c_col_vals = np.broadcast_to(c_col, (num_samples, c_col.size))
+  # See the comment above about why we track the full history of
+  # rest_batch_sizes, but this loop only needs to consider the rounds where the
+  # sensitive example is included.
+  while np.min(last_part) < n:
+    last_part = last_part + b - 1 + rng.geometric(p, size=num_samples)
+    x_vals = np.zeros(num_samples, dtype=float)
+    active_mask = last_part < n
+    num_active = np.count_nonzero(active_mask)
+    if num_active > 0:
+      active_indices = np.arange(num_samples)[active_mask]
+      active_last_part = last_part[active_mask]
+      indicator = rest_batch_sizes[active_last_part, active_indices] >= B_max
+      # If no truncation, x = x_non_truncated by default.
+      x_active = np.full(num_active, x_non_truncated)
+      if np.any(indicator):
+        active_rest_batch_sizes = rest_batch_sizes[
+            active_last_part[indicator], active_indices[indicator]
+        ]
+        retention_prob = B_max / (active_rest_batch_sizes + 1)
+        retained = rng.binomial(
+            n=1,
+            p=retention_prob,
+            size=np.count_nonzero(indicator),
+        ).astype(bool)
+        # If truncation and retained, x = x_truncated.
+        # If truncation and not retained, x = 0.
+        x_active[indicator] = np.where(retained, x_truncated, 0.0)
+      x_vals[active_mask] = x_active
+      vals = c_col_vals * x_vals[:, None]
+      rows = last_part[:, None] + np.arange(c_col.size)
+      mask = rows < n
+      np.add.at(mode, (rows[mask], cols[mask]), vals[mask])
+  return mode, rest_batch_sizes
+
+
 def _generate_b_min_sep_sample(
     strategy: batch_selection.BMinSepSampling,
     noise_multiplier: float,
@@ -150,7 +275,8 @@ def _generate_b_min_sep_sample(
     seed: Seed = None,
     positive_sample: bool = True,
     num_samples: int | None = None,
-) -> np.ndarray:
+    dataset_size: int | None = None,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
   """Samples from the dominating pair for DP-BandMF using b-min-sep sampling.
 
   See https://arxiv.org/abs/2602.09338 for details.
@@ -169,9 +295,13 @@ def _generate_b_min_sep_sample(
       sensitive example is not included.
     num_samples: The number of samples to generate. None means generate a single
       sample.
+    dataset_size: The size of the dataset. Only used if
+      strategy.truncated_batch_size is not None.
 
   Returns:
     Sample(s) from the dominating PLD for DP-BandMF using b-min-sep sampling.
+    If strategy.truncated_batch_size is not None, we also return an extra array
+    stating the pre-truncation batch sizes excluding the sensitive example.
   """
   if c_col.size > strategy.min_sep:
     raise ValueError('c_col must have length less than or equal to min_sep.')
@@ -180,16 +310,28 @@ def _generate_b_min_sep_sample(
   rng = np.random.default_rng(seed)
   # For simplicity, if num_samples is None, we still create a 2D array.
   num_samples_or_one = num_samples or 1
-  if positive_sample:
-    mode = _sample_b_min_sep_positive_modes(
+  if strategy.truncated_batch_size:
+    mode, rest_batch_sizes = _sample_b_min_sep_modes_with_truncation(
+        strategy, c_col, rng, num_samples_or_one, positive_sample, dataset_size
+    )
+  elif positive_sample:
+    mode = _sample_b_min_sep_positive_modes_no_truncation(
         strategy, c_col, rng, num_samples_or_one
     )
+    rest_batch_sizes = None
   else:
     mode = np.zeros((strategy.iterations, num_samples_or_one))
+    rest_batch_sizes = None
   if num_samples is None:
-    return rng.normal(loc=mode[:, 0], scale=noise_multiplier)
+    output = rng.normal(loc=mode[:, 0], scale=noise_multiplier)
   else:
-    return rng.normal(loc=mode, scale=noise_multiplier)
+    output = rng.normal(loc=mode, scale=noise_multiplier)
+  if rest_batch_sizes is None:
+    return output
+  else:
+    if num_samples is None:
+      rest_batch_sizes = rest_batch_sizes[:, 0]
+    return output, rest_batch_sizes
 
 
 def generate_sample(
@@ -199,7 +341,8 @@ def generate_sample(
     seed: Seed = None,
     positive_sample: bool = True,
     num_samples: int | None = None,
-) -> np.ndarray:
+    dataset_size: int | None = None,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
   """Generates a sample from the dominating pair for amplified DP-BandMF.
 
   TODO: Explore benefits of Jax implementation.
@@ -217,17 +360,27 @@ def generate_sample(
       sensitive example is not included.
     num_samples: The number of samples to generate. None means generate a single
       sample.
+    dataset_size: The size of the dataset. Should only be set if accounting for
+      the strategy supports truncation, and strategy.truncated_batch_size is not
+      None.
 
   Returns:
     Sample(s) from the dominating PLD for DP-BandMF using balls-in-bins
     sampling. If num_samples is None, the output is 1D with dimension
     strategy.iterations. If num_samples is not None, the output is 2D with
-    dimension (strategy.iterations, num_samples).
+    dimension (strategy.iterations, num_samples). Potentially also returns
+    a second array containing auxiliary information needed to evaluate the
+    privacy loss.
   """
   if noise_multiplier < 0:
     raise ValueError('noise_multiplier must be non-negative.')
   _validate_c_col(c_col)
   if isinstance(strategy, batch_selection.BallsInBinsSampling):
+    if dataset_size is not None:
+      raise ValueError(
+          'Monte Carlo accounting for balls-in-bins sampling does not support '
+          'truncation (yet), so dataset_size should not be set.'
+      )
     if num_samples is None:
       return _generate_balls_in_bins_sample(
           strategy.iterations,
@@ -252,10 +405,17 @@ def generate_sample(
         )
       return output
   elif isinstance(strategy, batch_selection.BMinSepSampling):
-    if strategy.truncated_batch_size:
+    if dataset_size is None and strategy.truncated_batch_size is not None:
       raise ValueError(
-          'Truncated batch size is not supported for sample generation.'
+          'dataset_size must be set if '
+          'strategy.truncated_batch_size is not None.'
       )
+    if dataset_size is not None and dataset_size <= 0:
+      raise ValueError('dataset_size must be positive.')
+    if strategy.truncated_batch_size is not None and (
+        strategy.truncated_batch_size <= 0
+    ):
+      raise ValueError('strategy.truncated_batch_size must be positive.')
     return _generate_b_min_sep_sample(
         strategy,
         noise_multiplier,
@@ -263,6 +423,7 @@ def generate_sample(
         seed,
         positive_sample,
         num_samples,
+        dataset_size,
     )
   else:
     raise ValueError(f'Unsupported batch selection strategy: {type(strategy)}')
@@ -481,7 +642,11 @@ def get_privacy_loss_sample(
     positive_sample: bool = True,
     num_samples: int | None = None,
     also_return_sample: bool = False,
-) -> float | np.ndarray | tuple[float | np.ndarray, np.ndarray]:
+) -> (
+    float
+    | np.ndarray
+    | tuple[float | np.ndarray, np.ndarray | tuple[np.ndarray, np.ndarray]]
+):
   """Returns sample(s) from DP-BandMF's dominating privacy loss distribution.
 
   Args:
