@@ -105,14 +105,14 @@ def main(_) -> None:
   # parallelizing across these two dimensions in whatever manner best fits your
   # workflow.
   for nm in nm_sweep:
-    per_nm_positive_samples = sample_generation.get_privacy_loss_sample(
+    per_nm_positive_samples, _ = sample_generation.get_privacy_loss_sample(
         strategy=strategy,
         noise_multiplier=nm,
         c_col=C_COL,
         positive_sample=True,
         num_samples=minimum_samples,
     )
-    per_nm_negative_samples = sample_generation.get_privacy_loss_sample(
+    per_nm_negative_samples, _ = sample_generation.get_privacy_loss_sample(
         strategy=strategy,
         noise_multiplier=nm,
         c_col=C_COL,

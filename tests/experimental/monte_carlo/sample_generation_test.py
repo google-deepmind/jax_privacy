@@ -509,35 +509,115 @@ class SampleGenerationTest(parameterized.TestCase):
         1.0,
         c_col,
     )
-    print(f"privacy_loss: {privacy_loss}")
     self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
 
   @parameterized.parameters([
       (
-          np.array([
-              [1.0, 0.0],
-              [1.0, 1.0],
-              [1.0, 1.0],
-          ]),
+          np.array([1.0, 1.0, 1.0]),
           np.array([1.0, 0.5]),
+          np.array([1, 0, 0]),
+          1,
           False,
-          [0.9239798890121712, 0.4155349444473233],
+          0.8407396632949528,
+      ),
+      (
+          np.array([1.0, 1.0, 1.0]),
+          np.array([1.0, 0.5]),
+          np.array([2, 0, 1]),
+          1,
+          False,
+          0.6833726274094434,
+      ),
+      (
+          np.array([1.0, 1.0, 1.0]),
+          np.array([1.0, 0.5]),
+          np.array([2, 0, 1]),
+          2,
+          False,
+          0.978400107545793,
+      ),
+      (
+          np.array([1.0, 1.0, 1.0]),
+          np.array([1.0, 0.5]),
+          np.array([2, 0, 1]),
+          1,
+          True,
+          0.6643184939690996,
       ),
   ])
-  def test_compute_privacy_loss_b_min_sep_multiple_samples(
-      self, sample, c_col, warm_start, expected_privacy_loss
+  def test_compute_privacy_loss_b_min_sep_with_truncation(
+      self,
+      sample,
+      c_col,
+      rest_batch_sizes,
+      truncated_batch_size,
+      warm_start,
+      expected_privacy_loss,
   ):
     sampling_scheme = batch_selection.BMinSepSampling(
         sampling_prob=0.5,
         min_sep=2,
         iterations=3,
         warm_start=warm_start,
+        truncated_batch_size=truncated_batch_size,
     )
     privacy_loss = sample_generation.compute_privacy_loss(
         sampling_scheme,
         sample,
         1.0,
         c_col,
+        aux=rest_batch_sizes,
+    )
+    self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
+
+  @parameterized.parameters([
+      dict(
+          sample=np.array([
+              [1.0, 0.0],
+              [1.0, 1.0],
+              [1.0, 1.0],
+          ]),
+          c_col=np.array([1.0, 0.5]),
+          warm_start=False,
+          expected_privacy_loss=[0.9239798890121712, 0.4155349444473233],
+          truncated_batch_size=None,
+          rest_batch_sizes=None,
+      ),
+      dict(
+          sample=np.array([
+              [1.0, 1.0],
+              [1.0, 1.0],
+              [1.0, 1.0],
+          ]),
+          c_col=np.array([1.0, 0.5]),
+          warm_start=False,
+          expected_privacy_loss=[0.8407396632949528, 0.6833726274094434],
+          truncated_batch_size=1,
+          rest_batch_sizes=np.array([[1, 2], [0, 0], [0, 1]]),
+      ),
+  ])
+  def test_compute_privacy_loss_b_min_sep_multiple_samples(
+      self,
+      sample,
+      c_col,
+      warm_start,
+      expected_privacy_loss,
+      truncated_batch_size,
+      rest_batch_sizes,
+  ):
+    sampling_scheme = batch_selection.BMinSepSampling(
+        sampling_prob=0.5,
+        min_sep=2,
+        iterations=3,
+        warm_start=warm_start,
+        truncated_batch_size=truncated_batch_size,
+    )
+    privacy_loss = sample_generation.compute_privacy_loss(
+        sampling_scheme,
+        sample,
+        1.0,
+        c_col,
+        aux=rest_batch_sizes,
     )
     np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
 
@@ -554,14 +634,13 @@ class SampleGenerationTest(parameterized.TestCase):
     # mode.
     pl_samples = []
     for _ in range(10000):
-      pl_samples.append(
-          sample_generation.get_privacy_loss_sample(
-              sampling_scheme,
-              noise_multiplier,
-              c_col,
-              positive_sample=True,
-          )
+      pl, _ = sample_generation.get_privacy_loss_sample(
+          sampling_scheme,
+          noise_multiplier,
+          c_col,
+          positive_sample=True,
       )
+      pl_samples.append(pl)
     first_mode_count = sum(np.isclose(pl_samples, 1.25e8, atol=1e5))
     second_mode_count = sum(np.isclose(pl_samples, 1.125e8, atol=1e5))
     self.assertEqual(first_mode_count + second_mode_count, 10000)
@@ -579,31 +658,36 @@ class SampleGenerationTest(parameterized.TestCase):
     # In this setup, the privacy loss is very close to 1.125e8 always.
     pl_samples = []
     for _ in range(10000):
-      pl_samples.append(
-          sample_generation.get_privacy_loss_sample(
-              sampling_scheme,
-              noise_multiplier,
-              c_col,
-              positive_sample=False,
-          )
+      pl, _ = sample_generation.get_privacy_loss_sample(
+          sampling_scheme,
+          noise_multiplier,
+          c_col,
+          positive_sample=False,
       )
+      pl_samples.append(pl)
     mode_count = sum(np.isclose(pl_samples, 1.125e8, atol=1e5))
     self.assertEqual(mode_count, 10000)
 
-  def test_get_privacy_loss_and_sample(self):
-    # Test that we can also get the sample if desired.
-    sampling_scheme = batch_selection.BallsInBinsSampling(
-        cycle_length=2, iterations=4
+  def test_get_privacy_loss_and_sample_truncated_b_min_sep(self):
+    # Test that we can also get the sample (and aux data) if desired.
+    sampling_scheme = batch_selection.BMinSepSampling(
+        sampling_prob=0.5,
+        min_sep=2,
+        iterations=3,
+        warm_start=False,
+        truncated_batch_size=1,
     )
     noise_multiplier = 1e-4
     c_col = np.array([1.0, 0.5])
-    _, _ = sample_generation.get_privacy_loss_sample(
+    _, sample = sample_generation.get_privacy_loss_sample(
         sampling_scheme,
         noise_multiplier,
         c_col,
         positive_sample=True,
-        also_return_sample=True,
+        dataset_size=3,
+        num_samples=3,
     )
+    _, _ = sample
 
 
 if __name__ == "__main__":
