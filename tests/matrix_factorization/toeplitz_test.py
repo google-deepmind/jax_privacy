@@ -148,9 +148,17 @@ class ToeplitzTest(parameterized.TestCase):
     )
 
   def test_banded_inverse_square_root_noising_coefs(self):
+    expected = jnp.array([1, -1 / 2, -1 / 8, -1 / 16, -5 / 128])
     np.testing.assert_allclose(
         toeplitz.banded_inverse_square_root_noising_coefs(5),
-        jnp.array([1, -1 / 2, -1 / 8, -1 / 16, -5 / 128]),
+        expected,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        toeplitz.banded_inverse_square_root_noising_coefs(
+            5, workload_coef=jnp.ones(5)
+        ),
+        expected,
         atol=1e-6,
     )
 
@@ -524,29 +532,18 @@ class ToeplitzOptimizationTest(parameterized.TestCase):
     n = 128
     min_sep = n // max_participations
     num_bands = 8
-    weight_decay = 1.0
-    momentum = 0.0
-
-    workload_coef = toeplitz.multiply(
-        weight_decay ** jnp.arange(n),
-        momentum ** jnp.arange(n),
-        n=n,
-        skip_checks=True,
-    )
+    workload_coef = jnp.ones(n)
 
     optimized_coef = toeplitz.optimize_banded_inverse_toeplitz(
         n=n,
         min_sep=min_sep,
         num_bands=num_bands,
         max_participations=max_participations,
-        weight_decay=weight_decay,
-        momentum=momentum,
-        max_optimizer_steps=100,
+        workload_coef=workload_coef,
+        max_optimizer_steps=30,
         reduction_fn=jnp.mean,
     )
-    bisr_coef = toeplitz.banded_inverse_square_root_noising_coefs(
-        num_bands, weight_decay=weight_decay, momentum=momentum
-    )
+    bisr_coef = toeplitz.banded_inverse_square_root_noising_coefs(num_bands)
 
     self.assertTrue(jnp.all(jnp.isfinite(optimized_coef)))
     np.testing.assert_allclose(optimized_coef[0], 1.0, atol=1e-6)

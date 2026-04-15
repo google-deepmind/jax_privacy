@@ -108,20 +108,11 @@ def optimize_strategy(
 
     case 'banded-inverse-toeplitz':
       # https://arxiv.org/pdf/2505.12128
-      weight_decay = 1.0
-      momentum = 0.0
-      workload_coef = toeplitz.multiply(
-          weight_decay ** jnp.arange(n),
-          momentum ** jnp.arange(n),
-          n=n,
-          skip_checks=True,
-      )
       noising_coef = toeplitz.optimize_banded_inverse_toeplitz(
           n=n,
           min_sep=sep,
           num_bands=sep,
-          weight_decay=weight_decay,
-          momentum=momentum,
+          max_participations=participations,
           max_optimizer_steps=1000,
           reduction_fn=reduction_fn,
       )
@@ -132,7 +123,7 @@ def optimize_strategy(
           max_participations=participations,
       )
       pqe = toeplitz.per_query_error(
-          noising_coef=noising_coef, n=n, workload_coef=workload_coef
+          noising_coef=noising_coef, n=n, workload_coef=jnp.ones(n)
       )
       loss = reduction_fn(pqe) * sensitivity_squared
 
@@ -172,17 +163,7 @@ def optimize_strategy(
 
     case 'banded-inverse-sqrt':
       # https://arxiv.org/pdf/2505.12128
-      weight_decay = 1.0
-      momentum = 0.0
-      workload_coef = toeplitz.multiply(
-          weight_decay ** jnp.arange(n),
-          momentum ** jnp.arange(n),
-          n=n,
-          skip_checks=True,
-      )
-      noising_coef = toeplitz.banded_inverse_square_root_noising_coefs(
-          sep, weight_decay=weight_decay, momentum=momentum
-      )
+      noising_coef = toeplitz.banded_inverse_square_root_noising_coefs(sep)
       sensitivity_squared = toeplitz.compute_banded_inverse_sensitivity_squared(
           n=n,
           noising_coef=noising_coef,
@@ -190,7 +171,7 @@ def optimize_strategy(
           max_participations=participations,
       )
       pqe = toeplitz.per_query_error(
-          noising_coef=noising_coef, n=n, workload_coef=workload_coef
+          noising_coef=noising_coef, n=n, workload_coef=jnp.ones(n)
       )
       loss = reduction_fn(pqe) * sensitivity_squared
 
