@@ -823,11 +823,15 @@ def compute_banded_inverse_sensitivity_squared(
     )
 
   strategy_matrix = materialize_lower_triangular(jnp.abs(strategy_coef), n)
-  return sensitivity.get_min_sep_sensitivity_upper_bound(
+  return (
+      sensitivity.get_min_sep_sensitivity_upper_bound(
           strategy_matrix,
           min_sep=min_sep,
           max_participations=max_participations,
-      ) ** 2
+      )
+      ** 2
+  )
+
 
 def optimize_banded_inverse_toeplitz(
     n: int,
