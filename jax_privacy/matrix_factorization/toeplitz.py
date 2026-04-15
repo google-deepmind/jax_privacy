@@ -736,6 +736,7 @@ def optimize_coefs_for_amplifications(
   return coef, stddev
 
 
+@functools.partial(jax.jit, static_argnums=[0])
 def banded_inverse_square_root_noising_coefs(
     num_bands: int,
     workload_coef: jax.Array | None = None,
@@ -837,6 +838,7 @@ def optimize_banded_inverse_toeplitz(
     n: int,
     min_sep: int,
     num_bands: int,
+    *,
     noising_coef: jax.Array | None = None,
     strategy_coef: jax.Array | None = None,
     workload_coef: jax.Array | None = None,
