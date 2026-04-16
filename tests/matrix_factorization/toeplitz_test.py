@@ -17,8 +17,6 @@
 # may occur. If `jax` is installed via a pip package, it should already be
 # optimized.
 
-"""Tests for toeplitz.py."""
-
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
