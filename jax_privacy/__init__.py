@@ -25,4 +25,4 @@ from jax_privacy import noise_addition
 # Carefully selected member imports for the top-level public API.
 from jax_privacy.clipping import clipped_grad
 
-__version__ = '1.1.0'
+__version__ = '2.0.0'
