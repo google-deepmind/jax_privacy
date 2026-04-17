@@ -1,0 +1,117 @@
+# Copyright 2026 DeepMind Technologies Limited.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Utilities for sampling from the discrete Gaussian distribution.
+
+This implements the sampling algorithm for the discrete Gaussian distribution
+from the paper:
+  Clement Canonne, Gautam Kamath, & Thomas Steinke
+  "The Discrete Gaussian for Differential Privacy"
+  NeurIPS 2020 https://arxiv.org/abs/2004.00010
+Note that the implementation here is uses floating point arithmetic for
+computing probabilities, which can result in small inaccuracies, but
+not catastrophic failures. Roughly speaking, the floating point errors in
+computing the probabilities are added to the delta term in differential privacy.
+"""
+
+import numpy as np
+
+
+def _get_sampling_parameters(sigma: float, size: int) -> tuple[float, int]:
+  """Computes the sampling parameters for the discrete Gaussian sampler.
+
+  The discrete Gaussian sampling algorithm is correct for *any* choice of
+  laplace_scale > 0 and oversample >= 1. However, the choice of parameters
+  affects the efficiency of the algorithm.
+
+  These parameter settings are tuned numerically to ensure good performance.
+  First, laplace_scale is chosen so that the probability of accepting each
+  sample in the rejection sampling step is >60%.
+  Second, oversample is chosen to be large enough to ensure that if we generate
+  oversample samples, then after rejection sampling we have at least size
+  samples remaining with >95% probability. Thus the sampling algorithm will
+  stop after one iteration with >95% probability.
+
+  Args:
+    sigma: Standard deviation proxy of the discrete Gaussian distribution.
+    size: Size of the output array.
+
+  Returns:
+    A tuple of (laplace_scale, oversample) for the discrete Gaussian sampler.
+    laplace_scale: The scale parameter of the Laplace distribution.
+    oversample: The number of samples to draw before rejection sampling.
+  """
+  laplace_scale = sigma * 1.3
+  oversample = (size * 5) // 3 + int(np.sqrt(size) * 2) + 4
+  return laplace_scale, oversample
+
+
+def sample_discrete_gaussian(
+    rng: np.random.Generator,
+    sigma: float,
+    size: int,
+    oversample: int | None = None,
+) -> np.ndarray:
+  """Generates samples from a discrete Gaussian distribution.
+
+  Specifically P[output=x] = exp(-x@x/sigma**2/2) * const for integer vectors x.
+  The output is a vector of integers of the given size. Samples are
+  i.i.d. with mean 0 and variance < sigma**2.
+  See https://arxiv.org/abs/2004.00010 for more details.
+
+  Args:
+    rng: PRNG to use for sampling.
+    sigma: Standard deviation proxy of the discrete Gaussian distribution.
+    size: Size of the output array.
+    oversample: Number of samples to draw before rejection sampling. (If None, a
+      default value is used. This parameter is only useful for tuning the
+      algorithm for efficiency purposes.)
+
+  Returns:
+    An array of the given size sampled from the discrete Gaussian distribution.
+  """
+  if size <= 0:
+    raise ValueError("size must be positive.")
+  if sigma < 0:
+    raise ValueError("sigma must be positive.")
+  elif sigma == 0:  # degenerate case, return 0
+    return np.zeros(size, dtype=np.int64)
+  if oversample is None:
+    laplace_scale, oversample = _get_sampling_parameters(sigma, size)
+  else:
+    laplace_scale, _ = _get_sampling_parameters(sigma, size)
+  p = -np.expm1(-1 / laplace_scale)
+  ans = np.zeros(size, dtype=np.int64)
+  num_accepted = 0  # Number of samples generated so far.
+  while num_accepted < size:
+    # Step 1: Sample Laplace noise as difference of two geometric variables.
+    laplace_samples = rng.geometric(p, size=oversample)
+    laplace_samples -= rng.geometric(p, size=oversample)
+    # Step 2: Compute acceptance probability and perform rejection sampling.
+    accept_prob = np.exp(
+        -((np.abs(laplace_samples) - sigma**2 / laplace_scale) ** 2)
+        / sigma**2
+        / 2
+    )  # accept = bernoulli(accept_prob):
+    accept = rng.uniform(size=oversample) < accept_prob
+    new_samples = laplace_samples[accept]  # These are the samples we generated.
+    # Step 3: Append the new samples to ans.
+    num_to_take = min(size - num_accepted, new_samples.shape[0])
+    ans[num_accepted : num_accepted + num_to_take] = new_samples[:num_to_take]
+    num_accepted += num_to_take
+    # Step 4: Generate more samples if needed.
+    # Reduce the oversample size to avoid wasting time:
+    _, new_oversample = _get_sampling_parameters(sigma, size - num_accepted)
+    oversample = min(new_oversample, oversample)
+  return ans
