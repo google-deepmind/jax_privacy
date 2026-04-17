@@ -228,24 +228,28 @@ class ClipTransformTest(parameterized.TestCase):
     def fun(batched_data):
       # With keep_batch_dim=True, data shape inside vmap is (1, D)
       scalar = jnp.sum(batched_data)
-      array_1d = batched_data[:, 0, 0, 0]
-      array_2d = batched_data[:, :, 0, 0]
-      array_3d = batched_data[:, :, :, 1]
-      return scalar, (scalar, array_1d, array_2d, array_3d, batched_data)
+      arr1d = batched_data[:, 0, 0, 0]
+      arr2d = batched_data[:, :, 0, 0]
+      arr3d = batched_data[:, :, :, 1]
+      size_1_axis = batched_data.sum(axis=0)
+      transposed = jnp.transpose(batched_data, axes=(3, 2, 1, 0))
+      return scalar, (scalar, arr1d, arr2d, arr3d, size_1_axis, transposed)
 
-    data = jnp.zeros((15, 4, 9, 10))
+    data = jnp.zeros((15, 1, 9, 10))
 
     sum_clip_mean = clipping.clipped_fun(
         fun, has_aux=True, keep_batch_dim=True, batch_argnums=0
     )
-    _, (aux_scalar, aux_1d, aux_2d, aux_3d, aux_4d) = sum_clip_mean(data)
+    _, aux = sum_clip_mean(data)
+    aux_scalar, aux_1d, aux_2d, aux_3d, aux_4d, aux_transposed = aux
 
     self.assertEqual(aux_scalar.shape, (15,))
     # In assertions below dimension of size 1 is dropped.
     self.assertEqual(aux_1d.shape, (15,))
-    self.assertEqual(aux_2d.shape, (15, 4))
-    self.assertEqual(aux_3d.shape, (15, 4, 9))
-    self.assertEqual(aux_4d.shape, (15, 4, 9, 10))
+    self.assertEqual(aux_2d.shape, (15, 1))
+    self.assertEqual(aux_3d.shape, (15, 1, 9))
+    self.assertEqual(aux_4d.shape, (15, 1, 9, 10))
+    self.assertEqual(aux_transposed.shape, (15, 10, 9, 1))
 
 
 if __name__ == '__main__':
