@@ -208,6 +208,23 @@ class ClipTransformTest(parameterized.TestCase):
     relation = dp_accounting.NeighboringRelation.REPLACE_ONE
     self.assertLessEqual(diff, sum_clip_mean.sensitivity(relation) + 1e-6)
 
+  def test_return_norms_without_aux_matches_documented_signature(self):
+
+    def fun(x):
+      return x**2
+
+    sum_clip = clipping.clipped_fun(
+        fun,
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=jnp.inf,
+        return_norms=True,
+    )
+
+    value, norms = sum_clip(jnp.array([1.0, 2.0, 3.0]))
+    chex.assert_trees_all_close(value, 14.0)
+    chex.assert_trees_all_close(norms, jnp.array([1.0, 4.0, 9.0]))
+
   @parameterized.product(
       arg_dtype=[jnp.float16, jnp.bfloat16, jnp.float32],
       output_dtype=[jnp.float32, None],
