@@ -38,7 +38,7 @@ class BoundedSensitivityCallable:
   """Callable with a sensitivity property.
 
   If has_aux is False, the sensitivity guarantee holds for the entire output
-  which may be an arbitrary PyTree of JAX Arrays.  If has_aux is False, the
+  which may be an arbitrary PyTree of JAX Arrays.  If has_aux is True, the
   output of the function is a pair `(value, aux)` and the sensitivity guarantee
   only holds for `value` PyTree. The aux PyTree is returned on a per-example
   basis (i.e., as a PyTree of arrays having a batch axis).  The caller should
@@ -413,8 +413,8 @@ def clipped_fun(
   norm_bound = (1.0 if rescale_to_unit_norm else l2_clip_norm) / normalize_by
   if keep_batch_dim:
     clipped_fn = _with_extra_batch_axis(clipped_fn, batch_argnums)
-  has_aux = has_aux or return_norms
-  return BoundedSensitivityCallable(clipped_fn, norm_bound, has_aux)
+  callable_has_aux = has_aux or return_norms
+  return BoundedSensitivityCallable(clipped_fn, norm_bound, callable_has_aux)
 
 
 def _validate_static_args(argnums, batch_argnums, normalize_by):
