@@ -37,9 +37,11 @@ example below shows that.
 This section demonstrates how to integrate the Keras API into a typical
 Keras training workflow.
 
-The example below enables ``poisson_sampling_in_fit`` and passes training data
-to ``fit()`` as per-example arrays. In that setup, the DP Keras wrapper draws
-Poisson-sampled batches internally from those arrays.
+The example below uses the default DP-SGD path where Keras handles batching
+through the usual ``batch_size`` argument to ``fit()``. To opt into internal
+Poisson sampling from per-example arrays instead, set
+``DPKerasConfig.poisson_sampling_in_fit=True`` and pass those arrays directly to
+``fit()`` without a ``batch_size`` argument.
 
 .. literalinclude:: ../examples/keras_api_example.py
    :language: python

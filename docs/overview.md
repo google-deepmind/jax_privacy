@@ -57,6 +57,8 @@ Then on top of the core library the following backend-specific public high-level
 
 These APIs abstract some complexity and reduce the amount of code necessary to
 implement DP training at the cost of less flexibility. Currently, the only
-supported mechanism available when using the Keras API is DP-SGD with
-internally Poisson-sampled batches built from random-access per-example arrays
-(with accounting done using the same Poisson-sampling assumption).
+supported mechanism available when using the Keras API is DP-SGD. You can
+either use the standard Keras batching path, or opt into internally
+Poisson-sampled batches built from random-access per-example arrays by setting
+`poisson_sampling_in_fit=True` (with accounting done using the same
+Poisson-sampling assumption).
