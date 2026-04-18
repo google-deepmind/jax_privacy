@@ -96,7 +96,9 @@ class _Accumulator:
         return value
       case AccumulationType.CONCAT:
         return jax.tree.map(
-            lambda x: jnp.broadcast_to(x, (self.num_microbatches,) + x.shape),
+            lambda x: jnp.broadcast_to(
+                jnp.zeros_like(x), (self.num_microbatches,) + x.shape
+            ).at[0].set(x),
             value,
         )
 
@@ -369,6 +371,9 @@ def verify_early_stopping_order(
   Returns:
     True if the is_padding_example gives an optimal early-stopping order.
   """
+  if microbatch_size is None:
+    return True
+
   microbatches = _sharding_aware_reshape(is_padding_example, microbatch_size)
   # all True values should be at the bottom of this matrix.
   num_padding_examples = microbatches.sum(axis=1)

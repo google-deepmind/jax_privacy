@@ -160,6 +160,34 @@ class MicrobatchingTest(parameterized.TestCase):
     )
     chex.assert_trees_all_close(actual_answer, expected_answer)
 
+  def test_dynamic_batch_size_concat_zero_fills_skipped_tail_microbatches(self):
+
+    def fun(data, *, is_padding_example):
+      return jnp.where(is_padding_example, 0.0, data + 100.0)
+
+    data = jnp.arange(6.0)
+    is_padding = jnp.array([0, 0, 0, 1, 1, 1], dtype=bool)
+    perm = microbatching.compute_early_stopping_order(6, 2)
+    data = data[perm]
+    is_padding = is_padding[perm]
+
+    microbatched_fun = jax.jit(
+        microbatching.microbatch(
+            fun,
+            batch_argnums=0,
+            microbatch_size=2,
+            accumulation_type=microbatching.AccumulationType.CONCAT,
+        )
+    )
+
+    expected_answer = fun(data, is_padding_example=is_padding)
+    actual_answer = microbatched_fun(data, is_padding_example=is_padding)
+    chex.assert_trees_all_close(actual_answer, expected_answer)
+
+  def test_verify_early_stopping_order_without_microbatching(self):
+    is_padding = jnp.array([0, 1, 1])
+    self.assertTrue(microbatching.verify_early_stopping_order(is_padding, None))
+
   def test_microbatched_fn_general_with_kwargs(self):
     nonbatch_arg = jnp.array(np.random.normal(size=NONBATCH_SHAPE))
     batch_arg1 = jnp.array(np.random.normal(size=BATCH_SHAPE))
