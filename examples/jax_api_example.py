@@ -20,9 +20,11 @@ parameters (w and b). The training is done using DP-SGD with a synthetic dataset
 that is generated using a known w and b. The goal is to learn w and b from the
 synthetic dataset and compare the learned parameters with the known w and b.
 
-The expected final loss should be very close to zero, ~0.0005 and the learned
-w and b should be very close to the true w and b (max absolute error should be
-smaller than 0.3).
+The expected final loss should decrease substantially over training and the
+learned w and b should move toward the true w and b. Under the DP setting in
+this example, the fixed-batch accounting assumption yields a noticeably harsher
+noise level than the previous Poisson default, so the learned parameters are
+not expected to match the non-DP run as closely.
 """
 
 from typing import Any, Mapping, Tuple
@@ -126,6 +128,7 @@ def main(_):
       num_updates=num_epochs * train_size // batch_size,
       num_samples=train_size,
       target_delta=1e-5,
+      sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
   )
   noise_rng = random.key(42)
   grad_and_value_fn = jax_privacy.clipped_grad(
@@ -213,7 +216,7 @@ def main(_):
   print(f"True parameters: w={true_w:.4f}, b={true_b:.4f}")
 
   if use_dp:
-    assert abs(model_params["w"] - true_w) < 0.6, "w is too far from true_w!"
+    assert abs(model_params["w"] - true_w) < 1.0, "w is too far from true_w!"
     assert abs(model_params["b"] - true_b) < 0.6, "b is too far from true_b!"
   else:
     assert abs(model_params["w"] - true_w) < 0.1, "w is too far from true_w!"

@@ -23,6 +23,7 @@ from absl import app
 
 os.environ["KERAS_BACKEND"] = "jax"
 # pylint: disable=g-import-not-at-top,wrong-import-position
+from jax_privacy.accounting import analysis
 from jax_privacy import keras_api
 import keras
 from keras import layers
@@ -93,7 +94,7 @@ def main(_):
         batch_size=batch_size,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
-        poisson_sampling_in_fit=True,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
         seed=0,
         gradient_accumulation_steps=1,
     )
@@ -102,8 +103,7 @@ def main(_):
         f"DP training:{epsilon=} {delta=} {clipping_norm=} {batch_size=} "
         f"{epochs=} {train_size=}"
     )
-    # This example opts into internal Poisson sampling from the per-example
-    # arrays passed to fit().
+    print("Using fixed-size batches with fixed-batch accounting.")
   else:
     print("Non-DP training")
   model.compile(
@@ -114,14 +114,13 @@ def main(_):
   fit_kwargs = dict(
       x=x_train,
       y=y_train,
+      batch_size=batch_size,
       epochs=epochs,
       validation_data=(x_test, y_test),
   )
-  if not dp:
-    fit_kwargs["batch_size"] = batch_size
   history = model.fit(**fit_kwargs)
   # [END example]
-  print("DP: expected train accuracy: ~96%, val accuracy: ~92%")
+  print("DP: expected train accuracy: >85%, val accuracy depends on epsilon")
   print("Non-DP: expected train accuracy: ~98%, val accuracy: ~98%")
   final_accuracy = history.history["accuracy"][-1]
   if dp:

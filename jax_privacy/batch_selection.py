@@ -129,6 +129,12 @@ def split_and_pad_global_batch(
     The last minibatch may contain extra `-1` indices representing padding
     examples to make it the right size.
   """
+  if minibatch_size <= 0:
+    raise ValueError(f'minibatch_size must be positive, got {minibatch_size}.')
+  if microbatch_size is not None and microbatch_size <= 0:
+    raise ValueError(
+        f'microbatch_size must be positive when set, got {microbatch_size}.'
+    )
   sections = range(minibatch_size, indices.shape[0], minibatch_size)
   minibatches = np.array_split(indices, sections, axis=0)
   minibatch_shape = (minibatch_size,) + indices.shape[1:]
@@ -239,6 +245,16 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   cycle_length: int = 1
   partition_type: PartitionType = PartitionType.EQUAL_SPLIT
 
+  def __post_init__(self):
+    if not 0 <= self.sampling_prob <= 1:
+      raise ValueError('sampling_prob must be in [0, 1].')
+    if self.iterations < 0:
+      raise ValueError('iterations must be non-negative.')
+    if self.cycle_length <= 0:
+      raise ValueError('cycle_length must be positive.')
+    if self.truncated_batch_size is not None and self.truncated_batch_size < 0:
+      raise ValueError('truncated_batch_size must be non-negative.')
+
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
@@ -290,6 +306,12 @@ class BallsInBinsSampling(BatchSelectionStrategy):
   iterations: int
   cycle_length: int
 
+  def __post_init__(self):
+    if self.iterations < 0:
+      raise ValueError('iterations must be non-negative.')
+    if self.cycle_length <= 0:
+      raise ValueError('cycle_length must be positive.')
+
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
@@ -321,6 +343,10 @@ class FixedBatchSampling(BatchSelectionStrategy):
   batch_size: int
   iterations: int
   replace: bool = False
+
+  def __post_init__(self):
+    if self.iterations < 0:
+      raise ValueError('iterations must be non-negative.')
 
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
@@ -481,6 +507,10 @@ class UserSelectionStrategy:
   base_strategy: BatchSelectionStrategy
   examples_per_user_per_batch: int = 1
   shuffle_per_user: bool = False
+
+  def __post_init__(self):
+    if self.examples_per_user_per_batch <= 0:
+      raise ValueError('examples_per_user_per_batch must be positive.')
 
   def batch_iterator(
       self, user_ids: np.ndarray, rng: RngType = None

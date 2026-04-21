@@ -21,6 +21,7 @@ Example Usage:
    import os
    os.environ["KERAS_BACKEND"] = "jax"
    import keras
+   from jax_privacy.accounting import analysis
    from jax_privacy import keras_api
 
    model = keras.Sequential([
@@ -35,6 +36,7 @@ Example Usage:
        gradient_accumulation_steps=1,
        train_steps=10,
        train_size=80,
+       sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
        noise_multiplier=1.0,
    )
    private_model = keras_api.make_private(model, params)
@@ -98,22 +100,33 @@ class DPKerasConfig:
         useful during DP training.
       train_steps: The number of training steps (optimizer update steps). If you
         try to train the model for more steps, it will fail. If you train by
-        epochs, then it is epochs * (train_size // batch_size). If you train
-        while the dataset iterator is not over then it is the length of the
-        dataset iterator.
+        epochs, then it should count optimizer updates rather than physical
+        minibatches. In practice this is the total number of minibatches your
+        training loop will execute divided by
+        `gradient_accumulation_steps`, rounded down, while taking any
+        accumulation already carried into the fit() call into account. If you
+        train while the dataset iterator is not over, then it is the number of
+        optimizer updates implied by those iterator steps.
       train_size: The number of training examples in the dataset. If you repeat
         the examples in your dataset iterator, it should be the number of
         training examples in the original dataset before repeating.
+      sampling_method: The sampling method assumed by the privacy accountant.
+        When left unset, the Keras wrapper will infer
+        `SamplingMethod.FIXED_BATCH_SIZE` for random-access array inputs when
+        `poisson_sampling_in_fit=False`, infer `SamplingMethod.POISSON` when
+        `poisson_sampling_in_fit=True`, and require an explicit value for
+        dataset or generator inputs because their sampling semantics cannot be
+        inferred from the iterator alone.
       poisson_sampling_in_fit: Whether `fit()` should internally resample
         random-access array inputs using Poisson sampling. Leave this as False
         for backwards-compatible behavior or when the user supplies a dataset
         iterator that already handles sampling.
       noise_multiplier: The noise multiplier for the gradients. If None
         (recommended), the noise multiplier will be automatically calculated
-        based on epsilon, delta, effective_batch_size, train_steps and
-        train_size. The noise added to the average of gradients per total batch
-        is normal with mean 0 and stddev = noise_multiplier * clipping_norm /
-        effective_batch_size.
+        based on epsilon, delta, effective_batch_size, train_steps, train_size,
+        and sampling_method. The noise added to the average of gradients per
+        total batch is normal with mean 0 and stddev = noise_multiplier *
+        clipping_norm / effective_batch_size.
       rescale_to_unit_norm: Whether to rescale the gradients to unit norm.
         Simplifies learning-rate tuning, see https://arxiv.org/abs/2204.13650.
       seed: The seed for the random number generator. If None, a random seed is
@@ -142,6 +155,7 @@ class DPKerasConfig:
   gradient_accumulation_steps: int
   train_steps: int
   train_size: int
+  sampling_method: analysis.SamplingMethod | None = None
   poisson_sampling_in_fit: bool = False
   noise_multiplier: float | None = None
   rescale_to_unit_norm: bool = True
@@ -163,6 +177,53 @@ class DPKerasConfig:
     """
     return self.batch_size * self.gradient_accumulation_steps
 
+  def _default_sampling_method(self) -> analysis.SamplingMethod | None:
+    if self.poisson_sampling_in_fit:
+      return analysis.SamplingMethod.POISSON
+    return None
+
+  def _resolved_sampling_method(self) -> analysis.SamplingMethod | None:
+    if self.sampling_method is not None:
+      return self.sampling_method
+    return self._default_sampling_method()
+
+  def _dp_analysis_params(
+      self, sampling_method: analysis.SamplingMethod
+  ) -> analysis.DpParams:
+    return analysis.DpParams(
+        noise_multipliers=self.noise_multiplier,
+        batch_size=self.effective_batch_size,
+        num_samples=self.train_size,
+        delta=self.delta,
+        sampling_method=sampling_method,
+    )
+
+  def _validate_noise_multiplier_with_sampling_method(
+      self, sampling_method: analysis.SamplingMethod
+  ) -> None:
+    try:
+      resulting_epsilon = self._accountant.compute_epsilon(
+          self.train_steps,
+          self._dp_analysis_params(sampling_method),
+      )
+    except ValueError as e:
+      raise ValueError(
+          'Value error occured while calculating epsilon based on the'
+          f' provided {self.noise_multiplier=}. Maybe the noise multiplier is'
+          f' too small? Original error: {e}'
+      ) from e
+    tolerance = 1e-1
+    if resulting_epsilon > self.epsilon + tolerance:
+      raise ValueError(
+          f'Provided {self.noise_multiplier=} will lead to privacy'
+          ' budget exceed because the resulting epsilon will be'
+          f' {resulting_epsilon=} > target_epsilon={self.epsilon}. You need'
+          ' to set a greater noise multiplier (greater epsilon means more'
+          ' noise and more budget). Or you can leave noise multiplier unset'
+          ' at all and let the API to automatically calculate the optimal'
+          ' one.'
+      )
+
   def update_with_calibrated_noise_multiplier(self) -> 'DPKerasConfig':
     """Calculates the noise multiplier for the given DP training parameters.
 
@@ -170,6 +231,13 @@ class DPKerasConfig:
       A copy (new instance) of DPKerasConfig with the noise multiplier set to
       the calibrated value.
     """
+    sampling_method = self._resolved_sampling_method()
+    if sampling_method is None:
+      raise ValueError(
+          'DPKerasConfig.sampling_method must be set before calibrating the'
+          ' noise multiplier when poisson_sampling_in_fit is disabled and fit()'
+          ' will not infer the sampling semantics for you.'
+      )
     print(
         f'Calculating noise multiplier for: {self.epsilon=},'
         f' {self.delta=}, {self.effective_batch_size=}, {self.train_steps=},'
@@ -182,13 +250,16 @@ class DPKerasConfig:
         batch_sizes=self.effective_batch_size,
         num_updates=self.train_steps,
         num_samples=self.train_size,
+        sampling_method=sampling_method,
     )
     print(
         'Finished calculating noise multiplier:'
         f' {calculated_noise_multiplier=}.'
     )
     return dataclasses.replace(
-        self, noise_multiplier=calculated_noise_multiplier
+        self,
+        noise_multiplier=calculated_noise_multiplier,
+        sampling_method=sampling_method,
     )
 
   def __post_init__(self):
@@ -228,38 +299,23 @@ class DPKerasConfig:
             f'Microbatch size {self.microbatch_size} must be less than or'
             f' equal to batch size {self.batch_size}.'
         )
+    if (
+        self.poisson_sampling_in_fit
+        and self.sampling_method is not None
+        and self.sampling_method is not analysis.SamplingMethod.POISSON
+    ):
+      raise ValueError(
+          'poisson_sampling_in_fit=True requires'
+          ' sampling_method=SamplingMethod.POISSON.'
+      )
     if self.noise_multiplier is not None:
       if self.noise_multiplier <= 0:
         raise ValueError(
             f'Noise multiplier {self.noise_multiplier} must be positive.'
         )
-      try:
-        resulting_epsilon = self._accountant.compute_epsilon(
-            self.train_steps,
-            analysis.DpParams(
-                noise_multipliers=self.noise_multiplier,
-                batch_size=self.batch_size,
-                num_samples=self.train_size,
-                delta=self.delta,
-            ),
-        )
-      except ValueError as e:
-        raise ValueError(
-            'Value error occured while calculating epsilon based on the'
-            f' provided {self.noise_multiplier=}. Maybe the noise multiplier is'
-            f' too small? Original error: {e}'
-        ) from e
-      tolerance = 1e-1
-      if resulting_epsilon > self.epsilon + tolerance:
-        raise ValueError(
-            f'Provided {self.noise_multiplier=} will lead to privacy'
-            ' budget exceed because the resulting epsilon will be'
-            f' {resulting_epsilon=} > target_epsilon={self.epsilon}. You need'
-            ' to set a greater noise multiplier (greater epsilon means more'
-            ' noise and more budget). Or you can leave noise multiplier unset'
-            ' at all and let the API to automatically calculate the optimal'
-            ' one.'
-        )
+      sampling_method = self._resolved_sampling_method()
+      if sampling_method is not None:
+        self._validate_noise_multiplier_with_sampling_method(sampling_method)
 
 
 def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
@@ -291,7 +347,8 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
   #    DP-SGD training. This method differs from the original, only in the
   #    gradient computation (clipped and noised).
   # 4. We replace the model._update_metrics_variables method with a new method
-  #    that updates the metrics variables for DP-SGD training.
+  #    that updates the metrics variables for DP-SGD training and keeps the
+  #    Poisson-padding loss tracker aligned with the number of real examples.
 
   _add_dp_sgd_attributes(model, params)
   model.get_noise_multiplier = types.MethodType(get_noise_multiplier, model)
@@ -299,14 +356,13 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
       _create_fit_fn_with_validation(model.fit, params), model
   )
   model.train_step = types.MethodType(_dp_train_step, model)
-  if not hasattr(model, '_update_metrics_variables'):
-    # _update_metrics_variables was extracted from train_step recently in
-    # https://github.com/keras-team/keras/pull/20805/. Since in our train_step
-    # we use it, we need to add it if it's not present. In the future, when
-    # will stop support old versions of Keras, we can remove this.
-    model._update_metrics_variables = types.MethodType(  # pylint: disable=protected-access
-        _update_metrics_variables, model
-    )
+  # _update_metrics_variables was extracted from train_step recently in
+  # https://github.com/keras-team/keras/pull/20805/. We bind our copy on all
+  # supported Keras versions so the DP wrapper can keep the call contract
+  # stable while correcting the Poisson-padding loss metric.
+  model._update_metrics_variables = types.MethodType(  # pylint: disable=protected-access
+      _update_metrics_variables, model
+  )
   return model
 
 
@@ -314,7 +370,9 @@ def get_noise_multiplier(model: keras.Model) -> float:
   """Returns the noise multiplier used for DP-SGD training.
 
   If the noise multiplier is not set in DPKerasConfig, this will calibrate it
-  once and cache the value on the model.
+  once and cache the value on the model. For non-Poisson Keras training, this
+  requires `DPKerasConfig.sampling_method` to be known explicitly before fit()
+  resolves it from the input structure.
 
   Args:
     model: A Keras model previously wrapped with make_private().
@@ -343,9 +401,17 @@ def _validate_model(model: keras.Model) -> None:
 
 def _validate_optimizer(model: keras.Model, params: DPKerasConfig) -> None:
   optimizer_gradient_accumulation_steps = (
-      model.optimizer.gradient_accumulation_steps or 1
+      model.optimizer.gradient_accumulation_steps
   )
   dp_params_gradient_accumulation_steps = params.gradient_accumulation_steps
+  if optimizer_gradient_accumulation_steps is None:
+    if dp_params_gradient_accumulation_steps != 1:
+      raise ValueError(
+          'optimizer.gradient_accumulation_steps is not configured, but'
+          ' DPKerasConfig.gradient_accumulation_steps ='
+          f' {dp_params_gradient_accumulation_steps}.'
+      )
+    optimizer_gradient_accumulation_steps = 1
   if (
       optimizer_gradient_accumulation_steps
       != dp_params_gradient_accumulation_steps
@@ -363,18 +429,13 @@ def _add_dp_sgd_attributes(model: keras.Model, params: DPKerasConfig) -> None:
   model._dp_params = params  # pylint: disable=protected-access
   model._dp_noise_multiplier = params.noise_multiplier  # pylint: disable=protected-access
   seed = _get_random_int64() if params.seed is None else params.seed
+  model._dp_seed = seed  # pylint: disable=protected-access
+  model._poisson_sampling_seed_counter = 0  # pylint: disable=protected-access
   model.add_weight(
       name='_rng',
       shape=(2,),
       dtype='uint32',
       initializer=lambda shape, dtype: jax.random.PRNGKey(seed),
-      trainable=False,
-  )
-  model.add_weight(
-      name='_optimizer_steps',
-      shape=(1,),
-      initializer=jnp.zeros,
-      dtype='uint32',
       trainable=False,
   )
 
@@ -394,6 +455,7 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
       *,
       dp_params: DPKerasConfig,
       steps_per_epoch: int,
+      rng: np.random.Generator | None = None,
   ):
     super().__init__()
     self._x = x
@@ -403,8 +465,10 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
     self._steps_per_epoch = steps_per_epoch
     self._sampling_prob = dp_params.batch_size / float(self._train_size)
     self._padding_multiple = _get_poisson_padding_multiple(dp_params)
-    seed = _get_random_int64() if dp_params.seed is None else dp_params.seed
-    self._rng = np.random.default_rng(seed)
+    if rng is None:
+      seed = _get_random_int64() if dp_params.seed is None else dp_params.seed
+      rng = np.random.default_rng(seed)
+    self._rng = rng
     self._epoch_batches = []
     self.on_epoch_end()
 
@@ -494,7 +558,14 @@ def _pad_batch_indices(indices: np.ndarray, multiple: int) -> np.ndarray:
 
 
 def _tree_batch_size(tree: chex.ArrayTree) -> int:
-  """Returns and validates the batch size of a pytree of arrays."""
+  """Returns and validates the batch size of a random-access array pytree."""
+  return _tree_leading_batch_size(tree, require_random_access=True)
+
+
+def _tree_leading_batch_size(
+    tree: chex.ArrayTree, *, require_random_access: bool
+) -> int:
+  """Returns and validates the leading batch dimension of a pytree."""
   leaves = jax.tree.leaves(tree)
   # Expected input: a non-empty pytree of random-access arrays whose leaves all
   # share the same leading batch dimension.
@@ -511,12 +582,13 @@ def _tree_batch_size(tree: chex.ArrayTree) -> int:
           'DP Keras training requires each input leaf to have a batch'
           ' dimension.'
       )
-    try:
-      np.asarray(leaf[:1])
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-      raise ValueError(
-          'DP Keras training requires random-access array-like inputs.'
-      ) from exc
+    if require_random_access:
+      try:
+        np.asarray(leaf[:1])
+      except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise ValueError(
+            'DP Keras training requires random-access array-like inputs.'
+        ) from exc
     leaf_batch_size = leaf.shape[0]
     if batch_size is None:
       batch_size = leaf_batch_size
@@ -526,6 +598,45 @@ def _tree_batch_size(tree: chex.ArrayTree) -> int:
           ' dimension.'
       )
   return int(batch_size)
+
+
+def _is_random_access_array_tree(tree: chex.ArrayTree | None) -> bool:
+  if tree is None:
+    return False
+  try:
+    _tree_batch_size(tree)
+  except ValueError:
+    return False
+  return True
+
+
+def _resolve_dp_params_for_fit(
+    dp_params: DPKerasConfig, x: Any
+) -> DPKerasConfig:
+  """Resolves the sampling method once fit() input semantics are known."""
+  if dp_params.poisson_sampling_in_fit:
+    return dataclasses.replace(
+        dp_params, sampling_method=analysis.SamplingMethod.POISSON
+    )
+
+  if _is_random_access_array_tree(x):
+    if dp_params.sampling_method is analysis.SamplingMethod.POISSON:
+      raise ValueError(
+          'Array inputs with poisson_sampling_in_fit disabled use fixed-size'
+          ' batching. Set sampling_method=SamplingMethod.FIXED_BATCH_SIZE or'
+          ' enable poisson_sampling_in_fit.'
+      )
+    return dataclasses.replace(
+        dp_params, sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE
+    )
+
+  if dp_params.sampling_method is None:
+    raise ValueError(
+        'DP Keras training cannot infer the privacy sampling method from'
+        ' dataset or generator inputs when poisson_sampling_in_fit is disabled.'
+        ' Set DPKerasConfig.sampling_method explicitly.'
+    )
+  return dp_params
 
 
 def _take_batch_from_leaf(leaf: chex.Array, indices: np.ndarray) -> np.ndarray:
@@ -561,11 +672,12 @@ def _padding_mask_from_sample_weight(
 ) -> jax.Array:
   """Returns which batch entries are synthetic padding examples."""
   sample_weight = jnp.asarray(sample_weight)
+  if sample_weight.ndim < 1:
+    raise ValueError('Expected sample_weight to have a batch dimension.')
   if sample_weight.ndim == 1:
     return sample_weight == 0
-  if sample_weight.ndim == 2:
-    return ~jnp.any(sample_weight, axis=1)
-  raise ValueError('Expected sample_weight to be a 1D or 2D array.')
+  reduce_axes = tuple(range(1, sample_weight.ndim))
+  return ~jnp.any(sample_weight, axis=reduce_axes)
 
 
 def _maybe_symbolically_build_private_model(
@@ -598,6 +710,73 @@ def _masked_mean(
   return jnp.where(jnp.any(where, axis=0), mean, jnp.nan_to_num(mean))
 
 
+def _split_seed_for_sequence(seed: int, counter: int) -> list[int]:
+  """Converts signed seeds into non-negative SeedSequence entropy words."""
+  seed = int(np.int64(seed))
+  return [
+      seed & 0xFFFFFFFF,
+      (seed >> 32) & 0xFFFFFFFF,
+      counter & 0xFFFFFFFF,
+      (counter >> 32) & 0xFFFFFFFF,
+  ]
+
+
+def _create_poisson_dataset_rng(model: keras.Model) -> np.random.Generator:
+  """Returns a fresh RNG for one Poisson-backed fit() invocation."""
+  base_seed = model._dp_seed  # pylint: disable=protected-access
+  counter = model._poisson_sampling_seed_counter  # pylint: disable=protected-access
+  model._poisson_sampling_seed_counter = counter + 1  # pylint: disable=protected-access
+  seed_sequence = np.random.SeedSequence(
+      _split_seed_for_sequence(base_seed, counter)
+  )
+  return np.random.default_rng(seed_sequence)
+
+
+def _try_get_steps_per_epoch_from_input(x: Any) -> int | None:
+  """Returns the iterator length when the fit() input exposes one."""
+  if isinstance(x, keras.utils.PyDataset):
+    return len(x)
+  if hasattr(x, 'cardinality'):
+    cardinality = _to_python_int(x.cardinality())
+    if cardinality >= 0:
+      return cardinality
+  return None
+
+
+def _infer_prebatched_batch_size(x: Any) -> int | None:
+  """Returns the batch size already baked into dataset-style inputs."""
+  if isinstance(x, keras.utils.PyDataset):
+    batch_x, _, _ = keras.utils.unpack_x_y_sample_weight(x[0])
+    return _tree_leading_batch_size(batch_x, require_random_access=False)
+  if hasattr(x, 'element_spec'):
+    try:
+      batch_x, _, _ = keras.utils.unpack_x_y_sample_weight(next(iter(x)))
+    except TypeError:
+      return None
+    return _tree_leading_batch_size(batch_x, require_random_access=False)
+  return None
+
+
+def _resolve_steps_per_epoch(
+    x: Any,
+    train_size: int,
+    batch_size: int,
+    steps_per_epoch: int | None,
+) -> int:
+  """Returns the concrete minibatch count that fit() will execute per epoch."""
+  if steps_per_epoch is not None:
+    return steps_per_epoch
+  inferred_steps_per_epoch = _try_get_steps_per_epoch_from_input(x)
+  if inferred_steps_per_epoch is not None:
+    return inferred_steps_per_epoch
+  if not _is_random_access_array_tree(x):
+    raise ValueError(
+        'steps_per_epoch must be set explicitly for generator-like DP Keras'
+        ' inputs whose length cannot be inferred.'
+    )
+  return _get_default_steps_per_epoch(train_size, batch_size)
+
+
 def _create_fit_fn_with_validation(
     original_fit_fn: Callable[..., _FitFnReturnType],
     params: DPKerasConfig,
@@ -625,49 +804,63 @@ def _create_fit_fn_with_validation(
       *args,
       **kwargs,
   ) -> _FitFnReturnType:
-    _validate_optimizer(self, self._dp_params)  # pylint: disable=protected-access
+    dp_params = self._dp_params  # pylint: disable=protected-access
+    _validate_optimizer(self, dp_params)
     fit_signature = inspect.signature(original_fit_fn)
     fit_kwargs = _normalize_bound_fit_arguments(fit_signature, *args, **kwargs)
-    use_poisson_sampling_in_fit = (
-        self._dp_params.poisson_sampling_in_fit  # pylint: disable=protected-access
-    )
+    use_poisson_sampling_in_fit = dp_params.poisson_sampling_in_fit
 
     # batch_size is not set explicitely in the fit() call if the input dataset
     # is already batched. In this case, we assume that the batch sizes are
     # aligned and use the batch size from the DP parameters. We will check that
     # the batch sizes are aligned in the train_step function.
-    batch_size = (
-        _get_param(fit_signature, 'batch_size', *args, **kwargs)
-        or params.batch_size
-    )
+    batch_size = _get_param(fit_signature, 'batch_size', *args, **kwargs)
+    if batch_size is None:
+      batch_size = params.batch_size
+    elif batch_size <= 0:
+      raise ValueError('fit() requires a positive batch_size.')
     # Default values are set according to the Keras documentation.
-    epochs = _get_param(fit_signature, 'epochs', *args, **kwargs) or 1
-    initial_epoch = (
-        _get_param(fit_signature, 'initial_epoch', *args, **kwargs) or 0
+    epochs = _get_param(fit_signature, 'epochs', *args, **kwargs)
+    if epochs is None:
+      epochs = 1
+    elif epochs <= 0:
+      raise ValueError('fit() requires epochs to be positive.')
+    initial_epoch = _get_param(
+        fit_signature, 'initial_epoch', *args, **kwargs
     )
-    steps_per_epoch = _get_param(
+    if initial_epoch is None:
+      initial_epoch = 0
+    elif initial_epoch < 0:
+      raise ValueError('fit() requires initial_epoch to be non-negative.')
+    explicit_steps_per_epoch = _get_param(
         fit_signature, 'steps_per_epoch', *args, **kwargs
     )
-    validation_split = (
-        _get_param(fit_signature, 'validation_split', *args, **kwargs) or 0.0
+    validation_split = _get_param(
+        fit_signature, 'validation_split', *args, **kwargs
     )
+    if validation_split is None:
+      validation_split = 0.0
     x = _get_param(fit_signature, 'x', *args, **kwargs)
     y = _get_param(fit_signature, 'y', *args, **kwargs)
     sample_weight = _get_param(fit_signature, 'sample_weight', *args, **kwargs)
+    dp_params = _resolve_dp_params_for_fit(dp_params, x)
+    if dp_params != self._dp_params:  # pylint: disable=protected-access
+      self._dp_params = dp_params  # pylint: disable=protected-access
+      if dp_params.noise_multiplier is not None:
+        self._dp_noise_multiplier = dp_params.noise_multiplier  # pylint: disable=protected-access
+    if dp_params.noise_multiplier is not None:
+      dp_params._validate_noise_multiplier_with_sampling_method(
+          dp_params.sampling_method
+      )
     validated_train_size = None
-    if use_poisson_sampling_in_fit:
-      if x is None:
-        raise ValueError(
-            'fit() must receive x when'
-            ' DPKerasConfig.poisson_sampling_in_fit is enabled.'
-        )
-      if validation_split:
-        raise ValueError(
-            'validation_split is not supported for DP Keras training because'
-            ' the privacy accountant needs the exact training-set size after'
-            ' any split. Please create the train/validation split explicitly'
-            ' and pass validation_data instead.'
-        )
+    if validation_split:
+      raise ValueError(
+          'validation_split is not supported for DP Keras training because'
+          ' the privacy accountant needs the exact training-set size after any'
+          ' split. Please create the train/validation split explicitly and'
+          ' pass validation_data instead.'
+      )
+    if x is not None and _is_random_access_array_tree(x):
       validated_train_size = _tree_batch_size(x)
       if y is not None and _tree_batch_size(y) != validated_train_size:
         raise ValueError(
@@ -682,51 +875,108 @@ def _create_fit_fn_with_validation(
             'The sample weights must have the same leading batch dimension as'
             ' the training inputs.'
         )
+      if (
+          not use_poisson_sampling_in_fit
+          and explicit_steps_per_epoch is None
+          and validated_train_size % batch_size != 0
+      ):
+        raise ValueError(
+            'Fixed-size DP Keras training requires full batches when fit()'
+            ' uses random-access array inputs without an explicit'
+            ' steps_per_epoch. Please choose a batch_size that divides the'
+            ' training set, pass steps_per_epoch to drop the remainder, or'
+            ' supply a prebatched dataset.'
+        )
+    if use_poisson_sampling_in_fit:
+      if x is None:
+        raise ValueError(
+            'fit() must receive x when'
+            ' DPKerasConfig.poisson_sampling_in_fit is enabled.'
+        )
+      if validated_train_size is None:
+        _tree_batch_size(x)
 
     # Note accessing self._dp_params is safe because it's added in
     # _add_dp_sgd_attributes, but requires disabling pylint because this
     # function is not a method within a class.
     _check_dp_params_aligned_with_fit_args(
-        self._dp_params,  # pylint: disable=protected-access
+        dp_params,
         batch_size,
         train_size=validated_train_size,
     )
-
-    performed_optimizer_steps = (
-        _get_non_trainable_weight('_optimizer_steps', self).numpy().item()
+    inferred_prebatched_batch_size = None
+    if not use_poisson_sampling_in_fit and validated_train_size is None:
+      inferred_prebatched_batch_size = _infer_prebatched_batch_size(x)
+      if (
+          inferred_prebatched_batch_size is not None
+          and inferred_prebatched_batch_size != batch_size
+      ):
+        raise ValueError(
+            'The batch size in the DP parameters is not equal to the'
+            ' prebatched dataset batch size passed to fit():'
+            f' {dp_params.batch_size=} !='
+            f' dataset_batch_size={inferred_prebatched_batch_size}.'
+        )
+    steps_per_epoch = _resolve_steps_per_epoch(
+        x, dp_params.train_size, batch_size, explicit_steps_per_epoch
     )
-    optimizer_steps_to_perform = _calculate_optimizer_steps_to_perform_in_fit(
-        self._dp_params.train_size,  # pylint: disable=protected-access
+    if (
+        not use_poisson_sampling_in_fit
+        and inferred_prebatched_batch_size is not None
+        and explicit_steps_per_epoch is None
+        and steps_per_epoch * inferred_prebatched_batch_size
+        != dp_params.train_size
+    ):
+      raise ValueError(
+          'Prebatched dataset inputs for fixed-size DP Keras training must'
+          ' contain only full batches and match DPKerasConfig.train_size.'
+          ' Please batch with drop_remainder=True, set steps_per_epoch'
+          ' explicitly, or update train_size to the exact number of training'
+          ' examples seen by fit().'
+      )
+
+    performed_train_steps = _get_optimizer_train_steps(self)
+    performed_optimizer_steps = _get_optimizer_update_steps(self)
+    train_steps_to_perform = _calculate_train_steps_to_perform_in_fit(
+        dp_params.train_size,
         batch_size,
         epochs,
         initial_epoch,
         steps_per_epoch,
     )
+    optimizer_steps_to_perform = _calculate_optimizer_steps_to_perform_in_fit(
+        performed_train_steps,
+        train_steps_to_perform,
+        dp_params.gradient_accumulation_steps,
+    )
     if (
         performed_optimizer_steps + optimizer_steps_to_perform
-        > self._dp_params.train_steps  # pylint: disable=protected-access
+        > dp_params.train_steps
     ):
       raise RuntimeError(
           'fit() cannot be performed because you will run out of privacy'
           ' budget. Currently, you have already performed'
           f' {performed_optimizer_steps} optimizer training steps and you are'
-          f' trying to perform {optimizer_steps_to_perform} more. However, you'
-          f' can perform in total only {self._dp_params.train_steps} training'  # pylint: disable=protected-access
-          ' steps (optimizer updates). If you fit() the model with current'
-          ' parameters, training steps will exceed the maximum number of'
-          f' training steps: {performed_optimizer_steps=} +'
+          f' trying to perform {optimizer_steps_to_perform} more from'
+          f' {train_steps_to_perform} minibatches with'
+          ' gradient_accumulation_steps='
+          f'{dp_params.gradient_accumulation_steps}. However, you can perform'
+          f' in total only {dp_params.train_steps} training steps (optimizer'
+          ' updates). If you fit() the model with current parameters, training'
+          ' steps will exceed the maximum number of training steps:'
+          f' {performed_optimizer_steps=} +'
           f' {optimizer_steps_to_perform=} ='
           f' {performed_optimizer_steps + optimizer_steps_to_perform} >'
-          f' total_train_steps={self._dp_params.train_steps}.'  # pylint: disable=protected-access
+          f' total_train_steps={dp_params.train_steps}.'
       )
     if use_poisson_sampling_in_fit:
       poisson_dataset = _PoissonSampledTrainingDataset(
           x,
           y,
           sample_weight,
-          dp_params=self._dp_params,  # pylint: disable=protected-access
-          steps_per_epoch=steps_per_epoch
-          or _get_default_steps_per_epoch(validated_train_size, batch_size),
+          dp_params=dp_params,
+          steps_per_epoch=steps_per_epoch,
+          rng=_create_poisson_dataset_rng(self),
       )
       _maybe_symbolically_build_private_model(self, poisson_dataset)
       fit_kwargs = _prepare_fit_kwargs_for_poisson_dataset(
@@ -865,11 +1115,14 @@ def _dp_train_step(
   ) = self.optimizer.stateless_apply(
       optimizer_variables, grads, trainable_variables
   )
-  # TODO: b/415360727 - access it and update it by name.
-  non_trainable_variables[1] = non_trainable_variables[1] + 1
 
   logs, metrics_variables = self._update_metrics_variables(  # pylint: disable=protected-access
-      metrics_variables, unscaled_loss, x, y, y_pred, sample_weight
+      metrics_variables,
+      unscaled_loss,
+      x,
+      y,
+      y_pred,
+      sample_weight,
   )
 
   if hasattr(self, '_enforce_jax_state_sharding'):
@@ -1009,6 +1262,19 @@ def _noised_clipped_grads(
   return (loss, aux), noisy_grads
 
 
+def _loss_tracker_sample_weight(
+    sample_weight: _SampleWeightType,
+    padded_batch_size: int,
+    *,
+    poisson_sampling_in_fit: bool,
+) -> chex.Numeric:
+  """Returns the batch weight used for Keras' running loss metric."""
+  if not poisson_sampling_in_fit or sample_weight is None:
+    return padded_batch_size
+  padding_mask = _padding_mask_from_sample_weight(sample_weight)
+  return jnp.sum(~jnp.asarray(padding_mask))
+
+
 # This is copy-paste from
 # https://github.com/keras-team/keras/blob/6b4a4dfaa26c14d3071a489e43453917f7b42e30/keras/src/backend/jax/trainer.py#L88
 def _update_metrics_variables(  # pylint: disable=too-many-positional-arguments
@@ -1021,11 +1287,20 @@ def _update_metrics_variables(  # pylint: disable=too-many-positional-arguments
     sample_weight: _SampleWeightType,
 ) -> tuple[_LogsType, _MetricsVariablesType]:
   """Updates the metrics variables."""
+  dp_params = getattr(self, '_dp_params', None)
+  poisson_sampling_in_fit = bool(
+      dp_params is not None and dp_params.poisson_sampling_in_fit
+  )
   with keras.StatelessScope(
       state_mapping=list(zip(self.metrics_variables, metrics_variables))
   ) as scope:
     self._loss_tracker.update_state(  # pylint: disable=protected-access
-        unscaled_loss, sample_weight=keras.tree.flatten(x)[0].shape[0]
+        unscaled_loss,
+        sample_weight=_loss_tracker_sample_weight(
+            sample_weight,
+            keras.tree.flatten(x)[0].shape[0],
+            poisson_sampling_in_fit=poisson_sampling_in_fit,
+        ),
     )
     logs = self.compute_metrics(x, y, y_pred, sample_weight)
 
@@ -1075,26 +1350,47 @@ def _get_param(
   return parameters[param_name].default if param_name in parameters else None
 
 
-def _get_non_trainable_weight(
-    weight_name: str, model: keras.Model
-) -> keras.Variable:
-  """Returns the non-trainable weight with the given name."""
-  return next(w for w in model.non_trainable_weights if w.name == weight_name)
+def _to_python_int(value: Any) -> int:
+  value = np.asarray(value)
+  if value.shape:
+    raise ValueError(f'Expected a scalar value, got shape {value.shape}.')
+  return int(value.item())
 
 
-def _calculate_optimizer_steps_to_perform_in_fit(
+def _get_optimizer_train_steps(model: keras.Model) -> int:
+  return _to_python_int(model.optimizer._iterations)  # pylint: disable=protected-access
+
+
+def _get_optimizer_update_steps(model: keras.Model) -> int:
+  return _to_python_int(model.optimizer.iterations)
+
+
+def _calculate_train_steps_to_perform_in_fit(
     train_size: int,
     batch_size: int,
     epochs: int,
     initial_epoch: int,
     steps_per_epoch: int,
 ) -> int:
-  """Returns the number of optimizer steps that will be performed by fit."""
+  """Returns the number of minibatches that fit() will execute."""
   epochs_to_perform = epochs - initial_epoch
   steps_per_epoch = steps_per_epoch or _get_default_steps_per_epoch(
       train_size, batch_size
   )
   return steps_per_epoch * epochs_to_perform
+
+
+def _calculate_optimizer_steps_to_perform_in_fit(
+    performed_train_steps: int,
+    train_steps_to_perform: int,
+    gradient_accumulation_steps: int,
+) -> int:
+  """Returns how many optimizer updates fit() will add to the current state."""
+  total_train_steps = performed_train_steps + train_steps_to_perform
+  return (
+      total_train_steps // gradient_accumulation_steps
+      - performed_train_steps // gradient_accumulation_steps
+  )
 
 
 def _get_default_steps_per_epoch(train_size: int, batch_size: int) -> int:
