@@ -27,6 +27,12 @@ import tensorflow as tf
 # pylint: enable=g-import-not-at-top, wrong-import-position
 
 
+def _set_test_seed(seed: int) -> None:
+  """Seeds both dataset generation and Keras/JAX model initialization."""
+  np.random.seed(seed)
+  keras.utils.set_random_seed(seed)
+
+
 class DictPyDataset(keras.utils.PyDataset):
   """A PyDataset that yields batches of dictionary inputs and targets.
 
@@ -146,7 +152,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       self, dataset_type: str
   ) -> None:
     """Verifies DP regression fit with gradient accumulation enabled."""
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 4
     gradient_accumulation_steps = 2
@@ -220,7 +226,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       self, dataset_type: str
   ) -> None:
     """Verifies DP binary classification with gradient accumulation enabled."""
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 4
     gradient_accumulation_steps = 2
@@ -300,7 +306,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
@@ -376,7 +382,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
@@ -453,7 +459,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
@@ -532,7 +538,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
@@ -603,7 +609,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       self, dataset_type: str
   ) -> None:
     """Verifies DP seq2seq fit with gradient accumulation enabled."""
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 4
     gradient_accumulation_steps = 2
@@ -690,7 +696,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
