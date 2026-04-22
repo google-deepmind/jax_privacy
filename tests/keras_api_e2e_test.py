@@ -185,9 +185,7 @@ class KerasApiE2ETest(parameterized.TestCase):
         batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
         train_steps=(
-            epochs
-            * (train_size // batch_size)
-            // gradient_accumulation_steps
+            epochs * (train_size // batch_size) // gradient_accumulation_steps
         ),
         train_size=train_size,
         sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
@@ -259,9 +257,7 @@ class KerasApiE2ETest(parameterized.TestCase):
         batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
         train_steps=(
-            epochs
-            * (train_size // batch_size)
-            // gradient_accumulation_steps
+            epochs * (train_size // batch_size) // gradient_accumulation_steps
         ),
         train_size=train_size,
         sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
@@ -651,9 +647,7 @@ class KerasApiE2ETest(parameterized.TestCase):
         batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
         train_steps=(
-            epochs
-            * (train_size // batch_size)
-            // gradient_accumulation_steps
+            epochs * (train_size // batch_size) // gradient_accumulation_steps
         ),
         train_size=train_size,
         sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
@@ -676,9 +670,7 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    self.assertGreater(
-        history.history["sparse_categorical_accuracy"][-1], 0.5
-    )
+    self.assertGreater(history.history["sparse_categorical_accuracy"][-1], 0.5)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy_dict", dataset_type="numpy_dict"),

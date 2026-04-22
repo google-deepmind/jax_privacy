@@ -86,7 +86,7 @@ def _check_signed_indices(batches):
 
 
 def _check_all_equal(x):
-  assert np.all(x == x[0]), f"Elements of x are not all equal: {x}"
+  assert np.all(x == x[0]), f'Elements of x are not all equal: {x}'
 
 
 class BatchSelectionTest(parameterized.TestCase):
@@ -219,15 +219,11 @@ class BatchSelectionTest(parameterized.TestCase):
       ),
       dict(
           testcase_name='negative_truncated_batch_size',
-          kwargs=dict(
-              sampling_prob=0.5, iterations=1, truncated_batch_size=-1
-          ),
+          kwargs=dict(sampling_prob=0.5, iterations=1, truncated_batch_size=-1),
           error='truncated_batch_size must be non-negative',
       ),
   )
-  def test_cyclic_poisson_sampling_rejects_invalid_config(
-      self, kwargs, error
-  ):
+  def test_cyclic_poisson_sampling_rejects_invalid_config(self, kwargs, error):
     with self.assertRaisesRegex(ValueError, error):
       batch_selection.CyclicPoissonSampling(**kwargs)
 
@@ -284,9 +280,7 @@ class BatchSelectionTest(parameterized.TestCase):
           error='cycle_length must be positive',
       ),
   )
-  def test_balls_in_bins_sampling_rejects_invalid_config(
-      self, kwargs, error
-  ):
+  def test_balls_in_bins_sampling_rejects_invalid_config(self, kwargs, error):
     with self.assertRaisesRegex(ValueError, error):
       batch_selection.BallsInBinsSampling(**kwargs)
 
@@ -539,7 +533,9 @@ class BatchPaddingTest(parameterized.TestCase):
 class UserSelectionStrategyTest(parameterized.TestCase):
 
   def test_user_selection_strategy_rejects_non_positive_examples_per_user(self):
-    base_strategy = batch_selection.FixedBatchSampling(batch_size=1, iterations=1)
+    base_strategy = batch_selection.FixedBatchSampling(
+        batch_size=1, iterations=1
+    )
     with self.assertRaisesRegex(
         ValueError, 'examples_per_user_per_batch must be positive'
     ):
@@ -548,5 +544,5 @@ class UserSelectionStrategyTest(parameterized.TestCase):
       )
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
   absltest.main()

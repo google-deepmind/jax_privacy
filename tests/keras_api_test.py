@@ -242,7 +242,9 @@ class KerasApiTest(parameterized.TestCase):
     self.assertEqual(private_model._dp_noise_multiplier, noise_multiplier)
     self.assertEqual(private_model.get_noise_multiplier(), noise_multiplier)
 
-  def test_update_with_calibrated_noise_multiplier_requires_sampling_method(self):
+  def test_update_with_calibrated_noise_multiplier_requires_sampling_method(
+      self,
+  ):
     params = keras_api.DPKerasConfig(
         epsilon=1.1,
         delta=1e-5,
@@ -420,7 +422,9 @@ class KerasApiTest(parameterized.TestCase):
     ):
       keras_api._validate_optimizer(model, dp_params)
 
-  def test_validate_optimizer_rejects_missing_gradient_accumulation_config(self):
+  def test_validate_optimizer_rejects_missing_gradient_accumulation_config(
+      self,
+  ):
     model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
     dp_params = dataclasses.replace(
         self._get_params(), gradient_accumulation_steps=4
@@ -668,7 +672,9 @@ class KerasApiTest(parameterized.TestCase):
 
     self.assertEqual(actual, 2)
 
-  def test_loss_tracker_sample_weight_uses_padded_batch_size_when_not_poisson(self):
+  def test_loss_tracker_sample_weight_uses_padded_batch_size_when_not_poisson(
+      self,
+  ):
     sample_weight = np.array([1.0, 0.0, 2.0], dtype=np.float32)
 
     actual = keras_api._loss_tracker_sample_weight(
@@ -866,7 +872,9 @@ class KerasApiTest(parameterized.TestCase):
     self.assertEqual(int(np.asarray(model.optimizer.iterations)), 1)
     self.assertEqual(int(np.asarray(model.optimizer._iterations)), 2)  # pylint: disable=protected-access
 
-  def test_fit_budget_tracks_partial_gradient_accumulation_across_fit_calls(self):
+  def test_fit_budget_tracks_partial_gradient_accumulation_across_fit_calls(
+      self,
+  ):
     train_size = 100
     batch_size = 50
     x = np.random.uniform(0, 1, (train_size, 4))
@@ -919,7 +927,9 @@ class KerasApiTest(parameterized.TestCase):
     )
     self.assertEqual(int(np.asarray(model.optimizer.iterations)), 1)
 
-    with self.assertRaisesRegex(RuntimeError, "you will run out of privacy budget"):
+    with self.assertRaisesRegex(
+        RuntimeError, "you will run out of privacy budget"
+    ):
       model.fit(  # pylint: disable=not-callable
           x,
           y,
@@ -1213,7 +1223,9 @@ class KerasApiTest(parameterized.TestCase):
         analysis.SamplingMethod.FIXED_BATCH_SIZE,
     )
 
-  def test_fit_does_not_clobber_cached_noise_multiplier_when_resolving_sampling(self):
+  def test_fit_does_not_clobber_cached_noise_multiplier_when_resolving_sampling(
+      self,
+  ):
     train_size = 200
     x = np.random.uniform(0, 1, (train_size, 4))
     y = np.random.uniform(0, 1, train_size)

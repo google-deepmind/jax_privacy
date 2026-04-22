@@ -825,9 +825,7 @@ def _create_fit_fn_with_validation(
       epochs = 1
     elif epochs <= 0:
       raise ValueError('fit() requires epochs to be positive.')
-    initial_epoch = _get_param(
-        fit_signature, 'initial_epoch', *args, **kwargs
-    )
+    initial_epoch = _get_param(fit_signature, 'initial_epoch', *args, **kwargs)
     if initial_epoch is None:
       initial_epoch = 0
     elif initial_epoch < 0:
@@ -849,7 +847,7 @@ def _create_fit_fn_with_validation(
       if dp_params.noise_multiplier is not None:
         self._dp_noise_multiplier = dp_params.noise_multiplier  # pylint: disable=protected-access
     if dp_params.noise_multiplier is not None:
-      dp_params._validate_noise_multiplier_with_sampling_method(
+      dp_params._validate_noise_multiplier_with_sampling_method(  # pylint: disable=protected-access
           dp_params.sampling_method
       )
     validated_train_size = None
