@@ -576,7 +576,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       fit_kwargs = {}
 
     dp_params = keras_api.DPKerasConfig(
-        epsilon=10.0,
+        epsilon=100.0,
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
@@ -584,6 +584,7 @@ class KerasApiE2ETest(parameterized.TestCase):
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
         sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
     )
 
     model = keras_api.make_private(model_raw, dp_params)
@@ -739,7 +740,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       fit_kwargs = {}
 
     dp_params = keras_api.DPKerasConfig(
-        epsilon=10.0,
+        epsilon=100.0,
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
@@ -747,6 +748,7 @@ class KerasApiE2ETest(parameterized.TestCase):
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
         sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
     )
 
     model = keras_api.make_private(model_raw, dp_params)
