@@ -74,9 +74,10 @@ def main(_):
   # Marker to insert the main part of the example into ReadTheDocs.
   # [START example]
   (x_train, y_train), (x_test, y_test) = load_data()
-  batch_size = 128
+  batch_size = 512
   train_size = (len(x_train) // batch_size) * batch_size
   x_train, y_train = x_train[:train_size], y_train[:train_size]
+  keras.utils.set_random_seed(0)
   model = get_model()
 
   epsilon = 1.1
@@ -121,8 +122,10 @@ def main(_):
     fit_kwargs["batch_size"] = batch_size
   history = model.fit(**fit_kwargs)
   # [END example]
-  print("DP: expected train accuracy: ~96%, val accuracy: ~92%")
-  print("Non-DP: expected train accuracy: ~98%, val accuracy: ~98%")
+  if dp:
+    print("DP: expected train accuracy: >85% within 5 epochs")
+  else:
+    print("Non-DP: expected train accuracy: >95% within 5 epochs")
   final_accuracy = history.history["accuracy"][-1]
   if dp:
     assert (
