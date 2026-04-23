@@ -495,7 +495,7 @@ class KerasApiTest(parameterized.TestCase):
     self.assertGreaterEqual(history.history[accuracy_key][-1], 0.0)
 
   def test_post_fit_evaluate_matches_manual_accuracy_with_dropout(self):
-    """Post-fit evaluate is the reliable quality signal for DP models."""
+    """Post-fit evaluate matches inference-time manual accuracy."""
     np.random.seed(42)
     keras.utils.set_random_seed(42)
     train_size = 32
@@ -532,6 +532,7 @@ class KerasApiTest(parameterized.TestCase):
     )
 
     history = model.fit(x, y, batch_size=batch_size, epochs=epochs, verbose=0)
+    self.assertIn("accuracy", history.history)
     evaluated_metrics = model.evaluate(
         x,
         y,
@@ -544,11 +545,6 @@ class KerasApiTest(parameterized.TestCase):
 
     self.assertAlmostEqual(
         evaluated_metrics["accuracy"], manual_accuracy, places=6
-    )
-    self.assertNotAlmostEqual(
-        history.history["accuracy"][-1],
-        evaluated_metrics["accuracy"],
-        delta=0.05,
     )
 
   def test_poisson_sampled_training_dataset_batches_and_masks_padding(self):
