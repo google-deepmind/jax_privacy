@@ -140,6 +140,22 @@ def _to_py_dataset_from_dict(
   return DictPyDataset(x, y, batch_size)
 
 
+def _evaluate_metrics(
+    model: keras.Model,
+    x: np.ndarray | dict[str, np.ndarray],
+    y: np.ndarray,
+    batch_size: int,
+) -> dict[str, float]:
+  """Evaluates a model on dense or dict-backed numpy inputs."""
+  return model.evaluate(
+      x,
+      y,
+      batch_size=batch_size,
+      verbose=0,
+      return_dict=True,
+  )
+
+
 class KerasApiE2ETest(parameterized.TestCase):
 
   @parameterized.named_parameters(
@@ -286,7 +302,8 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    self.assertGreater(history.history["accuracy"][-1], 0.6)
+    evaluated_metrics = _evaluate_metrics(model, x_np, y_np, batch_size)
+    self.assertGreater(evaluated_metrics["accuracy"], 0.6)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy", dataset_type="numpy"),
@@ -439,8 +456,8 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    accuracy_key = "accuracy"
-    self.assertGreater(history.history[accuracy_key][-1], 0.6)
+    evaluated_metrics = _evaluate_metrics(model, x_np, y_np, batch_size)
+    self.assertGreater(evaluated_metrics["accuracy"], 0.6)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy", dataset_type="numpy"),
@@ -521,8 +538,8 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    accuracy_key = "accuracy"
-    self.assertGreater(history.history[accuracy_key][-1], 0.3)
+    evaluated_metrics = _evaluate_metrics(model, x_np, y_np, batch_size)
+    self.assertGreater(evaluated_metrics["accuracy"], 0.3)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy", dataset_type="numpy"),
@@ -600,8 +617,8 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    accuracy_key = "sparse_categorical_accuracy"
-    self.assertGreater(history.history[accuracy_key][-1], 0.6)
+    evaluated_metrics = _evaluate_metrics(model, x_np, y_np, batch_size)
+    self.assertGreater(evaluated_metrics["sparse_categorical_accuracy"], 0.6)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy_dict", dataset_type="numpy_dict"),
@@ -680,7 +697,10 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    self.assertGreater(history.history["sparse_categorical_accuracy"][-1], 0.5)
+    evaluated_metrics = _evaluate_metrics(
+        model, {"token_ids": x_np}, y_np, batch_size
+    )
+    self.assertGreater(evaluated_metrics["sparse_categorical_accuracy"], 0.5)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy_dict", dataset_type="numpy_dict"),
@@ -764,8 +784,10 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    accuracy_key = "sparse_categorical_accuracy"
-    self.assertGreater(history.history[accuracy_key][-1], 0.6)
+    evaluated_metrics = _evaluate_metrics(
+        model, {"token_ids": x_np}, y_np, batch_size
+    )
+    self.assertGreater(evaluated_metrics["sparse_categorical_accuracy"], 0.6)
 
 
 if __name__ == "__main__":

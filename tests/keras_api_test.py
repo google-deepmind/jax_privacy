@@ -494,6 +494,63 @@ class KerasApiTest(parameterized.TestCase):
     self.assertIn(accuracy_key, history.history)
     self.assertGreaterEqual(history.history[accuracy_key][-1], 0.0)
 
+  def test_post_fit_evaluate_matches_manual_accuracy_with_dropout(self):
+    """Post-fit evaluate is the reliable quality signal for DP models."""
+    np.random.seed(42)
+    keras.utils.set_random_seed(42)
+    train_size = 32
+    batch_size = 8
+    epochs = 20
+    num_features = 4
+
+    inputs = keras.Input(shape=(num_features,), dtype="float32")
+    x = keras.layers.Dense(16, activation="relu")(inputs)
+    x = keras.layers.Dropout(0.5)(x)
+    outputs = keras.layers.Dense(1, activation="sigmoid")(x)
+    model = keras.Model(inputs=inputs, outputs=outputs)
+
+    x = np.random.uniform(0, 1, (train_size, num_features)).astype(np.float32)
+    y = (x[:, 0] > 0.5).astype(np.float32).reshape(-1, 1)
+
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=1,
+        train_steps=epochs * (train_size // batch_size),
+        train_size=train_size,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
+    )
+    model = keras_api.make_private(model, dp_params)
+
+    model.compile(
+        loss="binary_crossentropy",
+        optimizer=keras.optimizers.Adam(learning_rate=0.1),
+        metrics=["accuracy"],
+    )
+
+    history = model.fit(x, y, batch_size=batch_size, epochs=epochs, verbose=0)
+    evaluated_metrics = model.evaluate(
+        x,
+        y,
+        batch_size=batch_size,
+        verbose=0,
+        return_dict=True,
+    )
+    predictions = model.predict(x, batch_size=batch_size, verbose=0)
+    manual_accuracy = np.mean((predictions > 0.5) == y)
+
+    self.assertAlmostEqual(
+        evaluated_metrics["accuracy"], manual_accuracy, places=6
+    )
+    self.assertNotAlmostEqual(
+        history.history["accuracy"][-1],
+        evaluated_metrics["accuracy"],
+        delta=0.05,
+    )
+
   def test_poisson_sampled_training_dataset_batches_and_masks_padding(self):
     x = np.arange(24).reshape(12, 2)
     y = np.arange(12)
