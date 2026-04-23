@@ -138,7 +138,7 @@ class DPKerasConfig:
         jax.vmap. By setting microbatch_size=1, the forward/backward pass is
         performed on each batch element individually, with the gradients
         accumulated sequentially using jax.lax.scan. Setting to batch_size gives
-        the largest degree of parllelism, while setting to 1 gives the least
+        the largest degree of parallelism, while setting to 1 gives the least
         memory consumption. Any value in between can be used to trade-off memory
         consumption vs. parallel computation. This parameter is similar to
         `gradient_accumulation_steps`, but it works fully inside of device
@@ -208,7 +208,7 @@ class DPKerasConfig:
       )
     except ValueError as e:
       raise ValueError(
-          'Value error occured while calculating epsilon based on the'
+          'Value error occurred while calculating epsilon based on the'
           f' provided {self.noise_multiplier=}. Maybe the noise multiplier is'
           f' too small? Original error: {e}'
       ) from e
@@ -218,10 +218,9 @@ class DPKerasConfig:
           f'Provided {self.noise_multiplier=} will lead to privacy'
           ' budget exceed because the resulting epsilon will be'
           f' {resulting_epsilon=} > target_epsilon={self.epsilon}. You need'
-          ' to set a greater noise multiplier (greater epsilon means more'
-          ' noise and more budget). Or you can leave noise multiplier unset'
-          ' at all and let the API to automatically calculate the optimal'
-          ' one.'
+          ' to set a greater noise multiplier or choose a larger epsilon'
+          ' budget. Or you can leave noise_multiplier unset and let the API'
+          ' automatically calculate the optimal one.'
       )
 
   def update_with_calibrated_noise_multiplier(self) -> 'DPKerasConfig':
@@ -352,9 +351,7 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
 
   _add_dp_sgd_attributes(model, params)
   model.get_noise_multiplier = types.MethodType(get_noise_multiplier, model)
-  model.fit = types.MethodType(
-      _create_fit_fn_with_validation(model.fit, params), model
-  )
+  model.fit = types.MethodType(_create_fit_fn_with_validation(model.fit), model)
   model.train_step = types.MethodType(_dp_train_step, model)
   # _update_metrics_variables was extracted from train_step recently in
   # https://github.com/keras-team/keras/pull/20805/. We bind our copy on all
@@ -751,7 +748,7 @@ def _infer_prebatched_batch_size(x: Any) -> int | None:
   if hasattr(x, 'element_spec'):
     try:
       batch_x, _, _ = keras.utils.unpack_x_y_sample_weight(next(iter(x)))
-    except TypeError:
+    except (StopIteration, TypeError):
       return None
     return _tree_leading_batch_size(batch_x, require_random_access=False)
   return None
@@ -779,7 +776,6 @@ def _resolve_steps_per_epoch(
 
 def _create_fit_fn_with_validation(
     original_fit_fn: Callable[..., _FitFnReturnType],
-    params: DPKerasConfig,
 ) -> Callable[..., _FitFnReturnType]:
   """Creates a fit function with validation for DP-SGD training.
 
@@ -791,7 +787,6 @@ def _create_fit_fn_with_validation(
 
   Args:
     original_fit_fn: The original fit function of the Keras model.
-    params: The parameters for DP-SGD training.
 
   Returns:
     The fit function with same signature as original_fit_fn but with validation
@@ -810,13 +805,13 @@ def _create_fit_fn_with_validation(
     fit_kwargs = _normalize_bound_fit_arguments(fit_signature, *args, **kwargs)
     use_poisson_sampling_in_fit = dp_params.poisson_sampling_in_fit
 
-    # batch_size is not set explicitely in the fit() call if the input dataset
+    # batch_size is not set explicitly in the fit() call if the input dataset
     # is already batched. In this case, we assume that the batch sizes are
     # aligned and use the batch size from the DP parameters. We will check that
     # the batch sizes are aligned in the train_step function.
     batch_size = _get_param(fit_signature, 'batch_size', *args, **kwargs)
     if batch_size is None:
-      batch_size = params.batch_size
+      batch_size = dp_params.batch_size
     elif batch_size <= 0:
       raise ValueError('fit() requires a positive batch_size.')
     # Default values are set according to the Keras documentation.
@@ -833,6 +828,10 @@ def _create_fit_fn_with_validation(
     explicit_steps_per_epoch = _get_param(
         fit_signature, 'steps_per_epoch', *args, **kwargs
     )
+    if explicit_steps_per_epoch is not None and explicit_steps_per_epoch <= 0:
+      raise ValueError(
+          'fit() requires steps_per_epoch to be positive when set.'
+      )
     validation_split = _get_param(
         fit_signature, 'validation_split', *args, **kwargs
     )
@@ -1371,7 +1370,7 @@ def _calculate_train_steps_to_perform_in_fit(
     steps_per_epoch: int,
 ) -> int:
   """Returns the number of minibatches that fit() will execute."""
-  epochs_to_perform = epochs - initial_epoch
+  epochs_to_perform = max(0, epochs - initial_epoch)
   steps_per_epoch = steps_per_epoch or _get_default_steps_per_epoch(
       train_size, batch_size
   )

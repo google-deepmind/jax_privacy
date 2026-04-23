@@ -92,7 +92,7 @@ class KerasApiTest(parameterized.TestCase):
     # Noise multiplier is too small
     with self.assertRaisesRegex(
         ValueError,
-        "Value error occured while calculating epsilon",
+        "Value error occurred while calculating epsilon",
     ):
       dataclasses.replace(valid_params, noise_multiplier=1e-10)
 
@@ -785,6 +785,28 @@ class KerasApiTest(parameterized.TestCase):
         2,
     )
 
+  def test_calculate_train_steps_to_perform_never_returns_negative(self):
+    self.assertEqual(
+        keras_api._calculate_train_steps_to_perform_in_fit(
+            train_size=100,
+            batch_size=10,
+            epochs=5,
+            initial_epoch=5,
+            steps_per_epoch=10,
+        ),
+        0,
+    )
+    self.assertEqual(
+        keras_api._calculate_train_steps_to_perform_in_fit(
+            train_size=100,
+            batch_size=10,
+            epochs=4,
+            initial_epoch=5,
+            steps_per_epoch=10,
+        ),
+        0,
+    )
+
   def test_calculate_optimizer_steps_to_perform_in_fit_with_carryover(self):
     self.assertEqual(
         keras_api._calculate_optimizer_steps_to_perform_in_fit(
@@ -1198,6 +1220,29 @@ class KerasApiTest(parameterized.TestCase):
         ValueError, "steps_per_epoch must be set explicitly"
     ):
       model.fit(data_generator(), epochs=1)  # pylint: disable=not-callable
+
+  def test_fit_rejects_non_positive_steps_per_epoch(self):
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        batch_size=100,
+        gradient_accumulation_steps=1,
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        train_steps=2,
+        train_size=200,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        seed=0,
+    )
+    model = keras_api.make_private(model, dp_params)
+    model.compile(loss="mse", optimizer="adam")
+
+    x = np.zeros((200, 4))
+    y = np.zeros((200,))
+    with self.assertRaisesRegex(ValueError, "steps_per_epoch to be positive"):
+      model.fit(  # pylint: disable=not-callable
+          x, y, batch_size=100, epochs=1, steps_per_epoch=0
+      )
 
   def test_fit_allows_generator_with_explicit_sampling_method(self):
     model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
