@@ -74,9 +74,10 @@ def main(_):
   # Marker to insert the main part of the example into ReadTheDocs.
   # [START example]
   (x_train, y_train), (x_test, y_test) = load_data()
-  batch_size = 128
+  batch_size = 512
   train_size = (len(x_train) // batch_size) * batch_size
   x_train, y_train = x_train[:train_size], y_train[:train_size]
+  keras.utils.set_random_seed(0)
   model = get_model()
 
   epsilon = 1.1
@@ -93,6 +94,7 @@ def main(_):
         batch_size=batch_size,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
+        poisson_sampling_in_fit=True,
         seed=0,
         gradient_accumulation_steps=1,
     )
@@ -101,6 +103,8 @@ def main(_):
         f"DP training:{epsilon=} {delta=} {clipping_norm=} {batch_size=} "
         f"{epochs=} {train_size=}"
     )
+    # This example opts into internal Poisson sampling from the per-example
+    # arrays passed to fit().
   else:
     print("Non-DP training")
   model.compile(
@@ -111,10 +115,11 @@ def main(_):
   fit_kwargs = dict(
       x=x_train,
       y=y_train,
-      batch_size=batch_size,
       epochs=epochs,
       validation_data=(x_test, y_test),
   )
+  if not dp:
+    fit_kwargs["batch_size"] = batch_size
   history = model.fit(**fit_kwargs)
   # [END example]
   if dp:
