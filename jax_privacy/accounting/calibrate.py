@@ -52,6 +52,7 @@ def calibrate_num_updates(
     target_delta: float,
     examples_per_user: int | None = None,
     cycle_length: int | None = None,
+    sampling_method: analysis.SamplingMethod = analysis.SamplingMethod.POISSON,
     truncated_batch_size: int | None = None,
     initial_max_updates: int = 4,
     initial_min_updates: int = 1,
@@ -74,6 +75,9 @@ def calibrate_num_updates(
       maximum number any user contributes to the training set.
     cycle_length: If using cyclic Poisson sampling with BandMF, the length of
       the cycle.
+    sampling_method: The sampling method assumed by the privacy analysis.
+      Defaults to `SamplingMethod.POISSON`; callers using fixed-size batches
+      should pass `SamplingMethod.FIXED_BATCH_SIZE`.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to.
     initial_max_updates: An initial estimate of the number of updates.
@@ -94,6 +98,7 @@ def calibrate_num_updates(
         delta=target_delta,
         examples_per_user=examples_per_user,
         cycle_length=cycle_length,
+        sampling_method=sampling_method,
         truncated_batch_size=truncated_batch_size,
     )
     return accountant.compute_epsilon(num_updates, dp_params)
@@ -132,6 +137,7 @@ def calibrate_noise_multiplier(
     target_delta: float,
     examples_per_user: int | None = None,
     cycle_length: int | None = None,
+    sampling_method: analysis.SamplingMethod = analysis.SamplingMethod.POISSON,
     truncated_batch_size: int | None = None,
     initial_max_noise: float = 1.0,
     initial_min_noise: float = 0.0,
@@ -152,6 +158,9 @@ def calibrate_noise_multiplier(
       maximum number any user contributes to the training set.
     cycle_length: If using cyclic Poisson sampling with BandMF, the length of
       the cycle.
+    sampling_method: The sampling method assumed by the privacy analysis.
+      Defaults to `SamplingMethod.POISSON`; callers using fixed-size batches
+      should pass `SamplingMethod.FIXED_BATCH_SIZE`.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to.
     initial_max_noise: An initial estimate of the noise multiplier.
@@ -174,6 +183,7 @@ def calibrate_noise_multiplier(
         delta=target_delta,
         examples_per_user=examples_per_user,
         cycle_length=cycle_length,
+        sampling_method=sampling_method,
         truncated_batch_size=truncated_batch_size,
     )
     return accountant.compute_epsilon(num_updates, dp_params)
@@ -201,6 +211,7 @@ def calibrate_batch_size(
     target_delta: float,
     examples_per_user: int | None = None,
     cycle_length: int | None = None,
+    sampling_method: analysis.SamplingMethod = analysis.SamplingMethod.POISSON,
     truncated_batch_size: int | None = None,
     initial_max_batch_size: int = 8,
     initial_min_batch_size: int = 1,
@@ -221,6 +232,9 @@ def calibrate_batch_size(
       maximum number any user contributes to the training set.
     cycle_length: If using cyclic Poisson sampling with BandMF, the length of
       the cycle.
+    sampling_method: The sampling method assumed by the privacy analysis.
+      Defaults to `SamplingMethod.POISSON`; callers using fixed-size batches
+      should pass `SamplingMethod.FIXED_BATCH_SIZE`.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to.
     initial_max_batch_size: An initial estimate of the batch size.
@@ -243,6 +257,7 @@ def calibrate_batch_size(
         delta=target_delta,
         examples_per_user=examples_per_user,
         cycle_length=cycle_length,
+        sampling_method=sampling_method,
         truncated_batch_size=truncated_batch_size,
     )
     return accountant.compute_epsilon(num_updates, dp_params)

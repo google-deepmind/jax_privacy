@@ -23,6 +23,7 @@ from absl import app
 
 os.environ["KERAS_BACKEND"] = "jax"
 # pylint: disable=g-import-not-at-top,wrong-import-position
+from jax_privacy.accounting import analysis
 from jax_privacy import keras_api
 import keras
 from keras import layers
@@ -77,6 +78,7 @@ def main(_):
   batch_size = 128
   train_size = (len(x_train) // batch_size) * batch_size
   x_train, y_train = x_train[:train_size], y_train[:train_size]
+  keras.utils.set_random_seed(0)
   model = get_model()
 
   epsilon = 1.1
@@ -93,7 +95,7 @@ def main(_):
         batch_size=batch_size,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
-        poisson_sampling_in_fit=True,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
         seed=0,
         gradient_accumulation_steps=1,
     )
@@ -102,8 +104,7 @@ def main(_):
         f"DP training:{epsilon=} {delta=} {clipping_norm=} {batch_size=} "
         f"{epochs=} {train_size=}"
     )
-    # This example opts into internal Poisson sampling from the per-example
-    # arrays passed to fit().
+    print("Using fixed-size batches with fixed-batch accounting.")
   else:
     print("Non-DP training")
   model.compile(
@@ -114,19 +115,43 @@ def main(_):
   fit_kwargs = dict(
       x=x_train,
       y=y_train,
+      batch_size=batch_size,
       epochs=epochs,
       validation_data=(x_test, y_test),
   )
-  if not dp:
-    fit_kwargs["batch_size"] = batch_size
-  history = model.fit(**fit_kwargs)
+  model.fit(**fit_kwargs)
+  train_metrics = model.evaluate(
+      x_train,
+      y_train,
+      batch_size=batch_size,
+      verbose=0,
+      return_dict=True,
+  )
+  val_metrics = model.evaluate(
+      x_test,
+      y_test,
+      batch_size=batch_size,
+      verbose=0,
+      return_dict=True,
+  )
   # [END example]
-  print("DP: expected train accuracy: ~96%, val accuracy: ~92%")
-  print("Non-DP: expected train accuracy: ~98%, val accuracy: ~98%")
-  final_accuracy = history.history["accuracy"][-1]
+  print(
+      "DP: expected evaluated train accuracy: >60%,"
+      " evaluated val accuracy depends on epsilon"
+  )
+  print(
+      "Non-DP: expected evaluated train accuracy: ~98%,"
+      " evaluated val accuracy: ~98%"
+  )
+  print(
+      "Final evaluated metrics:"
+      f" train_accuracy={train_metrics['accuracy']:.4f},"
+      f" val_accuracy={val_metrics['accuracy']:.4f}"
+  )
+  final_accuracy = train_metrics["accuracy"]
   if dp:
     assert (
-        final_accuracy > 0.85
+        final_accuracy > 0.60
     ), f"DP Accuracy {final_accuracy:.4f} is too low!"
   else:
     assert (

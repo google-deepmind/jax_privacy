@@ -50,7 +50,14 @@ models, including Large Language Models (LLMs).
         [Keras API simple example](https://github.com/google-deepmind/jax_privacy/blob/main/examples/keras_api_example.py)
         and
         [Gemma fine-tuning notebook](https://github.com/google-deepmind/jax_privacy/blob/main/examples/dp_sgd_keras_gemma3_lora_finetuning_samsum.ipynb)
-        to get started.
+        to get started. The wrapper supports both standard fixed-size batches
+        and opt-in internal Poisson sampling, and the configured privacy
+        accounting should match the training loop's sampling semantics.
+        `train_steps` counts optimizer updates, so gradient accumulation needs
+        to be reflected there, and `validation_split` is intentionally
+        unsupported because the privacy accountant needs the exact post-split
+        training-set size. Generator-like inputs also need an explicit
+        `steps_per_epoch` when their length cannot be inferred.
     *   **Flax Linen**: Offers greater flexibility for custom model
         architectures and training loops, at the cost of some additional
         boilerplate. See

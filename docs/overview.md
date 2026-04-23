@@ -56,7 +56,7 @@ Then on top of the core library the following backend-specific public high-level
 *   [Keras](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/keras_api.py)
 
 These APIs abstract some complexity and reduce the amount of code necessary to
-implement DP training at the cost of less flexibility. Currently, the only
-supported mechanism available when using the Keras API is DP-SGD with
-internally Poisson-sampled batches built from random-access per-example arrays
-(with accounting done using the same Poisson-sampling assumption).
+implement DP training at the cost of less flexibility. The Keras API currently
+supports DP-SGD for both standard fixed-size batches and opt-in internal
+Poisson sampling from random-access per-example arrays, with the privacy
+accounting aligned to the chosen sampling semantics.

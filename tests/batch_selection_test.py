@@ -86,7 +86,7 @@ def _check_signed_indices(batches):
 
 
 def _check_all_equal(x):
-  assert np.all(x == x[0]), f"Elements of x are not all equal: {x}"
+  assert np.all(x == x[0]), f'Elements of x are not all equal: {x}'
 
 
 class BatchSelectionTest(parameterized.TestCase):
@@ -201,6 +201,32 @@ class BatchSelectionTest(parameterized.TestCase):
     max_batch_size = 0
     _check_batch_sizes_equal(batches, min_batch_size, max_batch_size)
 
+  @parameterized.named_parameters(
+      dict(
+          testcase_name='invalid_sampling_prob',
+          kwargs=dict(sampling_prob=1.1, iterations=1),
+          error='sampling_prob must be in \\[0, 1\\]',
+      ),
+      dict(
+          testcase_name='negative_iterations',
+          kwargs=dict(sampling_prob=0.5, iterations=-1),
+          error='iterations must be non-negative',
+      ),
+      dict(
+          testcase_name='non_positive_cycle_length',
+          kwargs=dict(sampling_prob=0.5, iterations=1, cycle_length=0),
+          error='cycle_length must be positive',
+      ),
+      dict(
+          testcase_name='negative_truncated_batch_size',
+          kwargs=dict(sampling_prob=0.5, iterations=1, truncated_batch_size=-1),
+          error='truncated_batch_size must be non-negative',
+      ),
+  )
+  def test_cyclic_poisson_sampling_rejects_invalid_config(self, kwargs, error):
+    with self.assertRaisesRegex(ValueError, error):
+      batch_selection.CyclicPoissonSampling(**kwargs)
+
   @parameterized.product(
       num_examples=[100],
       cycle_length=[10],
@@ -241,6 +267,22 @@ class BatchSelectionTest(parameterized.TestCase):
     )
     _check_no_repeated_indices(batches[:cycle_length])
     _check_cyclic_property(batches, cycle_length)
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name='negative_iterations',
+          kwargs=dict(iterations=-1, cycle_length=2),
+          error='iterations must be non-negative',
+      ),
+      dict(
+          testcase_name='non_positive_cycle_length',
+          kwargs=dict(iterations=1, cycle_length=0),
+          error='cycle_length must be positive',
+      ),
+  )
+  def test_balls_in_bins_sampling_rejects_invalid_config(self, kwargs, error):
+    with self.assertRaisesRegex(ValueError, error):
+      batch_selection.BallsInBinsSampling(**kwargs)
 
   def test_cyclic_poisson_sampling_independent_is_deterministic(self):
     """CyclicPoissonSampling should respect the provided RNG."""
@@ -403,6 +445,10 @@ class BatchSelectionTest(parameterized.TestCase):
     _check_batch_sizes_equal(batches, 10, 10)
     _check_element_range(batches, 5)
 
+  def test_fixed_batch_sampling_rejects_negative_iterations(self):
+    with self.assertRaisesRegex(ValueError, 'iterations must be non-negative'):
+      batch_selection.FixedBatchSampling(batch_size=1, iterations=-1)
+
 
 class BatchPaddingTest(parameterized.TestCase):
 
@@ -459,6 +505,44 @@ class BatchPaddingTest(parameterized.TestCase):
     )
     np.testing.assert_array_equal(new_indices, np.array([], dtype=np.int32))
 
+  @parameterized.named_parameters(
+      dict(
+          testcase_name='non_positive_minibatch',
+          minibatch_size=0,
+          microbatch_size=None,
+          error='minibatch_size must be positive',
+      ),
+      dict(
+          testcase_name='non_positive_microbatch',
+          minibatch_size=4,
+          microbatch_size=0,
+          error='microbatch_size must be positive when set',
+      ),
+  )
+  def test_split_and_pad_rejects_invalid_batch_sizes(
+      self, minibatch_size, microbatch_size, error
+  ):
+    with self.assertRaisesRegex(ValueError, error):
+      batch_selection.split_and_pad_global_batch(
+          np.arange(8),
+          minibatch_size=minibatch_size,
+          microbatch_size=microbatch_size,
+      )
 
-if __name__ == "__main__":
+
+class UserSelectionStrategyTest(parameterized.TestCase):
+
+  def test_user_selection_strategy_rejects_non_positive_examples_per_user(self):
+    base_strategy = batch_selection.FixedBatchSampling(
+        batch_size=1, iterations=1
+    )
+    with self.assertRaisesRegex(
+        ValueError, 'examples_per_user_per_batch must be positive'
+    ):
+      batch_selection.UserSelectionStrategy(
+          base_strategy, examples_per_user_per_batch=0
+      )
+
+
+if __name__ == '__main__':
   absltest.main()

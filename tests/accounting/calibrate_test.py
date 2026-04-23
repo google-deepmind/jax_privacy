@@ -22,6 +22,7 @@ import numpy as np
 _BATCH_SIZE = 1024
 _TRUNCATED_BATCH_SIZE = 1056
 _NOISE_MULTIPLIER = 4.0
+_FIXED_BATCH_NOISE_MULTIPLIER = _NOISE_MULTIPLIER * 2
 _NUM_SAMPLES = 50_000
 _EPSILON = 2.27535
 _EPSILON_TRUNCATED = 4.50055  # Potentially not tight; corresponding tests
@@ -105,6 +106,89 @@ class CalibrateTest(absltest.TestCase):
         num_samples=_NUM_SAMPLES,
         batch_size=_BATCH_SIZE,
         delta=_DELTA,
+    )
+    epsilon = accountant.compute_epsilon(num_updates, dp_params)
+
+    np.testing.assert_allclose(epsilon, _EPSILON, rtol=1e-4)
+
+  def test_calibrate_noise_fixed_batch_size(self):
+    accountant = analysis.DpsgdTrainingAccountant(
+        dp_accountant_config=accountants.RdpAccountantConfig()
+    )
+    noise_multiplier = calibrate.calibrate_noise_multiplier(
+        target_epsilon=_EPSILON,
+        accountant=accountant,
+        batch_sizes=_BATCH_SIZE,
+        num_updates=_NUM_UPDATES,
+        num_samples=_NUM_SAMPLES,
+        target_delta=_DELTA,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        tol=1e-4,
+    )
+
+    np.testing.assert_allclose(
+        noise_multiplier, _FIXED_BATCH_NOISE_MULTIPLIER, rtol=1e-4
+    )
+
+    dp_params = analysis.DpParams(
+        noise_multipliers=noise_multiplier,
+        num_samples=_NUM_SAMPLES,
+        batch_size=_BATCH_SIZE,
+        delta=_DELTA,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+    )
+    epsilon = accountant.compute_epsilon(_NUM_UPDATES, dp_params)
+    np.testing.assert_allclose(epsilon, _EPSILON, rtol=1e-4)
+
+  def test_calibrate_batch_size_fixed_batch_size(self):
+    accountant = analysis.DpsgdTrainingAccountant(
+        dp_accountant_config=accountants.RdpAccountantConfig()
+    )
+    batch_size = calibrate.calibrate_batch_size(
+        noise_multipliers=_FIXED_BATCH_NOISE_MULTIPLIER,
+        accountant=accountant,
+        target_epsilon=_EPSILON,
+        num_updates=_NUM_UPDATES,
+        num_samples=_NUM_SAMPLES,
+        target_delta=_DELTA,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+    )
+
+    self.assertBetween(batch_size, _BATCH_SIZE - 1, _BATCH_SIZE)
+
+    dp_params = analysis.DpParams(
+        noise_multipliers=_FIXED_BATCH_NOISE_MULTIPLIER,
+        num_samples=_NUM_SAMPLES,
+        batch_size=batch_size,
+        delta=_DELTA,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+    )
+    epsilon = accountant.compute_epsilon(_NUM_UPDATES, dp_params)
+
+    np.testing.assert_allclose(epsilon, _EPSILON, rtol=1e-2)
+
+  def test_calibrate_num_updates_fixed_batch_size(self):
+    accountant = analysis.DpsgdTrainingAccountant(
+        dp_accountant_config=accountants.RdpAccountantConfig()
+    )
+    num_updates = calibrate.calibrate_num_updates(
+        noise_multipliers=_FIXED_BATCH_NOISE_MULTIPLIER,
+        accountant=accountant,
+        target_epsilon=_EPSILON,
+        batch_sizes=_BATCH_SIZE,
+        num_samples=_NUM_SAMPLES,
+        target_delta=_DELTA,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+    )
+
+    self.assertBetween(num_updates, _NUM_UPDATES - 1, _NUM_UPDATES)
+
+    dp_params = analysis.DpParams(
+        noise_multipliers=_FIXED_BATCH_NOISE_MULTIPLIER,
+        num_samples=_NUM_SAMPLES,
+        batch_size=_BATCH_SIZE,
+        delta=_DELTA,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
     )
     epsilon = accountant.compute_epsilon(num_updates, dp_params)
 

@@ -37,9 +37,28 @@ example below shows that.
 This section demonstrates how to integrate the Keras API into a typical
 Keras training workflow.
 
-The example below enables ``poisson_sampling_in_fit`` and passes training data
-to ``fit()`` as per-example arrays. In that setup, the DP Keras wrapper draws
-Poisson-sampled batches internally from those arrays.
+The example below uses standard fixed-size batches and sets
+``sampling_method=SamplingMethod.FIXED_BATCH_SIZE`` so the privacy accountant
+matches the actual training loop.
+
+If you instead want the wrapper to resample random-access array inputs with
+Poisson sampling inside ``fit()``, enable ``poisson_sampling_in_fit=True``. In
+that mode the wrapper uses Poisson accounting automatically.
+
+For dataset or generator inputs, the wrapper cannot infer the sampling
+semantics automatically, so ``sampling_method`` must be set explicitly when
+``poisson_sampling_in_fit`` is disabled. Generator-like inputs whose length
+cannot be inferred also need an explicit ``steps_per_epoch`` so the wrapper can
+bound the privacy budget before training starts.
+
+When ``gradient_accumulation_steps > 1``, ``train_steps`` counts optimizer
+updates rather than physical minibatches. In practice, this means you should
+divide the total number of minibatches your training loop will execute by
+``gradient_accumulation_steps`` and round down.
+
+``validation_split`` is not supported for DP Keras training. Create the
+training/validation split explicitly so ``train_size`` matches the exact number
+of training examples seen by the privacy accountant.
 
 .. literalinclude:: ../examples/keras_api_example.py
    :language: python

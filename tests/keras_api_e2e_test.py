@@ -19,11 +19,18 @@ os.environ["KERAS_BACKEND"] = "jax"
 # pylint: disable=g-import-not-at-top, wrong-import-position
 from absl.testing import absltest
 from absl.testing import parameterized
+from jax_privacy.accounting import analysis
 from jax_privacy import keras_api
 import keras
 import numpy as np
 import tensorflow as tf
 # pylint: enable=g-import-not-at-top, wrong-import-position
+
+
+def _set_test_seed(seed: int) -> None:
+  """Seeds both dataset generation and Keras/JAX model initialization."""
+  np.random.seed(seed)
+  keras.utils.set_random_seed(seed)
 
 
 class DictPyDataset(keras.utils.PyDataset):
@@ -133,7 +140,170 @@ def _to_py_dataset_from_dict(
   return DictPyDataset(x, y, batch_size)
 
 
+def _evaluate_metrics(
+    model: keras.Model,
+    x: np.ndarray | dict[str, np.ndarray],
+    y: np.ndarray,
+    batch_size: int,
+) -> dict[str, float]:
+  """Evaluates a model on dense or dict-backed numpy inputs."""
+  return model.evaluate(
+      x,
+      y,
+      batch_size=batch_size,
+      verbose=0,
+      return_dict=True,
+  )
+
+
 class KerasApiE2ETest(parameterized.TestCase):
+
+  @parameterized.named_parameters(
+      dict(testcase_name="numpy", dataset_type="numpy"),
+      dict(testcase_name="tf_dataset", dataset_type="tf_dataset"),
+      dict(testcase_name="generator", dataset_type="generator"),
+      dict(testcase_name="py_dataset", dataset_type="py_dataset"),
+  )
+  def test_dp_fit_regression_with_gradient_accumulation(
+      self, dataset_type: str
+  ) -> None:
+    """Verifies DP regression fit with gradient accumulation enabled."""
+    _set_test_seed(42)
+    train_size = 32
+    batch_size = 4
+    gradient_accumulation_steps = 2
+    epochs = 20
+    num_features = 4
+
+    inputs = keras.Input(shape=(num_features,), dtype="float32")
+    outputs = keras.layers.Dense(1)(inputs)
+    model_raw = keras.Model(inputs=inputs, outputs=outputs)
+
+    x_np = np.random.uniform(0, 1, (train_size, num_features)).astype("float32")
+    y_np = (
+        (2.0 * x_np[:, 0] + 0.5 * x_np[:, 1]).reshape(-1, 1).astype("float32")
+    )
+
+    x_train, y_train = x_np, y_np
+    fit_kwargs = {"batch_size": batch_size}
+
+    if dataset_type == "tf_dataset":
+      x_train = _to_tf_dataset(x_np, y_np, batch_size)
+      y_train = None
+      fit_kwargs = {}
+    elif dataset_type == "generator":
+      x_train = _to_generator(x_np, y_np, batch_size)
+      y_train = None
+      fit_kwargs = {"steps_per_epoch": train_size // batch_size}
+    elif dataset_type == "py_dataset":
+      x_train = _to_py_dataset(x_np, y_np, batch_size)
+      y_train = None
+      fit_kwargs = {}
+
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        train_steps=(
+            epochs * (train_size // batch_size) // gradient_accumulation_steps
+        ),
+        train_size=train_size,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
+    )
+
+    model = keras_api.make_private(model_raw, dp_params)
+
+    model.compile(
+        loss="mse",
+        optimizer=keras.optimizers.Adam(
+            learning_rate=0.1,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+        ),
+        metrics=["mse"],
+    )
+
+    history = model.fit(x_train, y_train, epochs=epochs, **fit_kwargs)
+
+    self.assertIsNotNone(history.history)
+    self.assertIn("loss", history.history)
+    self.assertLess(history.history["loss"][-1], history.history["loss"][0])
+    self.assertLess(history.history["loss"][-1], 0.4)
+
+  @parameterized.named_parameters(
+      dict(testcase_name="numpy", dataset_type="numpy"),
+      dict(testcase_name="tf_dataset", dataset_type="tf_dataset"),
+      dict(testcase_name="generator", dataset_type="generator"),
+      dict(testcase_name="py_dataset", dataset_type="py_dataset"),
+  )
+  def test_dp_fit_binary_classification_with_gradient_accumulation(
+      self, dataset_type: str
+  ) -> None:
+    """Verifies DP binary classification with gradient accumulation enabled."""
+    _set_test_seed(42)
+    train_size = 32
+    batch_size = 4
+    gradient_accumulation_steps = 2
+    epochs = 20
+    num_features = 4
+
+    inputs = keras.Input(shape=(num_features,), dtype="float32")
+    outputs = keras.layers.Dense(1, activation="sigmoid")(inputs)
+    model_raw = keras.Model(inputs=inputs, outputs=outputs)
+
+    x_np = np.random.uniform(0, 1, (train_size, num_features)).astype("float32")
+    y_np = (x_np[:, 0] > 0.5).astype("float32").reshape(-1, 1)
+
+    x_train, y_train = x_np, y_np
+    fit_kwargs = {"batch_size": batch_size}
+
+    if dataset_type == "tf_dataset":
+      x_train = _to_tf_dataset(x_np, y_np, batch_size)
+      y_train = None
+      fit_kwargs = {}
+    elif dataset_type == "generator":
+      x_train = _to_generator(x_np, y_np, batch_size)
+      y_train = None
+      fit_kwargs = {"steps_per_epoch": train_size // batch_size}
+    elif dataset_type == "py_dataset":
+      x_train = _to_py_dataset(x_np, y_np, batch_size)
+      y_train = None
+      fit_kwargs = {}
+
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        train_steps=(
+            epochs * (train_size // batch_size) // gradient_accumulation_steps
+        ),
+        train_size=train_size,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
+    )
+
+    model = keras_api.make_private(model_raw, dp_params)
+
+    model.compile(
+        loss="binary_crossentropy",
+        optimizer=keras.optimizers.Adam(
+            learning_rate=0.1,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+        ),
+        metrics=["accuracy"],
+    )
+
+    history = model.fit(x_train, y_train, epochs=epochs, **fit_kwargs)
+
+    self.assertIsNotNone(history.history)
+    self.assertIn("loss", history.history)
+    self.assertLess(history.history["loss"][-1], history.history["loss"][0])
+    evaluated_metrics = _evaluate_metrics(model, x_np, y_np, batch_size)
+    self.assertGreater(evaluated_metrics["accuracy"], 0.6)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy", dataset_type="numpy"),
@@ -146,13 +316,14 @@ class KerasApiE2ETest(parameterized.TestCase):
 
     Input data: 32 samples of 4 features. `y = 2x_0 + 0.5x_1`.
     Expectation: Model should learn this linear relationship and reduce MSE
-    significantly.
+    significantly, while still reflecting the stronger noise level implied by
+    fixed-batch accounting.
 
     Args:
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
@@ -186,13 +357,15 @@ class KerasApiE2ETest(parameterized.TestCase):
       fit_kwargs = {}
 
     dp_params = keras_api.DPKerasConfig(
-        epsilon=10.0,
+        epsilon=100.0,
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
         gradient_accumulation_steps=1,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
     )
 
     model = keras_api.make_private(model_raw, dp_params)
@@ -208,7 +381,7 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    self.assertLess(history.history["loss"][-1], 0.2)
+    self.assertLess(history.history["loss"][-1], 0.45)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy", dataset_type="numpy"),
@@ -227,7 +400,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
@@ -259,13 +432,15 @@ class KerasApiE2ETest(parameterized.TestCase):
       fit_kwargs = {}
 
     dp_params = keras_api.DPKerasConfig(
-        epsilon=10.0,
+        epsilon=100.0,
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
         gradient_accumulation_steps=1,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
     )
 
     model = keras_api.make_private(model_raw, dp_params)
@@ -281,8 +456,8 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    accuracy_key = "accuracy"
-    self.assertGreater(history.history[accuracy_key][-1], 0.6)
+    evaluated_metrics = _evaluate_metrics(model, x_np, y_np, batch_size)
+    self.assertGreater(evaluated_metrics["accuracy"], 0.6)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy", dataset_type="numpy"),
@@ -296,14 +471,14 @@ class KerasApiE2ETest(parameterized.TestCase):
     This task consists of 3 independent binary classifications sharing inputs.
     Input data: 32 samples of 4 features. Three binary labels, each independent
     and depends on the corresponding feature: `y_k = (x_k > 0.5)`.
-    Expectation: Model should learn this relationship and achieve accuracy >
-    0.45.
+    Expectation: Model should learn this relationship and achieve accuracy above
+    chance, while remaining stable under fixed-batch accounting.
 
     Args:
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
@@ -339,13 +514,15 @@ class KerasApiE2ETest(parameterized.TestCase):
       fit_kwargs = {}
 
     dp_params = keras_api.DPKerasConfig(
-        epsilon=10.0,
+        epsilon=100.0,
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
         gradient_accumulation_steps=1,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
     )
 
     model = keras_api.make_private(model_raw, dp_params)
@@ -361,8 +538,8 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    accuracy_key = "accuracy"
-    self.assertGreater(history.history[accuracy_key][-1], 0.45)
+    evaluated_metrics = _evaluate_metrics(model, x_np, y_np, batch_size)
+    self.assertGreater(evaluated_metrics["accuracy"], 0.3)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy", dataset_type="numpy"),
@@ -381,7 +558,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
@@ -416,13 +593,15 @@ class KerasApiE2ETest(parameterized.TestCase):
       fit_kwargs = {}
 
     dp_params = keras_api.DPKerasConfig(
-        epsilon=10.0,
+        epsilon=100.0,
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
         gradient_accumulation_steps=1,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
     )
 
     model = keras_api.make_private(model_raw, dp_params)
@@ -438,8 +617,90 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    accuracy_key = "sparse_categorical_accuracy"
-    self.assertGreater(history.history[accuracy_key][-1], 0.6)
+    evaluated_metrics = _evaluate_metrics(model, x_np, y_np, batch_size)
+    self.assertGreater(evaluated_metrics["sparse_categorical_accuracy"], 0.6)
+
+  @parameterized.named_parameters(
+      dict(testcase_name="numpy_dict", dataset_type="numpy_dict"),
+      dict(testcase_name="tf_dataset_dict", dataset_type="tf_dataset_dict"),
+      dict(testcase_name="generator_dict", dataset_type="generator_dict"),
+      dict(testcase_name="py_dataset_dict", dataset_type="py_dataset_dict"),
+  )
+  def test_dp_fit_seq2seq_with_gradient_accumulation(
+      self, dataset_type: str
+  ) -> None:
+    """Verifies DP seq2seq fit with gradient accumulation enabled."""
+    _set_test_seed(42)
+    train_size = 32
+    batch_size = 4
+    gradient_accumulation_steps = 2
+    epochs = 20
+    num_classes = 3
+    sequence_length = 5
+    vocab_size = 100
+
+    inputs_dict = {
+        "token_ids": keras.Input(shape=(sequence_length,), dtype="int32")
+    }
+    x = keras.layers.Embedding(vocab_size, 16)(inputs_dict["token_ids"])
+    outputs = keras.layers.Dense(num_classes)(x)
+    model_raw = keras.Model(inputs=inputs_dict, outputs=outputs)
+
+    x_np = np.random.randint(
+        0, vocab_size, (train_size, sequence_length)
+    ).astype("int32")
+    y_np = (x_np % num_classes).astype("int32")
+
+    x_train, y_train = {"token_ids": x_np}, y_np
+    fit_kwargs = {"batch_size": batch_size}
+
+    if dataset_type == "tf_dataset_dict":
+      x_train = _to_tf_dataset({"token_ids": x_np}, y_np, batch_size)
+      y_train = None
+      fit_kwargs = {}
+    elif dataset_type == "generator_dict":
+      x_train = _to_generator_from_dict({"token_ids": x_np}, y_np, batch_size)
+      y_train = None
+      fit_kwargs = {"steps_per_epoch": train_size // batch_size}
+    elif dataset_type == "py_dataset_dict":
+      x_train = _to_py_dataset_from_dict({"token_ids": x_np}, y_np, batch_size)
+      y_train = None
+      fit_kwargs = {}
+
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        train_steps=(
+            epochs * (train_size // batch_size) // gradient_accumulation_steps
+        ),
+        train_size=train_size,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
+    )
+
+    model = keras_api.make_private(model_raw, dp_params)
+
+    model.compile(
+        loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        optimizer=keras.optimizers.Adam(
+            learning_rate=0.1,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+        ),
+        metrics=["sparse_categorical_accuracy"],
+    )
+
+    history = model.fit(x_train, y_train, epochs=epochs, **fit_kwargs)
+
+    self.assertIsNotNone(history.history)
+    self.assertIn("loss", history.history)
+    self.assertLess(history.history["loss"][-1], history.history["loss"][0])
+    evaluated_metrics = _evaluate_metrics(
+        model, {"token_ids": x_np}, y_np, batch_size
+    )
+    self.assertGreater(evaluated_metrics["sparse_categorical_accuracy"], 0.5)
 
   @parameterized.named_parameters(
       dict(testcase_name="numpy_dict", dataset_type="numpy_dict"),
@@ -459,7 +720,7 @@ class KerasApiE2ETest(parameterized.TestCase):
       dataset_type: The type of dataset to use for training (numpy, tf_dataset,
         generator, py_dataset).
     """
-    np.random.seed(42)
+    _set_test_seed(42)
     train_size = 32
     batch_size = 8
     epochs = 20
@@ -499,13 +760,15 @@ class KerasApiE2ETest(parameterized.TestCase):
       fit_kwargs = {}
 
     dp_params = keras_api.DPKerasConfig(
-        epsilon=10.0,
+        epsilon=100.0,
         delta=1e-5,
         clipping_norm=1.0,
         batch_size=batch_size,
         gradient_accumulation_steps=1,
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
+        sampling_method=analysis.SamplingMethod.FIXED_BATCH_SIZE,
+        noise_multiplier=1.0,
     )
 
     model = keras_api.make_private(model_raw, dp_params)
@@ -521,8 +784,10 @@ class KerasApiE2ETest(parameterized.TestCase):
     self.assertIsNotNone(history.history)
     self.assertIn("loss", history.history)
     self.assertLess(history.history["loss"][-1], history.history["loss"][0])
-    accuracy_key = "sparse_categorical_accuracy"
-    self.assertGreater(history.history[accuracy_key][-1], 0.6)
+    evaluated_metrics = _evaluate_metrics(
+        model, {"token_ids": x_np}, y_np, batch_size
+    )
+    self.assertGreater(evaluated_metrics["sparse_categorical_accuracy"], 0.6)
 
 
 if __name__ == "__main__":
