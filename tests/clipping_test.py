@@ -265,5 +265,145 @@ class ClipTransformTest(parameterized.TestCase):
     self.assertEqual(aux_4d.shape, (15, 4, 9, 10))
 
 
+class ClippedGradRuntimeKwargsTest(parameterized.TestCase):
+  """Tests for pre_clipping_transform and is_padding_example runtime kwargs."""
+
+  def _make_loss(self):
+    """Returns a simple quadratic loss: 0.5 * (data - param)^2."""
+    return lambda param, data: 0.5 * jnp.mean((data - param) ** 2)
+
+  def test_pre_clipping_transform_at_construction(self):
+    """pre_clipping_transform given at construction time is applied."""
+    f = self._make_loss()
+    scale_by_two = lambda g: jax.tree.map(lambda x: 2 * x, g)
+
+    g_no_pct = clipping.clipped_grad(f, l2_clip_norm=jnp.inf)
+    g_with_pct = clipping.clipped_grad(
+        f, l2_clip_norm=jnp.inf, pre_clipping_transform=scale_by_two
+    )
+    data = jnp.array([0.0, 7.0, -2.0])
+    chex.assert_trees_all_close(g_with_pct(3.0, data), 2 * g_no_pct(3.0, data))
+
+  def test_pre_clipping_transform_override_at_call_time(self):
+    """pre_clipping_transform passed at call time overrides construction."""
+    f = self._make_loss()
+    scale_by_two = lambda g: jax.tree.map(lambda x: 2 * x, g)
+    scale_by_three = lambda g: jax.tree.map(lambda x: 3 * x, g)
+
+    g = clipping.clipped_grad(
+        f, l2_clip_norm=jnp.inf, pre_clipping_transform=scale_by_two
+    )
+    g_baseline = clipping.clipped_grad(f, l2_clip_norm=jnp.inf)
+    data = jnp.array([0.0, 7.0, -2.0])
+
+    # Override with scale_by_three at call time.
+    result = g(3.0, data, pre_clipping_transform=scale_by_three)
+    expected = 3 * g_baseline(3.0, data)
+    chex.assert_trees_all_close(result, expected)
+
+  def test_pre_clipping_transform_override_reverts(self):
+    """After an override call, the next call without it uses the original."""
+    f = self._make_loss()
+    scale_by_two = lambda g: jax.tree.map(lambda x: 2 * x, g)
+    scale_by_three = lambda g: jax.tree.map(lambda x: 3 * x, g)
+
+    g = clipping.clipped_grad(
+        f, l2_clip_norm=jnp.inf, pre_clipping_transform=scale_by_two
+    )
+    g_baseline = clipping.clipped_grad(f, l2_clip_norm=jnp.inf)
+    data = jnp.array([0.0, 7.0, -2.0])
+
+    # Call with override.
+    _ = g(3.0, data, pre_clipping_transform=scale_by_three)
+    # Next call without override should use scale_by_two again.
+    result = g(3.0, data)
+    expected = 2 * g_baseline(3.0, data)
+    chex.assert_trees_all_close(result, expected)
+
+  def test_is_padding_example_zeros_out_padding(self):
+    """Padding examples should not contribute to the aggregated gradient."""
+    f = self._make_loss()
+    g = clipping.clipped_grad(f, l2_clip_norm=jnp.inf)
+    data = jnp.array([[0.0], [7.0], [-2.0]])
+
+    result_all_real = g(3.0, data)
+    # Mark the second example as padding.
+    is_padding = jnp.array([False, True, False])
+    result_padded = g(3.0, data, is_padding_example=is_padding)
+
+    # Without padding: grad contributions from all three examples.
+    # With padding: only examples 0 and 2 contribute.
+    data_no_pad = jnp.array([[0.0], [-2.0]])
+    result_subset = clipping.clipped_grad(f, l2_clip_norm=jnp.inf)(
+        3.0, data_no_pad
+    )
+    chex.assert_trees_all_close(result_padded, result_subset)
+    # Sanity: the padded result differs from the all-real result.
+    self.assertFalse(jnp.allclose(result_all_real, result_padded))
+
+  def test_dtype_cast_before_pre_clipping_transform(self):
+    """The dtype cast should be applied before pre_clipping_transform."""
+    f = self._make_loss()
+
+    observed_dtypes = []
+
+    def record_dtype_transform(grad):
+      leaves = jax.tree.leaves(grad)
+      observed_dtypes.append(tuple(l.dtype for l in leaves))
+      return grad
+
+    g = clipping.clipped_grad(
+        f,
+        l2_clip_norm=jnp.inf,
+        dtype=jnp.float32,
+        pre_clipping_transform=record_dtype_transform,
+    )
+    data = jnp.array([1.0, 2.0], dtype=jnp.float16)
+    g(jnp.float16(3.0), data)
+
+    # pre_clipping_transform should have received float32 leaves (post-cast).
+    self.assertTrue(observed_dtypes)  # At least one call recorded.
+    for dtypes in observed_dtypes:
+      for dt in dtypes:
+        self.assertEqual(dt, jnp.float32)
+
+  @parameterized.parameters(3, None)
+  def test_pre_clipping_transform_override_with_microbatch(self, mb_size):
+    """Override works correctly with microbatching."""
+    f = self._make_loss()
+    scale_by_two = lambda g: jax.tree.map(lambda x: 2 * x, g)
+
+    g = clipping.clipped_grad(f, l2_clip_norm=jnp.inf, microbatch_size=mb_size)
+    g_baseline = clipping.clipped_grad(
+        f, l2_clip_norm=jnp.inf, microbatch_size=mb_size
+    )
+    data = jnp.array([[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]])
+
+    result = g(0.0, data, pre_clipping_transform=scale_by_two)
+    expected = 2 * g_baseline(0.0, data)
+    chex.assert_trees_all_close(result, expected)
+
+  def test_both_runtime_kwargs_together(self):
+    """pre_clipping_transform and is_padding_example can be used together."""
+    f = self._make_loss()
+    scale_by_two = lambda g: jax.tree.map(lambda x: 2 * x, g)
+
+    g = clipping.clipped_grad(f, l2_clip_norm=jnp.inf)
+    data = jnp.array([[1.0], [2.0], [3.0]])
+    is_padding = jnp.array([False, True, False])
+
+    result = g(
+        0.0,
+        data,
+        pre_clipping_transform=scale_by_two,
+        is_padding_example=is_padding,
+    )
+    # Only examples 0 and 2 contribute, and gradients are scaled by 2.
+    g_baseline = clipping.clipped_grad(f, l2_clip_norm=jnp.inf)
+    data_no_pad = jnp.array([[1.0], [3.0]])
+    expected = 2 * g_baseline(0.0, data_no_pad)
+    chex.assert_trees_all_close(result, expected)
+
+
 if __name__ == '__main__':
   absltest.main()

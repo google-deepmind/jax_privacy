@@ -139,7 +139,7 @@ def clip_pytree(
     nan_to_num = lambda x: jnp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
     pytree = jax.tree.map(nan_to_num, pytree)
   clip_norm = jnp.maximum(clip_norm, 0.0)
-  l2_norm = optax.global_norm(pytree)
+  l2_norm = optax.tree.norm(pytree)
   scale = jnp.minimum(1.0, clip_norm / l2_norm)
   if rescale_to_unit_norm:
     scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
@@ -382,6 +382,7 @@ def clipped_fun(
         accumulator=(sum_, concat, concat),
         num_real_microbatches=num_real_mb,
         vmap_fn=functools.partial(jax.vmap, spmd_axis_name=spmd_axis_name),
+        kwarg_in_axes={'pre_clipping_transform': None},
     )
 
     clipped_values, aux, norms = microbatched_vmap_fun(*args, **kwargs)
@@ -552,10 +553,12 @@ def clipped_grad(
       per-example gradient norms, before clipping.
     pre_clipping_transform: An optional function to apply to the per-example
       gradients before clipping. The function should consume the gradient pytree
-      for a single example and returned a new pytree (possibly with different
+      for a single example and return a new pytree (possibly with different
       structure). Can be used to e.g., scale the leaves of the pytree to
       accommodate preconditioner clipping. Does not affect the sensitivity
-      guarantee.
+      guarantee. Note: This parameter may also be overridden at call time by
+      passing ``pre_clipping_transform`` as a keyword argument to the returned
+      function (see *Runtime Keyword Arguments* below).
     microbatch_size: If set, input groups are formed into microbatches of this
       size. These microbatches are then processed sequentially, with operations
       on the groups within each microbatch being vectorized using `vmap`. This
@@ -576,6 +579,21 @@ def clipped_grad(
       PRNG will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap. Only relevant in distributed settings.
 
+  Runtime Keyword Arguments:
+    The returned function additionally accepts the following optional keyword
+    arguments at call time:
+
+    pre_clipping_transform: If provided, overrides the argument
+      specified at construction time. The override applies only to that single
+      invocation; subsequent calls without the keyword will revert to the
+      original. This is useful when the transform depends on a state
+      that changes each step.
+    is_padding_example: A boolean array of shape ``(batch_size,)`` indicating
+      which examples in the batch are padding. Padding examples will have their
+      clipped contribution set to zero, ensuring they do not affect the
+      aggregated output. If not provided, all examples are treated as real
+      (non-padding). See https://arxiv.org/pdf/2411.04205 for details.
+
   Returns:
     A new function `values_and_clipped_grad_fn` that computes the sum of clipped
     per-group gradients of `fun`. The returned function returns `grad`
@@ -588,13 +606,14 @@ def clipped_grad(
   fun = _normalize_fun_to_return_aux(fun, has_aux)
   value_and_grad_fn = jax.value_and_grad(fun, argnums, has_aux=True)
 
-  def grad_fn(*args, **kwargs):
+  def grad_fn(*args, pre_clipping_transform=pre_clipping_transform, **kwargs):
     value_and_aux, grad = value_and_grad_fn(*args, **kwargs)
+    grad = optax.tree.cast(grad, dtype)
     result = pre_clipping_transform(grad)
     if has_aux or return_values or return_grad_norms:
       aux = AuxiliaryOutput(
           values=value_and_aux[0] if return_values else None,
-          grad_norms=optax.global_norm(grad) if return_grad_norms else None,
+          grad_norms=optax.tree.norm(grad) if return_grad_norms else None,
           aux=value_and_aux[1] if has_aux else None,
       )
       return result, aux
