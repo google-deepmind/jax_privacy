@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.abspath('..'))
 project = 'JAX Privacy'
 copyright = '2025, Google DeepMind'  # pylint: disable=redefined-builtin
 author = 'Google DeepMind'
-release = '1.1.0'
+release = '2.1.0.dev0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
