@@ -416,6 +416,7 @@ class SampleGenerationTest(parameterized.TestCase):
         noise_multiplier,
         c_col,
     )
+    self.assertIsInstance(privacy_loss, float)
     self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
 
   @parameterized.parameters([
@@ -480,6 +481,7 @@ class SampleGenerationTest(parameterized.TestCase):
         1.0,
         c_col,
     )
+    self.assertIsInstance(privacy_loss, float)
     self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
 
   @parameterized.parameters([
@@ -539,6 +541,7 @@ class SampleGenerationTest(parameterized.TestCase):
         c_col,
         aux=rest_batch_sizes,
     )
+    self.assertIsInstance(privacy_loss, float)
     self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
 
   @parameterized.parameters([
