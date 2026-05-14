@@ -28,6 +28,8 @@ generally not compatible with truncation due to the need for the dataset size to
 be public.
 """
 
+import functools
+
 from jax_privacy import batch_selection
 import numpy as np
 import scipy as sp
@@ -58,6 +60,21 @@ def _banded_c_times_x(c_col: np.ndarray, x: np.ndarray) -> np.ndarray:
   return top_prod
 
 
+@functools.lru_cache(maxsize=1)
+def _all_balls_in_bins_modes(
+    iterations: int,
+    cycle_length: int,
+    c_col_tuple: tuple[float, ...],
+) -> np.ndarray:
+  """Computes and caches all modes induced by balls-in-bins."""
+  # Need a tuple input for caching.
+  c_col = np.array(c_col_tuple)
+  x = np.arange(iterations) % cycle_length == 0
+  first_mode = _banded_c_times_x(c_col, x)
+  zeros_vector = np.zeros(cycle_length, dtype=np.float32)
+  return sp.linalg.toeplitz(first_mode, zeros_vector)
+
+
 def _generate_zero_mean_sample(
     iterations: int,
     noise_multiplier: float,
@@ -74,6 +91,7 @@ def _generate_balls_in_bins_sample(
     c_col: np.ndarray,
     seed: Seed = None,
     positive_sample: bool = True,
+    num_samples: int | None = None,
 ) -> np.ndarray:
   """Sample from the dominating pair for DP-BandMF using balls-in-bins sampling.
 
@@ -91,6 +109,8 @@ def _generate_balls_in_bins_sample(
       pair corresponding to the case where the sensitive example is included.
       Otherwise, we sample from the other case in the dominating pair, where the
       sensitive example is not included.
+    num_samples: The number of samples to generate. None means generate a single
+      sample.
 
   Returns:
     A sample from the dominating PLD for DP-BandMF using balls-in-bins sampling.
@@ -101,18 +121,23 @@ def _generate_balls_in_bins_sample(
     raise ValueError('cycle_length must be positive.')
   if c_col.size > iterations:
     c_col = c_col[:iterations]
+  num_samples_or_one = num_samples or 1
   rng = np.random.default_rng(seed)
   if positive_sample:
     # Add Cx to the Gaussian noise, where x is a vector which is 1 in every
     # b-th coordinate starting at a random position in {0, 1, ..., b-1} and 0
     # otherwise.
-    starting_index = rng.integers(0, cycle_length)
-    x = np.arange(iterations) % cycle_length == starting_index
-    # TODO - Precompute this once for efficiency.
-    mode = _banded_c_times_x(c_col, x)
+    possible_modes = _all_balls_in_bins_modes(
+        iterations, cycle_length, tuple(c_col)
+    )
+    counts = rng.multinomial(
+        n=num_samples_or_one, pvals=np.full(cycle_length, 1.0 / cycle_length)
+    )
+    mode = np.repeat(possible_modes, repeats=counts, axis=1)
   else:
-    mode = np.zeros(iterations)
-  return rng.normal(loc=mode, scale=noise_multiplier)
+    mode = np.zeros((iterations, num_samples_or_one))
+  sample = rng.normal(loc=mode, scale=noise_multiplier)
+  return sample[:, 0] if num_samples is None else sample
 
 
 def _sample_b_min_sep_positive_modes_no_truncation(
@@ -383,29 +408,15 @@ def generate_sample(
           'Monte Carlo accounting for balls-in-bins sampling does not support '
           'truncation (yet), so dataset_size should not be set.'
       )
-    if num_samples is None:
-      return _generate_balls_in_bins_sample(
-          strategy.iterations,
-          strategy.cycle_length,
-          noise_multiplier,
-          c_col,
-          seed,
-          positive_sample,
-      )
-    else:
-      # TODO: Explore vectorization for balls-in-bins generation.
-      output = np.zeros((strategy.iterations, num_samples))
-      rng = np.random.default_rng(seed)
-      for i in range(num_samples):
-        output[:, i] = _generate_balls_in_bins_sample(
-            strategy.iterations,
-            strategy.cycle_length,
-            noise_multiplier,
-            c_col,
-            rng,
-            positive_sample,
-        )
-      return output
+    return _generate_balls_in_bins_sample(
+        strategy.iterations,
+        strategy.cycle_length,
+        noise_multiplier,
+        c_col,
+        seed,
+        positive_sample,
+        num_samples,
+    )
   elif isinstance(strategy, batch_selection.BMinSepSampling):
     if dataset_size is None and strategy.truncated_batch_size is not None:
       raise ValueError(
