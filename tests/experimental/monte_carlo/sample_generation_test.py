@@ -67,30 +67,27 @@ _WARM_START_DISTRIBUTION = np.array([1 / 6, 1 / 6, 1 / 3, 1 / 6, 1 / 6])
 
 class SampleGenerationTest(parameterized.TestCase):
 
-  @parameterized.product(
-      sampling_info=[
-          (True, np.array([1.0]), np.array([1.0, 0.0, 1.0, 0.0])),
-          (True, np.array([1.0, 0.5]), np.array([1.0, 0.5, 1.0, 0.5])),
-          (False, np.array([1.0, 0.5]), np.array([0.0, 0.0, 0.0, 0.0])),
-          (
-              True,
-              np.array([1.0, 0.5, 0.25, 0.125]),
-              np.array([1.0, 0.5, 1.25, 0.625]),
-          ),
-          (
-              False,
-              np.array([1.0, 0.5, 0.25, 0.125]),
-              np.array([0.0, 0.0, 0.0, 0.0]),
-          ),
-      ],
-      use_vectorized=[True, False],
+  @parameterized.parameters(
+      (True, np.array([1.0]), np.array([1.0, 0.0, 1.0, 0.0])),
+      (True, np.array([1.0, 0.5]), np.array([1.0, 0.5, 1.0, 0.5])),
+      (False, np.array([1.0, 0.5]), np.array([0.0, 0.0, 0.0, 0.0])),
+      (
+          True,
+          np.array([1.0, 0.5, 0.25, 0.125]),
+          np.array([1.0, 0.5, 1.25, 0.625]),
+      ),
+      (
+          False,
+          np.array([1.0, 0.5, 0.25, 0.125]),
+          np.array([0.0, 0.0, 0.0, 0.0]),
+      ),
   )
   def test_generate_balls_in_bins_sample_low_noise(
       self,
-      sampling_info,
-      use_vectorized,
+      positive_sample,
+      c_col,
+      first_mode,
   ):
-    positive_sample, c_col, first_mode = sampling_info
     sampling_scheme = batch_selection.BallsInBinsSampling(
         cycle_length=2, iterations=4
     )
@@ -102,23 +99,13 @@ class SampleGenerationTest(parameterized.TestCase):
     second_mode[1:] = first_mode[:-1]
     first_mode_count = 0
     num_samples = 10000
-    if use_vectorized:
-      samples = sample_generation.generate_sample(
-          sampling_scheme,
-          noise_multiplier,
-          c_col,
-          positive_sample=positive_sample,
-          num_samples=num_samples,
-      )
-    else:
-      samples = np.zeros((4, num_samples))
-      for i in range(num_samples):
-        samples[:, i] = sample_generation.generate_sample(
-            sampling_scheme,
-            noise_multiplier,
-            c_col,
-            positive_sample=positive_sample,
-        )
+    samples = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier,
+        c_col,
+        positive_sample=positive_sample,
+        num_samples=num_samples,
+    )
     for i in range(num_samples):
       is_first_mode = np.allclose(samples[:, i], first_mode, atol=1e-6)
       is_second_mode = np.allclose(samples[:, i], second_mode, atol=1e-6)
@@ -130,64 +117,57 @@ class SampleGenerationTest(parameterized.TestCase):
       self.assertGreater(first_mode_count, 4700)
       self.assertLess(first_mode_count, 5300)
 
-  @parameterized.product(
-      sampling_info=[
-          (
-              True,
-              np.array([1.0]),
-              0.5,
-              False,
-              _DP_SGD_MODES,
-              _COLD_START_DISTRIBUTION,
-          ),
-          (
-              True,
-              np.array([1.0, 0.5]),
-              0.5,
-              False,
-              _BANDMF_MODES,
-              _COLD_START_DISTRIBUTION,
-          ),
-          (
-              True,
-              np.array([1.0, 0.5]),
-              0.25,
-              False,
-              _BANDMF_MODES,
-              np.array([1 / 16, 3 / 16, 3 / 16, 9 / 64, 27 / 64]),
-          ),
-          (
-              True,
-              np.array([1.0, 0.5]),
-              0.5,
-              True,
-              _BANDMF_MODES,
-              _WARM_START_DISTRIBUTION,
-          ),
-          (
-              False,
-              np.array([1.0]),
-              0.5,
-              False,
-              [np.array([0.0, 0.0, 0.0])],
-              np.array([1.0]),
-          ),
-      ],
-      use_vectorized=[True, False],
+  @parameterized.parameters(
+      (
+          True,
+          np.array([1.0]),
+          0.5,
+          False,
+          _DP_SGD_MODES,
+          _COLD_START_DISTRIBUTION,
+      ),
+      (
+          True,
+          np.array([1.0, 0.5]),
+          0.5,
+          False,
+          _BANDMF_MODES,
+          _COLD_START_DISTRIBUTION,
+      ),
+      (
+          True,
+          np.array([1.0, 0.5]),
+          0.25,
+          False,
+          _BANDMF_MODES,
+          np.array([1 / 16, 3 / 16, 3 / 16, 9 / 64, 27 / 64]),
+      ),
+      (
+          True,
+          np.array([1.0, 0.5]),
+          0.5,
+          True,
+          _BANDMF_MODES,
+          _WARM_START_DISTRIBUTION,
+      ),
+      (
+          False,
+          np.array([1.0]),
+          0.5,
+          False,
+          [np.array([0.0, 0.0, 0.0])],
+          np.array([1.0]),
+      ),
   )
   def test_generate_b_min_sep_sample_low_noise(
       self,
-      sampling_info,
-      use_vectorized,
+      positive_sample,
+      c_col,
+      sampling_prob,
+      warm_start,
+      modes,
+      mode_distribution,
   ):
-    (
-        positive_sample,
-        c_col,
-        sampling_prob,
-        warm_start,
-        modes,
-        mode_distribution,
-    ) = sampling_info
     sampling_scheme = batch_selection.BMinSepSampling(
         sampling_prob=sampling_prob,
         min_sep=2,
@@ -197,23 +177,13 @@ class SampleGenerationTest(parameterized.TestCase):
     mode_counts = np.zeros(len(modes))
     noise_multiplier = 1e-9
     num_samples = 10000
-    if use_vectorized:
-      samples = sample_generation.generate_sample(
-          sampling_scheme,
-          noise_multiplier,
-          c_col,
-          positive_sample=positive_sample,
-          num_samples=num_samples,
-      )
-    else:
-      samples = np.zeros((3, num_samples))
-      for i in range(num_samples):
-        samples[:, i] = sample_generation.generate_sample(
-            sampling_scheme,
-            noise_multiplier,
-            c_col,
-            positive_sample=positive_sample,
-        )
+    samples = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier,
+        c_col,
+        positive_sample=positive_sample,
+        num_samples=num_samples,
+    )
     for i, mode in enumerate(modes):
       for j in range(num_samples):
         if np.allclose(samples[:, j], mode, atol=1e-6):
@@ -223,120 +193,105 @@ class SampleGenerationTest(parameterized.TestCase):
     # All within 6 standard deviations
     assert np.all(differences <= 6 * stdev)
 
-  @parameterized.product(
-      sampling_info=[
-          # Test no warm-start, positive case, dataset size = truncated batch
-          # size. Should be same as no truncation.
-          (
-              True,
-              False,
-              _BANDMF_MODES,
-              _COLD_START_DISTRIBUTION,
-              _DP_SGD_MODES,
-              _COLD_START_DISTRIBUTION,
-              2,
-              2,
-          ),
-          # Test no warm-start, positive case.
-          (
-              True,
-              False,
-              _BANDMF_TRUNCATED_MODES,
-              np.array(
-                  [x / 128 for x in [2, 4, 10, 2, 12, 18, 4, 24, 5, 14, 33]]
-              ),
-              _DP_SGD_MODES,
-              _COLD_START_DISTRIBUTION,
-              2,
-              1,
-          ),
-          # Test no warm-start, positive case, larger dataset.
-          (
-              True,
-              False,
-              _BANDMF_TRUNCATED_MODES,
-              np.array([
-                  x / (9 * 2**9)
-                  for x in [32, 144, 208, 60, 774, 894, 48, 1080, 70, 567, 731]
-              ]),
-              _SUM_OF_TWO_DP_SGD_MODES,
-              np.array(
-                  [x / 64 for x in [4, 8, 4, 8, 8, 4, 8, 4, 4, 4, 1, 2, 1]]
-              ),
-              3,
-              2,
-          ),
-          # Test no warm-start, positive case, dataset size - truncated batch
-          # size > 1.
-          (
-              True,
-              False,
-              _BANDMF_TRUNCATED_MODES,
-              np.array([
-                  x / (9 * 2**9)
-                  for x in [
-                      116,
-                      132,
-                      520,
-                      60,
-                      162,
-                      354,
-                      240,
-                      648,
-                      310,
-                      381,
-                      1685,
-                  ]
-              ]),
-              _SUM_OF_TWO_DP_SGD_MODES,
-              np.array(
-                  [x / 64 for x in [4, 8, 4, 8, 8, 4, 8, 4, 4, 4, 1, 2, 1]]
-              ),
-              3,
-              1,
-          ),
-          # Test yes warm-start, positive case.
-          (
-              True,
-              True,
-              _BANDMF_TRUNCATED_MODES,
-              np.array(
-                  [x / 144 for x in [1, 2, 5, 2, 12, 18, 8, 32, 5, 18, 41]]
-              ),
-              _DP_SGD_MODES,
-              _WARM_START_DISTRIBUTION,
-              2,
-              1,
-          ),
-          # Test no warm-start, negative case.
-          (
-              False,
-              False,
-              [-x for x in _BANDMF_MODES],
-              np.array([x / 128 for x in [2, 14, 4, 7, 101]]),
-              _DP_SGD_MODES,
-              _COLD_START_DISTRIBUTION,
-              2,
-              1,
-          ),
-      ],
-      use_vectorized=[True, False],
+  @parameterized.parameters(
+      # Test no warm-start, positive case, dataset size = truncated batch
+      # size. Should be same as no truncation.
+      (
+          True,
+          False,
+          _BANDMF_MODES,
+          _COLD_START_DISTRIBUTION,
+          _DP_SGD_MODES,
+          _COLD_START_DISTRIBUTION,
+          2,
+          2,
+      ),
+      # Test no warm-start, positive case.
+      (
+          True,
+          False,
+          _BANDMF_TRUNCATED_MODES,
+          np.array([x / 128 for x in [2, 4, 10, 2, 12, 18, 4, 24, 5, 14, 33]]),
+          _DP_SGD_MODES,
+          _COLD_START_DISTRIBUTION,
+          2,
+          1,
+      ),
+      # Test no warm-start, positive case, larger dataset.
+      (
+          True,
+          False,
+          _BANDMF_TRUNCATED_MODES,
+          np.array([
+              x / (9 * 2**9)
+              for x in [32, 144, 208, 60, 774, 894, 48, 1080, 70, 567, 731]
+          ]),
+          _SUM_OF_TWO_DP_SGD_MODES,
+          np.array([x / 64 for x in [4, 8, 4, 8, 8, 4, 8, 4, 4, 4, 1, 2, 1]]),
+          3,
+          2,
+      ),
+      # Test no warm-start, positive case, dataset size - truncated batch
+      # size > 1.
+      (
+          True,
+          False,
+          _BANDMF_TRUNCATED_MODES,
+          np.array([
+              x / (9 * 2**9)
+              for x in [
+                  116,
+                  132,
+                  520,
+                  60,
+                  162,
+                  354,
+                  240,
+                  648,
+                  310,
+                  381,
+                  1685,
+              ]
+          ]),
+          _SUM_OF_TWO_DP_SGD_MODES,
+          np.array([x / 64 for x in [4, 8, 4, 8, 8, 4, 8, 4, 4, 4, 1, 2, 1]]),
+          3,
+          1,
+      ),
+      # Test yes warm-start, positive case.
+      (
+          True,
+          True,
+          _BANDMF_TRUNCATED_MODES,
+          np.array([x / 144 for x in [1, 2, 5, 2, 12, 18, 8, 32, 5, 18, 41]]),
+          _DP_SGD_MODES,
+          _WARM_START_DISTRIBUTION,
+          2,
+          1,
+      ),
+      # Test no warm-start, negative case.
+      (
+          False,
+          False,
+          [-x for x in _BANDMF_MODES],
+          np.array([x / 128 for x in [2, 14, 4, 7, 101]]),
+          _DP_SGD_MODES,
+          _COLD_START_DISTRIBUTION,
+          2,
+          1,
+      ),
   )
   def test_generate_b_min_sep_sample_low_noise_with_truncation(
       self,
-      sampling_info,
-      use_vectorized,
+      positive_sample,
+      warm_start,
+      modes,
+      mode_distribution,
+      rbs_modes,
+      rbs_distribution,
+      dataset_size,
+      truncated_batch_size,
   ):
-    (
-        positive_sample,
-        warm_start,
-        modes,
-        mode_distribution,
-        rbs_modes,
-        rbs_distribution,
-        dataset_size,
-        truncated_batch_size,
-    ) = sampling_info
     c_col = np.array([1.0, 0.5])
     sampling_scheme = batch_selection.BMinSepSampling(
         sampling_prob=0.5,
@@ -349,26 +304,14 @@ class SampleGenerationTest(parameterized.TestCase):
     rbs_counts = np.zeros(len(rbs_modes))
     noise_multiplier = 1e-9
     num_samples = 10000
-    if use_vectorized:
-      samples, rbs = sample_generation.generate_sample(
-          sampling_scheme,
-          noise_multiplier,
-          c_col,
-          positive_sample=positive_sample,
-          num_samples=num_samples,
-          dataset_size=dataset_size,
-      )
-    else:
-      samples = np.zeros((3, num_samples))
-      rbs = np.zeros((3, num_samples))
-      for i in range(num_samples):
-        samples[:, i], rbs[:, i] = sample_generation.generate_sample(
-            sampling_scheme,
-            noise_multiplier,
-            c_col,
-            positive_sample=positive_sample,
-            dataset_size=dataset_size,
-        )
+    samples, rbs = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier,
+        c_col,
+        positive_sample=positive_sample,
+        num_samples=num_samples,
+        dataset_size=dataset_size,
+    )
     for i, mode in enumerate(modes):
       for j in range(num_samples):
         if np.allclose(samples[:, j], mode, atol=1e-6):
@@ -388,19 +331,19 @@ class SampleGenerationTest(parameterized.TestCase):
 
   @parameterized.parameters([
       (
-          np.array([1.0, 0.0, 1.0, 0.0]),
+          np.array([[1.0], [0.0], [1.0], [0.0]]),
           np.array([1.0, 0.0]),
-          0.4337808304830272,
+          [0.4337808304830272],
       ),
       (
-          np.array([1.0, 0.5, 1.0, 0.5]),
+          np.array([[1.0], [0.5], [1.0], [0.5]]),
           np.array([1.0, 0.5]),
-          0.9052974004451105,
+          [0.9052974004451105],
       ),
       (
-          np.array([1.0, 1.0, 1.0, 1.0]),
+          np.array([[1.0], [1.0], [1.0], [1.0]]),
           np.array([1.0, 1.0, 0.5, 0.5]),
-          1.5799760835798948,
+          [1.5799760835798948],
       ),
   ])
   def test_compute_privacy_loss_balls_in_bins(
@@ -416,8 +359,7 @@ class SampleGenerationTest(parameterized.TestCase):
         noise_multiplier,
         c_col,
     )
-    self.assertIsInstance(privacy_loss, float)
-    self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
+    np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
 
   @parameterized.parameters([
       (
@@ -448,22 +390,22 @@ class SampleGenerationTest(parameterized.TestCase):
 
   @parameterized.parameters([
       (
-          np.array([1.0, 1.0, 1.0]),
+          np.array([[1.0], [1.0], [1.0]]),
           np.array([1.0]),
           False,
-          0.6070560625306676,
+          [0.6070560625306676],
       ),
       (
-          np.array([1.0, 1.0, 1.0]),
+          np.array([[1.0], [1.0], [1.0]]),
           np.array([1.0, 0.5]),
           False,
-          0.9239798890121712,
+          [0.9239798890121712],
       ),
       (
-          np.array([1.0, 1.0, 1.0]),
+          np.array([[1.0], [1.0], [1.0]]),
           np.array([1.0, 0.5]),
           True,
-          0.8329398380809252,
+          [0.8329398380809252],
       ),
   ])
   def test_compute_privacy_loss_b_min_sep(
@@ -481,41 +423,40 @@ class SampleGenerationTest(parameterized.TestCase):
         1.0,
         c_col,
     )
-    self.assertIsInstance(privacy_loss, float)
-    self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
+    np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
 
   @parameterized.parameters([
       (
-          np.array([1.0, 1.0, 1.0]),
+          np.array([[1.0], [1.0], [1.0]]),
           np.array([1.0, 0.5]),
-          np.array([1, 0, 0]),
+          np.array([[1], [0], [0]]),
           1,
           False,
-          0.8407396632949528,
+          [0.8407396632949528],
       ),
       (
-          np.array([1.0, 1.0, 1.0]),
+          np.array([[1.0], [1.0], [1.0]]),
           np.array([1.0, 0.5]),
-          np.array([2, 0, 1]),
+          np.array([[2], [0], [1]]),
           1,
           False,
-          0.6833726274094434,
+          [0.6833726274094434],
       ),
       (
-          np.array([1.0, 1.0, 1.0]),
+          np.array([[1.0], [1.0], [1.0]]),
           np.array([1.0, 0.5]),
-          np.array([2, 0, 1]),
+          np.array([[2], [0], [1]]),
           2,
           False,
-          0.978400107545793,
+          [0.978400107545793],
       ),
       (
-          np.array([1.0, 1.0, 1.0]),
+          np.array([[1.0], [1.0], [1.0]]),
           np.array([1.0, 0.5]),
-          np.array([2, 0, 1]),
+          np.array([[2], [0], [1]]),
           1,
           True,
-          0.6643184939690996,
+          [0.6643184939690996],
       ),
   ])
   def test_compute_privacy_loss_b_min_sep_with_truncation(
@@ -541,8 +482,7 @@ class SampleGenerationTest(parameterized.TestCase):
         c_col,
         aux=rest_batch_sizes,
     )
-    self.assertIsInstance(privacy_loss, float)
-    self.assertAlmostEqual(privacy_loss, expected_privacy_loss, places=6)
+    np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
 
   @parameterized.parameters([
       dict(
@@ -606,15 +546,13 @@ class SampleGenerationTest(parameterized.TestCase):
     # In this setup, the privacy loss is very close to 1.25e8 for samples from
     # the first mode, and very close to 1.125e8 for samples from the second
     # mode.
-    pl_samples = []
-    for _ in range(10000):
-      pl, _ = sample_generation.get_privacy_loss_sample(
-          sampling_scheme,
-          noise_multiplier,
-          c_col,
-          positive_sample=True,
-      )
-      pl_samples.append(pl)
+    pl_samples, _ = sample_generation.get_privacy_loss_sample(
+        sampling_scheme,
+        noise_multiplier,
+        c_col,
+        positive_sample=True,
+        num_samples=10000,
+    )
     first_mode_count = sum(np.isclose(pl_samples, 1.25e8, atol=1e5))
     second_mode_count = sum(np.isclose(pl_samples, 1.125e8, atol=1e5))
     self.assertEqual(first_mode_count + second_mode_count, 10000)
@@ -630,15 +568,13 @@ class SampleGenerationTest(parameterized.TestCase):
     noise_multiplier = 1e-4
     c_col = np.array([1.0, 0.5])
     # In this setup, the privacy loss is very close to 1.125e8 always.
-    pl_samples = []
-    for _ in range(10000):
-      pl, _ = sample_generation.get_privacy_loss_sample(
-          sampling_scheme,
-          noise_multiplier,
-          c_col,
-          positive_sample=False,
-      )
-      pl_samples.append(pl)
+    pl_samples, _ = sample_generation.get_privacy_loss_sample(
+        sampling_scheme,
+        noise_multiplier,
+        c_col,
+        positive_sample=False,
+        num_samples=10000,
+    )
     mode_count = sum(np.isclose(pl_samples, 1.125e8, atol=1e5))
     self.assertEqual(mode_count, 10000)
 

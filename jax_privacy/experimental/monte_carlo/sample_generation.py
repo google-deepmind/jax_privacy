@@ -75,15 +75,6 @@ def _all_balls_in_bins_modes(
   return sp.linalg.toeplitz(first_mode, zeros_vector)
 
 
-def _generate_zero_mean_sample(
-    iterations: int,
-    noise_multiplier: float,
-    rng: np.random.Generator,
-) -> np.ndarray:
-  """Generates a sample from a zero-mean Gaussian."""
-  return rng.normal(loc=0.0, scale=noise_multiplier, size=iterations)
-
-
 def _generate_balls_in_bins_sample(
     iterations: int,
     cycle_length: int,
@@ -91,7 +82,7 @@ def _generate_balls_in_bins_sample(
     c_col: np.ndarray,
     seed: Seed = None,
     positive_sample: bool = True,
-    num_samples: int | None = None,
+    num_samples: int = 1,
 ) -> np.ndarray:
   """Sample from the dominating pair for DP-BandMF using balls-in-bins sampling.
 
@@ -109,8 +100,7 @@ def _generate_balls_in_bins_sample(
       pair corresponding to the case where the sensitive example is included.
       Otherwise, we sample from the other case in the dominating pair, where the
       sensitive example is not included.
-    num_samples: The number of samples to generate. None means generate a single
-      sample.
+    num_samples: The number of samples to generate.
 
   Returns:
     A sample from the dominating PLD for DP-BandMF using balls-in-bins sampling.
@@ -121,7 +111,6 @@ def _generate_balls_in_bins_sample(
     raise ValueError('cycle_length must be positive.')
   if c_col.size > iterations:
     c_col = c_col[:iterations]
-  num_samples_or_one = num_samples or 1
   rng = np.random.default_rng(seed)
   if positive_sample:
     # Add Cx to the Gaussian noise, where x is a vector which is 1 in every
@@ -131,13 +120,12 @@ def _generate_balls_in_bins_sample(
         iterations, cycle_length, tuple(c_col)
     )
     counts = rng.multinomial(
-        n=num_samples_or_one, pvals=np.full(cycle_length, 1.0 / cycle_length)
+        n=num_samples, pvals=np.full(cycle_length, 1.0 / cycle_length)
     )
     mode = np.repeat(possible_modes, repeats=counts, axis=1)
   else:
-    mode = np.zeros((iterations, num_samples_or_one))
-  sample = rng.normal(loc=mode, scale=noise_multiplier)
-  return sample[:, 0] if num_samples is None else sample
+    mode = np.zeros((iterations, num_samples))
+  return rng.normal(loc=mode, scale=noise_multiplier)
 
 
 def _sample_b_min_sep_positive_modes_no_truncation(
@@ -301,7 +289,7 @@ def _generate_b_min_sep_sample(
     c_col: np.ndarray,
     seed: Seed = None,
     positive_sample: bool = True,
-    num_samples: int | None = None,
+    num_samples: int = 1,
     dataset_size: int | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
   """Samples from the dominating pair for DP-BandMF using b-min-sep sampling.
@@ -320,8 +308,7 @@ def _generate_b_min_sep_sample(
       pair corresponding to the case where the sensitive example is included.
       Otherwise, we sample from the other case in the dominating pair, where the
       sensitive example is not included.
-    num_samples: The number of samples to generate. None means generate a single
-      sample.
+    num_samples: The number of samples to generate.
     dataset_size: The size of the dataset. Only used if
       strategy.truncated_batch_size is not None.
 
@@ -335,29 +322,22 @@ def _generate_b_min_sep_sample(
   if c_col.size > strategy.iterations:
     c_col = c_col[: strategy.iterations]
   rng = np.random.default_rng(seed)
-  # For simplicity, if num_samples is None, we still create a 2D array.
-  num_samples_or_one = num_samples or 1
   if strategy.truncated_batch_size:
     mode, rest_batch_sizes = _sample_b_min_sep_modes_with_truncation(
-        strategy, c_col, rng, num_samples_or_one, positive_sample, dataset_size
+        strategy, c_col, rng, num_samples, positive_sample, dataset_size
     )
   elif positive_sample:
     mode = _sample_b_min_sep_positive_modes_no_truncation(
-        strategy, c_col, rng, num_samples_or_one
+        strategy, c_col, rng, num_samples
     )
     rest_batch_sizes = None
   else:
-    mode = np.zeros((strategy.iterations, num_samples_or_one))
+    mode = np.zeros((strategy.iterations, num_samples))
     rest_batch_sizes = None
-  if num_samples is None:
-    output = rng.normal(loc=mode[:, 0], scale=noise_multiplier)
-  else:
-    output = rng.normal(loc=mode, scale=noise_multiplier)
+  output = rng.normal(loc=mode, scale=noise_multiplier)
   if rest_batch_sizes is None:
     return output
   else:
-    if num_samples is None:
-      rest_batch_sizes = rest_batch_sizes[:, 0]
     return output, rest_batch_sizes
 
 
@@ -367,7 +347,7 @@ def generate_sample(
     c_col: np.ndarray,
     seed: Seed = None,
     positive_sample: bool = True,
-    num_samples: int | None = None,
+    num_samples: int = 1,
     dataset_size: int | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
   """Generates a sample from the dominating pair for amplified DP-BandMF.
@@ -385,19 +365,18 @@ def generate_sample(
       pair corresponding to the case where the sensitive example is included.
       Otherwise, we sample from the other case in the dominating pair, where the
       sensitive example is not included.
-    num_samples: The number of samples to generate. None means generate a single
-      sample.
+    num_samples: The number of samples to generate. The default is 1, but it is
+      typically much more efficient to generate multiple samples in a single
+      call to benefit from vectorization.
     dataset_size: The size of the dataset. Should only be set if accounting for
       the strategy supports truncation, and strategy.truncated_batch_size is not
       None.
 
   Returns:
     Sample(s) from the dominating PLD for DP-BandMF using balls-in-bins
-    sampling. If num_samples is None, the output is 1D with dimension
-    strategy.iterations. If num_samples is not None, the output is 2D with
-    dimension (strategy.iterations, num_samples). Potentially also returns
-    a second array containing auxiliary information needed to evaluate the
-    privacy loss.
+    sampling. The output is 2D with dimension (strategy.iterations,
+    num_samples). Potentially also returns a second array containing auxiliary
+    information needed to evaluate the privacy loss.
   """
   if noise_multiplier < 0:
     raise ValueError('noise_multiplier must be non-negative.')
@@ -447,14 +426,13 @@ def _compute_balls_in_bins_privacy_loss(
     sample: np.ndarray,
     noise_multiplier: float,
     c_col: np.ndarray,
-) -> float | np.ndarray:
+) -> np.ndarray:
   """Computes the privacy loss for a sample from balls-in-bins sampling.
 
   Args:
     epoch_length: The length of each epoch (number of bins) for balls-in-bins
       sampling.
-    sample: The sample(s), generated by _generate_balls_in_bins_sample. If 1D,
-      treated as a single sample. If 2D, columns are treated as samples.
+    sample: The sample(s), generated by _generate_balls_in_bins_sample.
     noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
       clip norm, not accounting for the norm of c_col.
     c_col: The non-zero entries in the first column of C. Should be non-negative
@@ -468,12 +446,8 @@ def _compute_balls_in_bins_privacy_loss(
     raise ValueError('epoch_length must be positive.')
   if noise_multiplier <= 0:
     raise ValueError('noise_multiplier must be positive.')
-  if sample.ndim > 2:
-    raise ValueError('sample must be a 1D or 2D array.')
-  squeeze_output = False
-  if sample.ndim == 1:
-    sample = sample[:, np.newaxis]
-    squeeze_output = True
+  if sample.ndim != 2:
+    raise ValueError('sample must be a 2D array.')
   iterations = sample.shape[0]
   _validate_c_col(c_col)
   if c_col.size > iterations:
@@ -486,7 +460,7 @@ def _compute_balls_in_bins_privacy_loss(
   squared_mode_norms = (modes_matrix**2).sum(axis=0)[:, np.newaxis]
   llrs = (2 * dot_products - squared_mode_norms) / (2 * noise_multiplier**2)
   privacy_loss = sp.special.logsumexp(llrs, axis=0) - np.log(epoch_length)
-  return privacy_loss[0] if squeeze_output else privacy_loss
+  return privacy_loss
 
 
 def _compute_b_min_sep_privacy_loss_no_truncation(
@@ -507,7 +481,7 @@ def _compute_b_min_sep_privacy_loss_no_truncation(
       it will participate in 1 / (b - 1 + 1 / sampling_prob) fraction of the
       iterations on average, not sampling_prob fraction of the iterations as in
       Poisson sampling.
-    samples: The sample(s), generated by _generate_b_min_sep_sample.
+    samples: The samples, generated by _generate_b_min_sep_sample.
     noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
       clip norm, not accounting for the norm of c_col.
     c_col: The non-zero entries in the first column of C. Should be non-negative
@@ -585,7 +559,7 @@ def _compute_b_min_sep_privacy_loss(
       it will participate in 1 / (b - 1 + 1 / sampling_prob) fraction of the
       iterations on average, not sampling_prob fraction of the iterations as in
       Poisson sampling.
-    samples: The sample(s), generated by _generate_b_min_sep_sample.
+    samples: The samples, generated by _generate_b_min_sep_sample.
     noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
       clip norm, not accounting for the norm of c_col.
     c_col: The non-zero entries in the first column of C. Should be non-negative
@@ -714,7 +688,7 @@ def compute_privacy_loss(
     noise_multiplier: float,
     c_col: np.ndarray,
     aux: np.ndarray | None = None,
-) -> float | np.ndarray:
+) -> np.ndarray:
   """Computes the privacy loss on a sample from the dominating pair.
 
   This method reports the privacy loss assuming we sample from the distribution
@@ -724,9 +698,7 @@ def compute_privacy_loss(
 
   Args:
     strategy: The batch selection strategy used to generate the sample.
-    sample: The sample(s), generated by generate_sample. If 2D, we assume the
-      second dimension is the number of samples and return a vector of privacy
-      losses.
+    sample: The samples, generated by generate_sample.
     noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
       clip norm, not accounting for the norm of c_col.
     c_col: The non-zero entries in the first column of C. Should be non-negative
@@ -762,22 +734,13 @@ def compute_privacy_loss(
       )
     if aux is not None and aux.shape != sample.shape:
       raise ValueError('aux must have the same shape as sample.')
-    if sample.ndim == 1:
-      return _compute_b_min_sep_privacy_loss(
-          strategy,
-          np.expand_dims(sample, axis=1),
-          noise_multiplier,
-          c_col,
-          rest_batch_sizes=aux,
-      )[0]
-    else:
-      return _compute_b_min_sep_privacy_loss(
-          strategy,
-          sample,
-          noise_multiplier,
-          c_col,
-          rest_batch_sizes=aux,
-      )
+    return _compute_b_min_sep_privacy_loss(
+        strategy,
+        sample,
+        noise_multiplier,
+        c_col,
+        rest_batch_sizes=aux,
+    )
   else:
     raise ValueError(f'Unsupported batch selection strategy: {type(strategy)}')
 
@@ -788,9 +751,9 @@ def get_privacy_loss_sample(
     c_col: np.ndarray,
     seed: Seed = None,
     positive_sample: bool = True,
-    num_samples: int | None = None,
+    num_samples: int = 1,
     dataset_size: int | None = None,
-) -> tuple[float | np.ndarray, np.ndarray | tuple[np.ndarray, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray | tuple[np.ndarray, np.ndarray]]:
   """Returns sample(s) from DP-BandMF's dominating privacy loss distribution.
 
   Args:
@@ -804,9 +767,9 @@ def get_privacy_loss_sample(
       pair corresponding to the case where the sensitive example is included.
       Otherwise, we sample from the other case in the dominating pair, where the
       sensitive example is not included.
-    num_samples: The number of samples to generate. None means generate a single
-      sample, and the output will be a float. If not None, the output will be a
-      vector of floats.
+    num_samples: The number of samples to generate. The default is 1, but it is
+      typically much more efficient to generate multiple samples in a single
+      call to benefit from vectorization.
     dataset_size: The size of the dataset. Should only be set if accounting for
       the strategy supports truncation, and strategy.truncated_batch_size is not
       None.
