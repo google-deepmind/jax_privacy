@@ -303,8 +303,9 @@ def sensitivity_squared(coef: jax.Array, n: int | None = None) -> jax.Array:
 def minsep_sensitivity_squared(
     strategy_coef: jax.Array,
     min_sep: int,
+    *,
+    n: int,
     max_participations: int | None = None,
-    n: int | None = None,
 ) -> jax.Array:
   """Returns the sensitivity of the Toeplitz matrix.
 
@@ -332,9 +333,8 @@ def minsep_sensitivity_squared(
       training](https://arxiv.org/abs/2306.08153). For a user participating on
       iteration $i$ and then again on iteration $j$,  the separation is $j -i$;
       that is, a min_sep of 1 allows participation on every iteration.
+    n: The size of the matrix C (see `coef` above).
     max_participations: The maximum participation of a worst-case user.
-    n: Optional, the size of the matrix C (see `coef` above). If None, the size
-      of the matrix is equal to the number of coefficients.
 
   Returns:
     The sensitivity squared. This is exact when `strategy_coef` is non-negative

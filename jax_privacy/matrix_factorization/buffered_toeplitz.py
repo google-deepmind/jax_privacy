@@ -658,6 +658,7 @@ class LossFn:
       return toeplitz.minsep_sensitivity_squared(
           strategy_coef=blt.toeplitz_coefs(n),
           min_sep=min_sep,
+          n=n,
           max_participations=max_participations,
       )
 
