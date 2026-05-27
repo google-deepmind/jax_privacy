@@ -16,6 +16,9 @@ import time
 
 from absl.testing import absltest
 from absl.testing import parameterized
+import chex
+import jax
+import jax.numpy as jnp
 from jax_privacy.experimental import discrete_gaussian
 import numpy as np
 import scipy.stats
@@ -244,6 +247,35 @@ class SampleDiscreteGaussianTest(parameterized.TestCase):
       # We want the probability of getting at least size samples to be >95%.
       p = scipy.stats.binom.cdf(size - 1, oversample, 0.6)
       self.assertLess(p, 0.05)
+
+
+class SampleDiscreteGaussianPyTreeTest(parameterized.TestCase):
+
+  def test_output_structure_and_shapes(self):
+    """Output PyTree matches the structure, shapes, and dtypes of input."""
+    rng = np.random.default_rng(0)
+    pytree = {
+        "weights": jnp.zeros((10, 5), dtype=jnp.float32),
+        "bias": jnp.zeros((5,), dtype=jnp.float32),
+        "scalar": jnp.array(0.0),
+    }
+    samples = discrete_gaussian.sample_discrete_gaussian_pytree(
+        rng, sigma=1.0, pytree=pytree
+    )
+
+    chex.assert_trees_all_equal_structs(samples, pytree)
+    for p_in, p_out in zip(jax.tree.leaves(pytree), jax.tree.leaves(samples)):
+      self.assertEqual(p_out.shape, p_in.shape)
+      self.assertTrue(np.issubdtype(p_out.dtype, np.integer))
+
+  def test_empty_pytree(self):
+    """Empty PyTree completes successfully and returns an empty PyTree."""
+    rng = np.random.default_rng(0)
+    pytree = {}
+    samples = discrete_gaussian.sample_discrete_gaussian_pytree(
+        rng, sigma=1.0, pytree=pytree
+    )
+    chex.assert_trees_all_equal_structs(samples, pytree)
 
 
 if __name__ == "__main__":

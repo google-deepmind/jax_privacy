@@ -21,6 +21,7 @@ import dp_accounting
 import jax
 import jax.numpy as jnp
 from jax_privacy import clipping
+import numpy as np
 import optax
 
 
@@ -158,6 +159,175 @@ class ClipPyTreeTest(parameterized.TestCase):
     self.assertLessEqual(jnp.linalg.norm(clipped), clip_norm)
 
 
+class ClipAndRoundToGridTest(parameterized.TestCase):
+
+  @parameterized.parameters(
+      (1.0, 1000, 100),
+      (2.0, 500, 10000),
+  )
+  def test_adjusted_clip_norm(self, l2_clip_norm, grid_scale, num_params):
+    adj = clipping._adjusted_clip_norm(l2_clip_norm, grid_scale, num_params)
+    self.assertLess(adj, l2_clip_norm)
+    self.assertGreater(adj, 0.0)
+
+  def test_adjusted_clip_norm_too_small_grid_raises(self):
+    with self.assertRaises(ValueError):
+      # Grid scale 1 with 10000 params has max rounding
+      # error 100 * 1.0 / 1 / 2 = 50 > 1.0
+      clipping._adjusted_clip_norm(
+          l2_clip_norm=1.0, grid_scale=1, num_params=10000
+      )
+
+  def test_clip_and_round_to_grid_shapes_and_types(self):
+    grad = {
+        'w': jnp.array([0.1, -0.3, 0.5]),
+        'b': jnp.array(0.05),
+    }
+    with jax.enable_x64(True):
+      rounded, _ = clipping.clip_and_round_to_grid(grad, 1.0, 1000)
+
+      self.assertEqual(rounded['w'].dtype, jnp.int64)
+      self.assertEqual(rounded['b'].dtype, jnp.int64)
+      self.assertEqual(rounded['w'].shape, (3,))
+      self.assertEqual(rounded['b'].shape, ())
+
+  @parameterized.parameters(
+      (1.0, 1000, 100),
+      (5.0, 500, 1000),
+      (0.5, 2000, 50),
+  )
+  def test_clipping_bound_obeyed_after_rounding(
+      self, l2_clip_norm, grid_scale, num_params
+  ):
+    with jax.enable_x64(True):
+      # Test 1: A uniform vector pointing in (1, 1, ..., 1) with
+      # norm l2_clip_norm > adj_clip.
+      grad_ones = jnp.ones(num_params) * (l2_clip_norm / np.sqrt(num_params))
+      rounded_ones, _ = clipping.clip_and_round_to_grid(
+          grad_ones, l2_clip_norm, grid_scale
+      )
+      self.assertLessEqual(optax.global_norm(rounded_ones), grid_scale)
+      self.assertLessEqual(
+          optax.global_norm(rounded_ones) * (l2_clip_norm / grid_scale),
+          l2_clip_norm,
+      )
+
+      # Test 2: Random normal vectors with large norms.
+      rng = np.random.default_rng(42)
+      for _ in range(5):
+        raw = rng.standard_normal(num_params)
+        grad_random = jnp.array(raw / np.linalg.norm(raw) * l2_clip_norm * 2.0)
+        rounded_random, _ = clipping.clip_and_round_to_grid(
+            grad_random, l2_clip_norm, grid_scale
+        )
+        self.assertLessEqual(optax.global_norm(rounded_random), grid_scale)
+        self.assertLessEqual(
+            optax.global_norm(rounded_random) * (l2_clip_norm / grid_scale),
+            l2_clip_norm,
+        )
+
+  def test_clip_and_round_to_grid_raises_without_x64(self):
+    """Tests that clip_and_round_to_grid raises if x64 is disabled."""
+    grad = jnp.array([0.1, -0.3, 0.5])
+    with jax.enable_x64(False), self.assertRaises(ValueError):
+      clipping.clip_and_round_to_grid(grad, 1.0, 1000)
+
+
+class ClippedFunGridScaleTest(parameterized.TestCase):
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name='without_x64',
+          enable_x64=False,
+          extra_kwargs={},
+      ),
+      dict(
+          testcase_name='incompatible_with_rescale',
+          enable_x64=True,
+          extra_kwargs={'rescale_to_unit_norm': True},
+      ),
+      dict(
+          testcase_name='incompatible_with_normalize_by',
+          enable_x64=True,
+          extra_kwargs={'normalize_by': 100.0},
+      ),
+  )
+  def test_clipped_fun_grid_scale_raises(self, enable_x64, extra_kwargs):
+    """Tests that clipped_fun with grid_scale raises on invalid configs."""
+    with jax.enable_x64(enable_x64), self.assertRaises(ValueError):
+      clipping.clipped_fun(
+          lambda x: x,
+          batch_argnums=0,
+          l2_clip_norm=1.0,
+          grid_scale=1000,
+          **extra_kwargs,
+      )
+
+  def test_clipped_fun_grid_scale_properties(self):
+    """Tests dtype, sensitivity, and per-example norm bound with grid_scale."""
+    with jax.enable_x64(True):
+      # Check int64 output dtype.
+      cf = clipping.clipped_fun(
+          lambda x: x * 2.0,
+          batch_argnums=0,
+          keep_batch_dim=False,
+          l2_clip_norm=1.0,
+          grid_scale=1000,
+      )
+      data = jax.random.normal(jax.random.key(0), (10, 4))
+      result = cf(data)
+      for leaf in jax.tree.leaves(result):
+        self.assertEqual(leaf.dtype, jnp.int64)
+
+      # Check sensitivity equals grid_scale.
+      cf2 = clipping.clipped_fun(
+          lambda x: x,
+          batch_argnums=0,
+          keep_batch_dim=False,
+          l2_clip_norm=2.0,
+          grid_scale=500,
+      )
+      self.assertEqual(cf2.l2_norm_bound, 500.0)
+      self.assertEqual(
+          cf2.sensitivity(dp_accounting.NeighboringRelation.REPLACE_SPECIAL),
+          500.0,
+      )
+
+      # Check per-example norm is bounded by grid_scale.
+      grid_scale = 1000
+      cf3 = clipping.clipped_fun(
+          lambda x: x * 3.0,
+          batch_argnums=0,
+          keep_batch_dim=False,
+          l2_clip_norm=1.0,
+          grid_scale=grid_scale,
+      )
+      for i in range(10):
+        data = jax.random.normal(jax.random.key(i), (1, 20))
+        result = cf3(data)
+        self.assertLessEqual(float(optax.tree.norm(result)), grid_scale)
+
+  def test_clipped_grad_grid_scale(self):
+    """Tests clipped_grad with grid_scale end-to-end."""
+
+    def loss_fn(params, data):
+      return jnp.mean((data - params) ** 2)
+
+    with jax.enable_x64(True):
+      gf = clipping.clipped_grad(
+          loss_fn,
+          l2_clip_norm=1.0,
+          batch_argnums=1,
+          grid_scale=1000,
+      )
+      params = jnp.zeros(4)
+      data = jax.random.normal(jax.random.key(0), (10, 4))
+      result = gf(params, data)
+      for leaf in jax.tree.leaves(result):
+        self.assertEqual(leaf.dtype, jnp.int64)
+      self.assertEqual(gf.l2_norm_bound, 1000.0)
+
+
 def single_example_fun(data):
   assert data.ndim == 1
   return data + 2
@@ -235,7 +405,7 @@ class ClipTransformTest(parameterized.TestCase):
     sum_clip_mean = clipping.clipped_fun(
         **CLIP_SUM_INPUTS[0],
         dtype=output_dtype,
-        microbatch_size=microbatch_size
+        microbatch_size=microbatch_size,
     )
     value = sum_clip_mean(data)
     expected_dtype = output_dtype or arg_dtype

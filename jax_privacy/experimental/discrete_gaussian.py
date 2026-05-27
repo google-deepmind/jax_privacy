@@ -25,6 +25,8 @@ not catastrophic failures. Roughly speaking, the floating point errors in
 computing the probabilities are added to the delta term in differential privacy.
 """
 
+import chex
+import jax
 import numpy as np
 
 
@@ -62,6 +64,7 @@ def sample_discrete_gaussian(
     sigma: float,
     size: int,
     oversample: int | None = None,
+    dtype: np.typing.DTypeLike = np.int64,
 ) -> np.ndarray:
   """Generates samples from a discrete Gaussian distribution.
 
@@ -77,18 +80,27 @@ def sample_discrete_gaussian(
     oversample: Number of samples to draw before rejection sampling. (If None, a
       default value is used. This parameter is only useful for tuning the
       algorithm for efficiency purposes.)
+    dtype: Output dtype. Must be an integer type. Defaults to ``np.int64``.
 
   Returns:
     An array of the given size sampled from the discrete Gaussian distribution.
+
+  Raises:
+    ValueError: If size<=0 or sigma<0 or oversample<=0.
+    ValueError: If dtype is not an integer type.
   """
+  if not np.issubdtype(dtype, np.integer):
+    raise ValueError(f"dtype must be an integer type, got {dtype}.")
   if size <= 0:
     raise ValueError("size must be positive.")
   if sigma < 0:
     raise ValueError("sigma must be positive.")
   elif sigma == 0:  # degenerate case, return 0
-    return np.zeros(size, dtype=np.int64)
+    return np.zeros(size, dtype=dtype)
   if oversample is None:
     laplace_scale, oversample = _get_sampling_parameters(sigma, size)
+  elif oversample <= 0:
+    raise ValueError("oversample must be positive.")
   else:
     laplace_scale, _ = _get_sampling_parameters(sigma, size)
   p = -np.expm1(-1 / laplace_scale)
@@ -114,4 +126,49 @@ def sample_discrete_gaussian(
     # Reduce the oversample size to avoid wasting time:
     _, new_oversample = _get_sampling_parameters(sigma, size - num_accepted)
     oversample = min(new_oversample, oversample)
-  return ans
+  return ans.astype(dtype)
+
+
+def sample_discrete_gaussian_pytree(
+    rng: np.random.Generator,
+    sigma: float,
+    pytree: chex.ArrayTree,
+    oversample: int | None = None,
+    dtype: np.typing.DTypeLike = np.int64,
+) -> chex.ArrayTree:
+  """Generates discrete Gaussian samples matching the structure of a PyTree.
+
+  Specifically, samples a flat array of discrete Gaussian noise for the total
+  number of parameters in ``pytree`` and reshapes it to match the PyTree
+  structure.
+
+  Args:
+    rng: PRNG to use for sampling.
+    sigma: Standard deviation proxy of the discrete Gaussian distribution.
+    pytree: PyTree defining the desired output structure and shapes.
+    oversample: Number of samples to draw before rejection sampling. (If None, a
+      default value is used. This parameter is only useful for tuning the
+      algorithm for efficiency purposes.)
+    dtype: Output dtype. Must be an integer type. Defaults to ``np.int64``.
+
+  Returns:
+    A PyTree of discrete Gaussian samples matching the structure of ``pytree``.
+  """
+  leaves, treedef = jax.tree_util.tree_flatten(pytree)
+  num_params = sum(p.size for p in leaves)
+  if num_params == 0:
+    flat_noise = np.zeros(0, dtype=dtype)
+  else:
+    flat_noise = sample_discrete_gaussian(
+        rng,
+        sigma=sigma,
+        size=num_params,
+        oversample=oversample,
+        dtype=dtype,
+    )
+  noise_leaves = []
+  offset = 0
+  for p in leaves:
+    noise_leaves.append(flat_noise[offset : offset + p.size].reshape(p.shape))
+    offset += p.size
+  return jax.tree_util.tree_unflatten(treedef, noise_leaves)

@@ -12,16 +12,30 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Demonstrates cryptographically secure DP-SGD using CPU-side randomness.
+"""Demonstrates cryptographically secure DP-SGD with discrete Gaussian noise.
 
-This example sources hardware-level entropy (RDRAND) on the CPU to
-samples batches and generate noise, injecting the noise into the JIT-compiled
-update step, which may run on GPU/TPU. This file is a fork of
-dp_logistic_regression.py.
+This example implements DP-SGD using the discrete Gaussian mechanism with
+cryptographically secure CPU-side randomness. The key steps are:
+
+  1. Compute per-example gradients.
+  2. Clip, scale, and round each per-example gradient to an integer grid.
+  3. Sum the rounded integer gradients across examples.
+  4. Add discrete Gaussian noise (integer-valued, generated on CPU).
+  5. Scale back to float and normalize by expected batch size.
+
+For cryptographic security, the PRNG is backed by hardware-level entropy
+(RDRAND) via ``randomgen.RDRAND()``. If ``randomgen`` is not installed, the
+example falls back to a standard NumPy PRNG with a warning.
+
+Privacy accounting uses the continuous Gaussian mechanism, as the discrete
+Gaussian is not currently supported by the accounting library. The discrete
+Gaussian is at least as private -- in terms of Renyi DP -- as the continuous
+Gaussian with the same sigma parameter.
 """
 
 import time
-from typing import Mapping, Tuple
+from typing import Mapping
+import warnings
 
 from absl import app
 import dp_accounting
@@ -30,9 +44,15 @@ import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import batch_selection
 from jax_privacy.experimental import accounting
+from jax_privacy.experimental import discrete_gaussian
 import numpy as np
 import optax
-import randomgen
+
+
+# Enable 64-bit mode for int64 support. With GRID_SCALE=10^9, the sum of
+# per-example integer gradients and the discrete Gaussian noise can exceed
+# int32 range (~2.1e9).
+jax.config.update('jax_enable_x64', True)
 
 
 USERS = 10_000
@@ -44,6 +64,25 @@ EPSILON = 1.0
 DELTA = 1e-5
 LEARNING_RATE = 0.2
 L2_CLIP_NORM = 1.0
+GRID_SCALE = 10**9  # Number of integer grid steps per L2_CLIP_NORM.
+
+
+def _create_secure_prng() -> np.random.Generator:
+  """Creates a cryptographically secure PRNG, falling back to standard NumPy."""
+  try:
+    # pylint: disable-next=g-import-not-at-top,import-outside-toplevel
+    import randomgen  # pytype: disable=import-error
+
+    rng = randomgen.RDRAND()  # pytype: disable=module-attr
+    return np.random.Generator(rng)
+  except ImportError:
+    warnings.warn(
+        'randomgen is not installed. Falling back to a standard NumPy PRNG. '
+        'This is NOT cryptographically secure. Install randomgen for '
+        'production use: pip install randomgen',
+        stacklevel=2,
+    )
+    return np.random.default_rng(seed=0)
 
 
 def elementwise_loss(
@@ -70,7 +109,7 @@ def create_benchmark(
     samples: int,
     features: int,
     seed: int = 0,
-) -> Tuple[Mapping[str, jax.Array], jax.Array, jax.Array]:
+) -> tuple[Mapping[str, jax.Array], jax.Array, jax.Array]:
   """Creates a simple logistic regression model and training data."""
   key = jax.random.key(seed)
   data_key, params_key = jax.random.split(key)
@@ -88,19 +127,6 @@ def create_benchmark(
   return params, feature_matrix, labels
 
 
-def generate_secure_noise(
-    prng: np.random.Generator,
-    params: Mapping[str, jax.Array],
-    stddev: float,
-) -> Mapping[str, np.ndarray]:
-  """Generates cryptographic noise for gradients."""
-
-  def sample_noise(leaf):
-    return prng.standard_normal(leaf.shape, dtype=np.float32) * stddev
-
-  return jax.tree.map(sample_noise, params)
-
-
 def main(_):
   """Main function."""
   true_params, all_features, all_labels = create_benchmark(USERS, FEATURES)
@@ -109,14 +135,17 @@ def main(_):
   optimizer = optax.sgd(LEARNING_RATE)
   opt_state = optimizer.init(init_params)
 
-  prng = np.random.Generator(randomgen.RDRAND())
+  prng = _create_secure_prng()
+
   grad_fn = jax_privacy.clipped_grad(
       logistic_loss,
       l2_clip_norm=L2_CLIP_NORM,
       batch_argnums=(1, 2),
-      normalize_by=EXPECTED_BATCH_SIZE,
+      grid_scale=GRID_SCALE,
   )
 
+  # Calibrate noise multiplier using continuous Gaussian accounting.
+  # TODO: Replace with DiscreteGaussianDpEvent when available.
   make_event = lambda sigma: accounting.dpsgd_event(
       sigma, ITERATIONS, sampling_prob=EXPECTED_BATCH_SIZE / USERS
   )
@@ -126,7 +155,10 @@ def main(_):
       target_epsilon=EPSILON,
       target_delta=DELTA,
   )
-  stddev = noise_multiplier * grad_fn.sensitivity()
+  # The noise multiplier is relative to the L2 sensitivity. Since each rounded
+  # per-example gradient has integer L2 norm at most GRID_SCALE, the L2
+  # sensitivity of the sum (under add/remove) is GRID_SCALE.
+  discrete_sigma = noise_multiplier * grad_fn.sensitivity()
 
   @jax.jit
   def train_step(
@@ -135,29 +167,37 @@ def main(_):
       batch_features,
       batch_labels,
       is_padding_example,
-      secure_noise,
+      noise,
   ):
-    """Executes a single training step.
+    """Executes a single training step with discrete Gaussian noise.
 
     Args:
       params: Current model parameters.
       opt_state: Current optimizer state.
-      batch_features: Feature matrix for the batch.
-      batch_labels: Labels for the batch.
-      is_padding_example: Boolean array indicating padded examples.
-      secure_noise: Pre-generated cryptographic noise for the gradients.
+      batch_features: Feature matrix for the batch, shape [batch, features].
+      batch_labels: Labels for the batch, shape [batch].
+      is_padding_example: Boolean array indicating padded examples, shape
+        [batch].
+      noise: Pre-generated discrete Gaussian noise (integer pytree).
 
     Returns:
-      A tuple containing the updated parameters and the updated optimizer state.
+      A tuple of (updated_params, updated_opt_state).
     """
+    # Compute clipped, rounded integer gradients and sum across the batch.
     grads = grad_fn(
         params,
         batch_features,
         batch_labels,
         is_padding_example=is_padding_example,
     )
-    noisy_grads = jax.tree.map(jnp.add, grads, secure_noise)
-    updates, new_opt_state = optimizer.update(noisy_grads, opt_state)
+    # Add noise and rescale to float.
+    noisy_grads = jax.tree.map(jnp.add, grads, noise)
+    scale_down = L2_CLIP_NORM / (GRID_SCALE * EXPECTED_BATCH_SIZE)
+    float_grads = jax.tree.map(
+        lambda g: g.astype(jnp.float32) * scale_down, noisy_grads
+    )
+
+    updates, new_opt_state = optimizer.update(float_grads, opt_state)
     new_params = optax.apply_updates(params, updates)
     return new_params, new_opt_state
 
@@ -176,7 +216,15 @@ def main(_):
     batch_features = all_features[idx]
     batch_labels = all_labels[idx]
 
-    secure_noise = generate_secure_noise(prng, params, stddev)
+    noise_pytree = jax.tree.map(
+        jnp.asarray,
+        discrete_gaussian.sample_discrete_gaussian_pytree(
+            prng,
+            sigma=discrete_sigma,
+            pytree=params,
+            dtype=np.int64,
+        ),
+    )
 
     params, opt_state = train_step(
         params,
@@ -184,7 +232,7 @@ def main(_):
         batch_features,
         batch_labels,
         is_padding_example,
-        secure_noise,
+        noise_pytree,
     )
     if step > 0 and step % 20 == 0:
       loss = logistic_loss(params, all_features, all_labels)

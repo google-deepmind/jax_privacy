@@ -26,6 +26,7 @@ import dp_accounting
 import jax
 import jax.numpy as jnp
 import optax
+from optax import microbatching
 
 
 PyTree: TypeAlias = chex.ArrayTree
@@ -150,6 +151,110 @@ def clip_pytree(
   return jax.tree.map(maybe_zero, clipped), l2_norm.astype(jnp.float32)
 
 
+def _adjusted_clip_norm(
+    l2_clip_norm: float,
+    grid_scale: int,
+    num_params: int,
+) -> float:
+  """Computes a tighter clip norm to account for norm increase from rounding.
+
+  When a real-valued vector is scaled by ``grid_scale / l2_clip_norm`` and
+  rounded to the nearest integer, each coordinate changes by at most 0.5.
+  This can increase the L2 norm by at most ``sqrt(num_params) * 0.5`` (in
+  integer units), or equivalently ``sqrt(num_params) * l2_clip_norm /
+  grid_scale / 2`` in the original units. We return a tighter clip norm so
+  that after rounding, the integer L2 norm is at most ``grid_scale``.
+
+  Args:
+    l2_clip_norm: The desired post-rounding L2 norm bound (in original units).
+    grid_scale: Number of integer grid steps corresponding to l2_clip_norm.
+    num_params: Total number of scalar parameters in the gradient.
+
+  Returns:
+    The adjusted (tighter) clip norm in original units.
+
+  Raises:
+    ValueError: If the rounding error exceeds the clip norm.
+  """
+  grid_step = l2_clip_norm / grid_scale
+  max_rounding_error = num_params**0.5 * grid_step * 0.5
+  adjusted = l2_clip_norm - max_rounding_error
+  # Only check when all values are concrete Python numbers (not JAX tracers).
+  if isinstance(adjusted, numbers.Real) and adjusted <= 0:
+    raise ValueError(
+        f'Grid scale {grid_scale} is too small for {num_params} parameters. '
+        f'The rounding error ({max_rounding_error:.4f}) exceeds the clip norm '
+        f'({l2_clip_norm:.4f}). Increase grid_scale.'
+    )
+  return adjusted
+
+
+def _check_x64_enabled():
+  """Raises ValueError if JAX 64-bit mode is not enabled."""
+  if not jax.config.jax_enable_x64:
+    raise ValueError(
+        'grid_scale requires 64-bit mode. Call '
+        "jax.config.update('jax_enable_x64', True) before using "
+        'grid_scale, otherwise jnp.int64 is silently truncated to '
+        'int32.'
+    )
+
+
+def clip_and_round_to_grid(
+    gradient: PyTree,
+    l2_clip_norm: float,
+    grid_scale: int,
+    *,
+    nan_safe: bool = True,
+    return_zero: bool = False,
+) -> tuple[PyTree, jax.Array]:
+  """Clips a gradient and rounds it to an integer grid.
+
+  This function performs four operations on a single (unbatched) gradient
+  pytree:
+
+    1. Computes a tighter (adjusted) clip norm to account for the L2 norm
+       increase caused by rounding.
+    2. Clips the gradient to have L2 norm at most the adjusted clip norm.
+    3. Scales the gradient by ``grid_scale / l2_clip_norm``.
+    4. Rounds each coordinate to the nearest integer.
+
+  After rounding, the integer vector has L2 norm at most ``grid_scale``.
+
+  This function is designed to be used with ``jax.vmap`` to process a batch of
+  per-example gradients.
+
+  Args:
+    gradient: A pytree of gradient arrays for a single example.
+    l2_clip_norm: The desired L2 clip norm (in original units).
+    grid_scale: Number of integer grid steps corresponding to l2_clip_norm.
+    nan_safe: If True, NaNs and +/- infs are converted to 0 before clipping. See
+      ``clip_pytree`` for details.
+    return_zero: If True, the output is guaranteed to be zero regardless of
+      inputs.  See ``clip_pytree`` for details.
+
+  Returns:
+    A tuple ``(rounded, l2_norm)`` where ``rounded`` is a pytree of int64
+    arrays representing the rounded gradient on the integer grid, and
+    ``l2_norm`` is the L2 norm of the input gradient before clipping.
+
+  Raises:
+    ValueError: If grid_scale is too small relative to the number of
+      parameters (the rounding error would exceed the clip norm).
+  """
+  _check_x64_enabled()
+  num_params = sum(x.size for x in jax.tree.leaves(gradient))
+  adj_clip_norm = _adjusted_clip_norm(l2_clip_norm, grid_scale, num_params)
+  clipped, l2_norm = clip_pytree(
+      gradient, adj_clip_norm, nan_safe=nan_safe, return_zero=return_zero
+  )
+  scale = grid_scale / l2_clip_norm
+  rounded = jax.tree.map(
+      lambda g: jnp.round(g * scale).astype(jnp.int64), clipped
+  )
+  return rounded, l2_norm
+
+
 # pylint: disable=g-bare-generic
 def _with_extra_batch_axis(
     fun: Callable, batch_argnums: int | Sequence[int]
@@ -217,7 +322,7 @@ def _num_real_microbatches(
   """
   if microbatch_size is None:
     return is_padding_example.shape[0]
-  reshaped = optax.microbatching.reshape_batch_axis(
+  reshaped = microbatching.reshape_batch_axis(
       is_padding_example, microbatch_size
   )
   # Ensure there is at least one True in the array.
@@ -267,6 +372,7 @@ def clipped_fun(
     dtype: jax.typing.DTypeLike | None = None,
     prng_argnum: int | None = None,
     spmd_axis_name: str | None = None,
+    grid_scale: int | None = None,
 ) -> BoundedSensitivityCallable:
   """Transforms a function to clip its output and sum across a batch.
 
@@ -325,6 +431,15 @@ def clipped_fun(
     prng_argnum: If set, specifies which argument of `fun` is a PRNG key. The
       PRNG will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap.
+    grid_scale: If set, per-example outputs are additionally scaled and rounded
+      to an integer grid after clipping.  Specifically, each clipped output is
+      multiplied by ``grid_scale / l2_clip_norm``, rounded to the nearest
+      integer, and cast to ``jnp.int64``.  The clipping norm is tightened
+      automatically so that the integer L2 norm of each rounded output is at
+      most ``grid_scale``.  This option is designed for use with the discrete
+      Gaussian mechanism.  Incompatible with ``rescale_to_unit_norm=True`` and
+      ``normalize_by != 1.0``.  When set, ``dtype`` is ignored (output is always
+      ``jnp.int64``).
 
   Returns:
     A new function `clip_fn` that clips the output of `fun` and sums across
@@ -340,6 +455,17 @@ def clipped_fun(
   """
   if isinstance(batch_argnums, int):
     batch_argnums = (batch_argnums,)
+  if grid_scale is not None:
+    if rescale_to_unit_norm:
+      raise ValueError(
+          'rescale_to_unit_norm is not compatible with grid_scale.'
+      )
+    if normalize_by != 1.0:
+      raise ValueError(
+          'normalize_by is not compatible with grid_scale. Normalization '
+          'should be applied after noise addition.'
+      )
+    _check_x64_enabled()
 
   fun = _normalize_fun_to_return_aux(fun, has_aux)
 
@@ -353,20 +479,30 @@ def clipped_fun(
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
-      value = optax.tree.cast(value, dtype)
-      clipped_value, l2_norm = clip_pytree(
-          value,
-          clip_norm=l2_clip_norm,
-          rescale_to_unit_norm=rescale_to_unit_norm,
-          nan_safe=nan_safe,
-          # See https://arxiv.org/pdf/2411.04205 for info on why this is useful.
-          return_zero=is_padding_example,
-      )
+      if grid_scale is not None:
+        clipped_value, l2_norm = clip_and_round_to_grid(
+            value,
+            l2_clip_norm,
+            grid_scale,
+            nan_safe=nan_safe,
+            return_zero=is_padding_example,
+        )
+      else:
+        value = optax.tree.cast(value, dtype)
+        clipped_value, l2_norm = clip_pytree(
+            value,
+            clip_norm=l2_clip_norm,
+            rescale_to_unit_norm=rescale_to_unit_norm,
+            nan_safe=nan_safe,
+            # See https://arxiv.org/pdf/2411.04205 for info on why this is
+            # useful.
+            return_zero=is_padding_example,
+        )
       return clipped_value, aux, l2_norm
 
     num_real_mb = _num_real_microbatches(is_padding_example, microbatch_size)
-    sum_ = optax.microbatching.AccumulationType.SUM
-    concat = optax.microbatching.AccumulationType.CONCAT
+    sum_ = microbatching.AccumulationType.SUM
+    concat = microbatching.AccumulationType.CONCAT
     axes = [0 if i in batch_argnums else None for i in range(len(args))]
     if prng_argnum is not None:
       args = list(args)
@@ -375,7 +511,7 @@ def clipped_fun(
       args[prng_argnum] = split_rngs
       axes[prng_argnum] = 0
 
-    microbatched_vmap_fun = optax.microbatching.micro_vmap(
+    microbatched_vmap_fun = microbatching.micro_vmap(
         clipped_fun_one_group,
         in_axes=axes,
         microbatch_size=microbatch_size,
@@ -410,7 +546,10 @@ def clipped_fun(
       case True, True:
         return clipped_values, (aux, norms)
 
-  norm_bound = (1.0 if rescale_to_unit_norm else l2_clip_norm) / normalize_by
+  if grid_scale is not None:
+    norm_bound = float(grid_scale)
+  else:
+    norm_bound = (1.0 if rescale_to_unit_norm else l2_clip_norm) / normalize_by
   if keep_batch_dim:
     clipped_fn = _with_extra_batch_axis(clipped_fn, batch_argnums)
   callable_has_aux = has_aux or return_norms
@@ -457,6 +596,7 @@ def clipped_grad(
     dtype: jax.typing.DTypeLike | None = None,
     prng_argnum: int | None = None,
     spmd_axis_name: str | None = None,
+    grid_scale: int | None = None,
 ) -> BoundedSensitivityCallable:
   """Create a function to compute the sum of clipped gradients of fun.
 
@@ -575,6 +715,9 @@ def clipped_grad(
     prng_argnum: If set, specifies which argument of `fun` is a PRNG key. The
       PRNG will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap. Only relevant in distributed settings.
+    grid_scale: If set, per-example gradients are additionally scaled and
+      rounded to an integer grid after clipping.  See ``clipped_fun`` for
+      details.
 
   Returns:
     A new function `values_and_clipped_grad_fn` that computes the sum of clipped
@@ -613,4 +756,5 @@ def clipped_grad(
       dtype=dtype,
       prng_argnum=prng_argnum,
       spmd_axis_name=spmd_axis_name,
+      grid_scale=grid_scale,
   )
