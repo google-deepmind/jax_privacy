@@ -101,7 +101,7 @@ def optimize_strategy(
           n, bands=sep, max_optimizer_steps=1000, reduction_fn=reduction_fn
       )
       sensitivity_squared = toeplitz.minsep_sensitivity_squared(
-          strategy_coef, min_sep=sep, max_participations=participations
+          strategy_coef, n=n, min_sep=sep, max_participations=participations
       )
       pqe = toeplitz.per_query_error(strategy_coef=strategy_coef, n=n)
       loss = reduction_fn(pqe) * sensitivity_squared
@@ -146,6 +146,7 @@ def optimize_strategy(
       sensitivity_squared = toeplitz.minsep_sensitivity_squared(
           # Strategy is normalized in toeplitz.inverse_as_streaming_matrix.
           strategy_coef=strategy_coef / jnp.linalg.norm(strategy_coef),
+          n=n,
           min_sep=sep,
           max_participations=participations,
       )
@@ -156,7 +157,7 @@ def optimize_strategy(
       # https://arxiv.org/abs/2405.13763
       strategy_coef = toeplitz.optimal_max_error_strategy_coefs(sep)
       sensitivity_squared = toeplitz.minsep_sensitivity_squared(
-          strategy_coef, min_sep=sep, max_participations=participations
+          strategy_coef, n=n, min_sep=sep, max_participations=participations
       )
       pqe = toeplitz.per_query_error(strategy_coef=strategy_coef, n=n)
       loss = reduction_fn(pqe) * sensitivity_squared

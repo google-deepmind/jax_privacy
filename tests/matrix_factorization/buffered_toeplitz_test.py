@@ -131,6 +131,7 @@ def brute_force_max_loss(blt, n, min_sep=1, max_participations=None):
   sens_squared = toeplitz.minsep_sensitivity_squared(
       coef,
       min_sep=min_sep,
+      n=n,
       max_participations=max_participations,
   )
   error = jnp.max(toeplitz.per_query_error(strategy_coef=coef))

@@ -372,7 +372,7 @@ class ToeplitzTest(parameterized.TestCase):
     C = toeplitz.materialize_lower_triangular(coef)
     np.testing.assert_allclose(
         toeplitz.minsep_sensitivity_squared(
-            coef, min_sep=1, max_participations=max_participations
+            coef, min_sep=1, n=n, max_participations=max_participations
         ),
         np.linalg.norm(np.sum(C[:, :max_participations], axis=1)) ** 2,
         rtol=1e-10,
@@ -380,7 +380,7 @@ class ToeplitzTest(parameterized.TestCase):
 
   def test_sensitivity_squared_bad_min_sep(self):
     with self.assertRaisesRegex(ValueError, 'min_sep must be positive'):
-      toeplitz.minsep_sensitivity_squared(strategy_coef=[1.0], min_sep=0)
+      toeplitz.minsep_sensitivity_squared(strategy_coef=[1.0], min_sep=0, n=1)
 
   @parameterized.product(
       coef=[[-1.0], [1.0, 2.0, 1.0], [1.0, -0.5, 0.3], [-1, 0.5]],
