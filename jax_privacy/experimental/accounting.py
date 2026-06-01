@@ -104,11 +104,22 @@ def _validate_fixed_args(
     )
 
 
+def _gaussian_event(
+    noise_multiplier: float, use_zcdp: bool
+) -> dp_accounting.DpEvent:
+  """Returns the Gaussian or zCDP DpEvent for the given noise multiplier."""
+  if use_zcdp:
+    return dp_accounting.ZCDpEvent(0.5 / noise_multiplier**2)
+  else:
+    return dp_accounting.GaussianDpEvent(noise_multiplier)
+
+
 def dpsgd_event(
     noise_multiplier: float,
     iterations: int,
     *,
     sampling_prob: float,
+    use_zcdp: bool = False,
 ) -> dp_accounting.DpEvent:
   """Returns the DpEvent for DP-SGD with the given training parameters.
 
@@ -122,12 +133,15 @@ def dpsgd_event(
     iterations: The number of iterations to run the mechanism for.
     sampling_prob: The Poisson sampling probability of the mechanism, i.e., the
       probability an example will be included in each batch.
+    use_zcdp: Whether to use generic dp_event.ZCDpEvent instead of specific
+      dp_event.GaussianDpEvent. For example, set this to True if using discrtete
+      Gaussian noise instead of continuous Gaussian noise.
 
   Returns:
     A DpEvent object.
   """
   _validate_args(noise_multiplier, iterations, sampling_prob)
-  gaussian = dp_accounting.GaussianDpEvent(noise_multiplier)
+  gaussian = _gaussian_event(noise_multiplier, use_zcdp)
   sampled = dp_accounting.PoissonSampledDpEvent(sampling_prob, gaussian)
   return dp_accounting.SelfComposedDpEvent(sampled, iterations)
 
@@ -139,6 +153,7 @@ def fixed_dpsgd_event(
     dataset_size: int,
     batch_size: int,
     replace: bool = False,
+    use_zcdp: bool = False,
 ) -> dp_accounting.DpEvent:
   """Returns the DpEvent for DP-SGD with fixed-size sampling.
 
@@ -156,6 +171,9 @@ def fixed_dpsgd_event(
     dataset_size: The number of examples in the dataset.
     batch_size: The fixed batch size per iteration.
     replace: Whether to sample with replacement.
+    use_zcdp: Whether to use generic dp_event.ZCDpEvent instead of specific
+      dp_event.GaussianDpEvent. For example, set this to True if using discrtete
+      Gaussian noise instead of continuous Gaussian noise.
 
   Returns:
     A DpEvent object.
@@ -167,7 +185,7 @@ def fixed_dpsgd_event(
       batch_size,
       replace,
   )
-  gaussian = dp_accounting.GaussianDpEvent(noise_multiplier)
+  gaussian = _gaussian_event(noise_multiplier, use_zcdp)
   if replace:
     sampled = dp_accounting.dp_event.SampledWithReplacementDpEvent(
         dataset_size,

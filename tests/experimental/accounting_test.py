@@ -29,6 +29,15 @@ MAKE_EVENT_FNS = (
     ),
 )
 
+RDP_ONLY_EVENT_FNS = (
+    functools.partial(
+        accounting.dpsgd_event,
+        iterations=128,
+        sampling_prob=0.01,
+        use_zcdp=True,
+    ),
+)
+
 PLD_EVENT_FNS = (
     functools.partial(
         accounting.truncated_dpsgd_event,
@@ -55,6 +64,14 @@ RDP_REPLACE_EVENT_FNS = (
         batch_size=16,
         replace=False,
     ),
+    functools.partial(
+        accounting.fixed_dpsgd_event,
+        iterations=128,
+        dataset_size=1000,
+        batch_size=16,
+        replace=False,
+        use_zcdp=True,
+    ),
 )
 
 PLD_ACCOUNTANT = functools.partial(
@@ -79,7 +96,8 @@ TEST_CASES = (
         for ev in MAKE_EVENT_FNS + PLD_EVENT_FNS
     )
     + tuple(
-        _make_test_case(event_fn, RDP_ACCOUNTANT) for event_fn in MAKE_EVENT_FNS
+        _make_test_case(event_fn, RDP_ACCOUNTANT)
+        for event_fn in MAKE_EVENT_FNS + RDP_ONLY_EVENT_FNS
     )
     + tuple(
         _make_test_case(event_fn, RDP_REPLACE_ACCOUNTANT)
@@ -120,6 +138,78 @@ class AccountingTest(parameterized.TestCase):
     self.assertIsInstance(
         event.event, dp_accounting.dp_event.SampledWithReplacementDpEvent
     )
+
+  def test_fixed_dpsgd_event_use_zcdp_structure(self):
+    noise_multiplier = 3.0
+    iterations = 5
+    dataset_size = 10
+    batch_size = 3
+    event = accounting.fixed_dpsgd_event(
+        noise_multiplier,
+        iterations,
+        dataset_size=dataset_size,
+        batch_size=batch_size,
+        use_zcdp=True,
+    )
+    self.assertIsInstance(event, dp_accounting.dp_event.SelfComposedDpEvent)
+    self.assertEqual(event.count, iterations)
+    self.assertIsInstance(
+        event.event, dp_accounting.dp_event.SampledWithoutReplacementDpEvent
+    )
+    inner = event.event.event
+    self.assertIsInstance(inner, dp_accounting.dp_event.ZCDpEvent)
+    self.assertAlmostEqual(inner.rho, 0.5 / noise_multiplier**2)
+
+  def test_dpsgd_event_use_zcdp_structure(self):
+    noise_multiplier = 3.0
+    iterations = 10
+    sampling_prob = 0.01
+    event = accounting.dpsgd_event(
+        noise_multiplier,
+        iterations,
+        sampling_prob=sampling_prob,
+        use_zcdp=True,
+    )
+    self.assertIsInstance(event, dp_accounting.dp_event.SelfComposedDpEvent)
+    self.assertEqual(event.count, iterations)
+    self.assertIsInstance(
+        event.event, dp_accounting.dp_event.PoissonSampledDpEvent
+    )
+    self.assertAlmostEqual(event.event.sampling_probability, sampling_prob)
+    inner = event.event.event
+    self.assertIsInstance(inner, dp_accounting.dp_event.ZCDpEvent)
+    self.assertAlmostEqual(inner.rho, 0.5 / noise_multiplier**2)
+
+  def test_use_zcdp_matches_gaussian_privacy(self):
+    """use_zcdp=True & default should give the same epsilon with RDP."""
+    noise_multiplier = 5.0
+    iterations = 128
+    sampling_prob = 0.01
+    target_delta = 1e-6
+
+    continuous_event = accounting.dpsgd_event(
+        noise_multiplier, iterations, sampling_prob=sampling_prob
+    )
+    discrete_event = accounting.dpsgd_event(
+        noise_multiplier,
+        iterations,
+        sampling_prob=sampling_prob,
+        use_zcdp=True,
+    )
+
+    accountant_continuous = dp_accounting.rdp.RdpAccountant()
+    eps_continuous = accountant_continuous.compose(
+        continuous_event
+    ).get_epsilon(target_delta=target_delta)
+
+    accountant_discrete = dp_accounting.rdp.RdpAccountant()
+    eps_discrete = accountant_discrete.compose(discrete_event).get_epsilon(
+        target_delta=target_delta
+    )
+
+    # The discrete Gaussian with rho=0.5/sigma^2 should give the same RDP
+    # as the continuous Gaussian with the same sigma.
+    self.assertAlmostEqual(eps_continuous, eps_discrete, places=4)
 
 
 if __name__ == "__main__":

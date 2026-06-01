@@ -27,10 +27,8 @@ For cryptographic security, the PRNG is backed by hardware-level entropy
 (RDRAND) via ``randomgen.RDRAND()``. If ``randomgen`` is not installed, the
 example falls back to a standard NumPy PRNG with a warning.
 
-Privacy accounting uses the continuous Gaussian mechanism, as the discrete
-Gaussian is not currently supported by the accounting library. The discrete
-Gaussian is at least as private -- in terms of Renyi DP -- as the continuous
-Gaussian with the same sigma parameter.
+Privacy accounting uses the RDP accountant, as the discrete Gaussian is not
+currently supported by the PLD accountant.
 """
 
 import time
@@ -145,12 +143,14 @@ def main(_):
   )
 
   # Calibrate noise multiplier using continuous Gaussian accounting.
-  # TODO: Replace with DiscreteGaussianDpEvent when available.
   make_event = lambda sigma: accounting.dpsgd_event(
-      sigma, ITERATIONS, sampling_prob=EXPECTED_BATCH_SIZE / USERS
+      sigma,
+      ITERATIONS,
+      sampling_prob=EXPECTED_BATCH_SIZE / USERS,
+      use_zcdp=True,
   )
   noise_multiplier = dp_accounting.calibrate_dp_mechanism(
-      dp_accounting.pld.PLDAccountant,
+      dp_accounting.rdp.RdpAccountant,
       make_event,
       target_epsilon=EPSILON,
       target_delta=DELTA,
