@@ -55,9 +55,10 @@ stabilized.
 import copy
 import dataclasses
 import functools
-from typing import Any, Callable
+from typing import Callable
 
 import dp_accounting
+import jax
 from jax_privacy import batch_selection
 from jax_privacy import clipping
 from jax_privacy import noise_addition
@@ -67,8 +68,35 @@ import numpy as np
 import optax
 import pydantic
 
-
 NeighboringRelation = dp_accounting.NeighboringRelation
+
+
+@dataclasses.dataclass(frozen=True)
+class PerformanceFlags:
+  """Performance-only flags that do not affect mechanism behavior or privacy.
+
+  These flags control implementation details such as numerical precision,
+  sharding strategy, and memory/compute trade-offs. Changing them should
+  not alter the privacy properties or the mathematical definition of the
+  DP mechanism.
+
+  Attributes:
+    dtype: The dtype to use for noise generation and gradient aggregation.
+    noise_seed: A seed for the random number generator used for noise addition.
+    intermediate_strategy: Strategy for generating intermediate noise, controls
+      sharding behavior for noise addition.
+    microbatch_size: If set, per-example gradient computation is broken into
+      sequential microbatches to reduce peak memory at the cost of compute.
+    spmd_axis_name: Axis name for distributed vmap in SPMD settings.
+  """
+
+  dtype: jax.typing.DTypeLike = np.float32
+  noise_seed: int | None = None
+  intermediate_strategy: noise_addition.SupportedStrategies = (
+      noise_addition.SupportedStrategies.DEFAULT
+  )
+  microbatch_size: int | None = None
+  spmd_axis_name: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -241,12 +269,10 @@ class BandMFExecutionPlanConfig:
       sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
       and replace-one adjacency notions, while INDEPENDENT is compatible with
       the add-remove adjacency notion.
-    dtype: The dtype to use for noise generation and gradient aggregation.
     column_normalize: Whether to column-normalize the strategy matrix.
     accountant: A privacy accountant that is used to calibrate the noise
       multiplier. Expected to have an empty state (or calibration may fail).
       Defaults to PLDAccountant with REPLACE_SPECIAL neighboring_relation.
-    noise_seed: A seed for the random number generator used for noise addition.
   """
 
   iterations: int = pydantic.Field(ge=0)
@@ -263,14 +289,12 @@ class BandMFExecutionPlanConfig:
   partition_type: batch_selection.PartitionType = pydantic.Field(
       default=batch_selection.PartitionType.EQUAL_SPLIT
   )
-  dtype: Any = pydantic.Field(default=np.float32)
   column_normalize: bool = pydantic.Field(default=False)
   accountant: dp_accounting.PrivacyAccountant = pydantic.Field(
       default_factory=lambda: dp_accounting.pld.PLDAccountant(
           NeighboringRelation.REPLACE_SPECIAL
       )
   )
-  noise_seed: int | None = None
 
   def __post_init__(self):
     _validate_epsilon_delta_noise_multiplier(
@@ -343,9 +367,23 @@ class BandMFExecutionPlanConfig:
         iterations=iterations, strategy=strategy, **kwargs
     )
 
-  @functools.cached_property
-  def plan(self) -> DPExecutionPlan:
-    """Returns a DP execution plan for the given BandMF mechanism config."""
+  def make(
+      self,
+      performance_flags: PerformanceFlags | None = None,
+  ) -> DPExecutionPlan:
+    """Returns a DP execution plan for the given BandMF mechanism config.
+
+    Args:
+      performance_flags: Optional performance flags that control implementation
+        details such as dtype, sharding, and microbatching. If None, default
+        values are used for all performance flags.
+
+    Returns:
+      A DPExecutionPlan configured from this config and the given performance
+      flags.
+    """
+    if performance_flags is None:
+      performance_flags = PerformanceFlags()
 
     @functools.wraps(clipping.clipped_grad)
     def clipped_grad_transform(*args, **kwargs):
@@ -355,7 +393,9 @@ class BandMFExecutionPlanConfig:
           l2_clip_norm=self.l2_clip_norm,
           normalize_by=self.normalize_by,
           rescale_to_unit_norm=self.rescale_to_unit_norm,
-          dtype=self.dtype,
+          dtype=performance_flags.dtype,
+          microbatch_size=performance_flags.microbatch_size,
+          spmd_axis_name=performance_flags.spmd_axis_name,
       )
 
     query_sensitivity = clipped_grad_transform(lambda: None).sensitivity(
@@ -391,8 +431,9 @@ class BandMFExecutionPlanConfig:
     privatizer = noise_addition.matrix_factorization_privatizer(
         noising_matrix,
         stddev=float(noise_multiplier * query_sensitivity * max_column_norm),
-        prng_key=self.noise_seed,
-        dtype=self.dtype,
+        prng_key=performance_flags.noise_seed,
+        dtype=performance_flags.dtype,
+        intermediate_strategy=performance_flags.intermediate_strategy,
     )
 
     return DPExecutionPlan(

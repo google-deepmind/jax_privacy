@@ -254,7 +254,8 @@ def main(argv: Sequence[str]) -> None:
       normalize_by=expected_batch_size,
       l2_clip_norm=clipping_norm,
   )
-  grad_fn = config.plan.clipped_grad(
+  plan = config.make()
+  grad_fn = plan.clipped_grad(
       loss_fn,
       batch_argnums=(1, 2),
       has_aux=False,
@@ -262,7 +263,7 @@ def main(argv: Sequence[str]) -> None:
   )
 
   optimizer = optax.sgd(learning_rate)
-  noise_transform = config.plan.noise_addition_transform
+  noise_transform = plan.noise_addition_transform
 
   @jax.jit
   def dp_train_step(
@@ -290,7 +291,7 @@ def main(argv: Sequence[str]) -> None:
   print('Training Transformer with DP-SGD...')
 
   for step, batch_idx in enumerate(
-      config.plan.batch_selection_strategy.batch_iterator(train_size)
+      plan.batch_selection_strategy.batch_iterator(train_size)
   ):
 
     idx = batch_selection.pad_to_multiple_of(batch_idx, padding_multiple)

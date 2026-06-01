@@ -52,7 +52,7 @@ config = execution_plan.BandMFExecutionPlanConfig.default(
     ),
 )
 
-plan = config.make(clipped_grad)
+plan = config.make()
 
 # plan.batch_selection_strategy produces global batches of indices.
 # plan.noise_addition_transform adds calibrated Gaussian noise.

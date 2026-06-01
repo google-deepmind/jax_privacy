@@ -27,7 +27,6 @@ from jax_privacy.experimental import execution_plan
 import numpy as np
 import optax
 
-
 USERS = 10_000
 FEATURES = 100
 EPSILON = 1.0
@@ -118,7 +117,7 @@ def main(_):
       sampling_prob=EXPECTED_BATCH_SIZE / train_users * BANDS,
   )
   print('Initialized BandMFExecutionPlanConfig')
-  plan = config.plan
+  plan = config.make()
   grad_fn = plan.clipped_grad(logistic_loss, batch_argnums=(1, 2))
 
   optimizer = optax.sgd(LEARNING_RATE)

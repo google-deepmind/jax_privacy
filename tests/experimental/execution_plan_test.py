@@ -66,7 +66,7 @@ class ExecutionPlanTest(parameterized.TestCase):
         num_bands=10, iterations=iterations, **privacy_kwargs
     )
 
-    plan = config.plan
+    plan = config.make()
 
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
     # Assert that the batch selection strategy is CyclicPoissonSampling with
@@ -119,6 +119,33 @@ class ExecutionPlanTest(parameterized.TestCase):
           iterations=20,
           **privacy_kwargs,
       )
+
+  def test_make_with_default_performance_flags(self):
+    config = execution_plan.BandMFExecutionPlanConfig.default(
+        num_bands=10,
+        iterations=20,
+        noise_multiplier=1.0,
+        epsilon=None,
+        delta=None,
+    )
+    plan = config.make()
+    self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+
+  def test_make_with_custom_performance_flags(self):
+    config = execution_plan.BandMFExecutionPlanConfig.default(
+        num_bands=10,
+        iterations=20,
+        noise_multiplier=1.0,
+        epsilon=None,
+        delta=None,
+    )
+    flags = execution_plan.PerformanceFlags(
+        dtype=np.float64,
+        noise_seed=42,
+        microbatch_size=4,
+    )
+    plan = config.make(flags)
+    self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
 
 
 if __name__ == "__main__":

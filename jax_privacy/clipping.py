@@ -715,9 +715,15 @@ def clipped_grad(
     prng_argnum: If set, specifies which argument of `fun` is a PRNG key. The
       PRNG will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See jax.vmap. Only relevant in distributed settings.
-    grid_scale: If set, per-example gradients are additionally scaled and
-      rounded to an integer grid after clipping.  See ``clipped_fun`` for
-      details.
+    grid_scale: If set, per-example grads are additionally scaled and rounded to
+      an integer grid after clipping.  Specifically, each clipped grad is
+      multiplied by ``grid_scale / l2_clip_norm``, rounded to the nearest
+      integer, and cast to ``jnp.int64``.  The clipping norm is tightened
+      automatically so that the integer L2 norm of each rounded output is at
+      most ``grid_scale``.  This option is designed for use with the discrete
+      Gaussian mechanism.  Incompatible with ``rescale_to_unit_norm=True`` and
+      ``normalize_by != 1.0``.  When set, ``dtype`` is ignored (output is always
+      ``jnp.int64``).
 
   Returns:
     A new function `values_and_clipped_grad_fn` that computes the sum of clipped
