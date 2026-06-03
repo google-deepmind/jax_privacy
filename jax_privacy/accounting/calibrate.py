@@ -53,6 +53,7 @@ def calibrate_num_updates(
     examples_per_user: int | None = None,
     cycle_length: int | None = None,
     truncated_batch_size: int | None = None,
+    sampling_method: analysis.SamplingMethod = analysis.SamplingMethod.POISSON,
     initial_max_updates: int = 4,
     initial_min_updates: int = 1,
     tol: float = 0.1,
@@ -76,6 +77,7 @@ def calibrate_num_updates(
       the cycle.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to.
+    sampling_method: Which sampling method the privacy analysis should assume.
     initial_max_updates: An initial estimate of the number of updates.
     initial_min_updates: Minimum number of updates.
     tol: tolerance of the optimizer for the calibration.
@@ -95,6 +97,7 @@ def calibrate_num_updates(
         examples_per_user=examples_per_user,
         cycle_length=cycle_length,
         truncated_batch_size=truncated_batch_size,
+        sampling_method=sampling_method,
     )
     return accountant.compute_epsilon(num_updates, dp_params)
 
@@ -133,6 +136,7 @@ def calibrate_noise_multiplier(
     examples_per_user: int | None = None,
     cycle_length: int | None = None,
     truncated_batch_size: int | None = None,
+    sampling_method: analysis.SamplingMethod = analysis.SamplingMethod.POISSON,
     initial_max_noise: float = 1.0,
     initial_min_noise: float = 0.0,
     tol: float = 0.01,
@@ -154,6 +158,7 @@ def calibrate_noise_multiplier(
       the cycle.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to.
+    sampling_method: Which sampling method the privacy analysis should assume.
     initial_max_noise: An initial estimate of the noise multiplier.
     initial_min_noise: Minimum noise multiplier.
     tol: tolerance of the optimizer for the calibration.
@@ -175,6 +180,7 @@ def calibrate_noise_multiplier(
         examples_per_user=examples_per_user,
         cycle_length=cycle_length,
         truncated_batch_size=truncated_batch_size,
+        sampling_method=sampling_method,
     )
     return accountant.compute_epsilon(num_updates, dp_params)
 
@@ -202,6 +208,7 @@ def calibrate_batch_size(
     examples_per_user: int | None = None,
     cycle_length: int | None = None,
     truncated_batch_size: int | None = None,
+    sampling_method: analysis.SamplingMethod = analysis.SamplingMethod.POISSON,
     initial_max_batch_size: int = 8,
     initial_min_batch_size: int = 1,
     tol: float = 0.01,
@@ -223,6 +230,7 @@ def calibrate_batch_size(
       the cycle.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to.
+    sampling_method: Which sampling method the privacy analysis should assume.
     initial_max_batch_size: An initial estimate of the batch size.
     initial_min_batch_size: Minimum batch size.
     tol: tolerance of the optimizer for the calibration.
@@ -244,6 +252,7 @@ def calibrate_batch_size(
         examples_per_user=examples_per_user,
         cycle_length=cycle_length,
         truncated_batch_size=truncated_batch_size,
+        sampling_method=sampling_method,
     )
     return accountant.compute_epsilon(num_updates, dp_params)
 
