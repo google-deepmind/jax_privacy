@@ -82,14 +82,22 @@ class BoundedSensitivityCallable:
 def clip_pytree(
     pytree: PyTree,
     clip_norm: float,
+    per_leaf: bool = False,
     rescale_to_unit_norm: bool = False,
     nan_safe: bool = True,
     return_zero: bool = False,
 ):
-  """Clips a PyTree of jax arrays based on its global L2 norm.
+  """Clips a PyTree of jax arrays based on its global L2 norm or per leaf L2 norm.
 
-  Calculates the global L2 norm of the input PyTree. If the norm exceeds
-  `clip_norm`, the PyTree is scaled down to have norm equal to `clip_norm`.
+  If per_leaf is False:
+      Calculates the global L2 norm of the input PyTree. If the norm exceeds
+    `clip_norm`, the entire PyTree is scaled down to have norm equal to
+    `clip_norm`.
+  If per_leaf is True:
+    Calculate the L2 norm for each leaf of the input PyTree. If the norm
+    per leaf exceeds `clip_norm`, the said leaf is scaled down to have the
+    norm equal to the `clip_norm`.
+
   If `rescale_to_unit_norm` is True, the PyTree is additionally scaled by
   `1.0 / clip_norm` (resulting in a norm of at most 1.0 no matter
   what clip_norm is). Handles cases where the original norm is zero,
@@ -140,13 +148,30 @@ def clip_pytree(
     nan_to_num = lambda x: jnp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
     pytree = jax.tree.map(nan_to_num, pytree)
   clip_norm = jnp.maximum(clip_norm, 0.0)
-  l2_norm = optax.tree.norm(pytree)
-  scale = jnp.minimum(1.0, clip_norm / l2_norm)
-  if rescale_to_unit_norm:
-    scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
-  # If l2_norm is 0 or nan, set scale to 0.0.
-  scale = jnp.nan_to_num(scale, nan=0.0, posinf=0.0)
-  clipped = jax.tree.map(lambda x: jnp.astype(scale, x.dtype) * x, pytree)
+
+  if per_leaf:
+      def _clip_single_leaf(leaf):
+        l2_norm_leaf = jnp.linalg.norm(leaf)
+        scale = jnp.minimum(1.0, clip_norm / l2_norm_leaf)
+        if rescale_to_unit_norm:
+          scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1.0 / l2_norm_leaf)
+        scale = jnp.nan_to_num(scale, nan=0.0, posinf=0.0)
+        clipped_leaf = jnp.astype(scale, leaf.dtype) * leaf
+        return clipped_leaf, l2_norm_leaf.astype(jnp.float32)
+
+      results_tree = jax.tree.map(lambda l: _clip_single_leaf(l, clip_norm), pytree)
+      clipped = jax.tree.map(lambda r: r[0], results_tree)
+      l2_norms_per_leaf = jax.tree.map(lambda r: r[1], results_tree)
+      l2_norm = jnp.sqrt(sum(n**2 for n in l2_norms_per_leaf))
+  else:
+    l2_norm = optax.global_norm(pytree)
+    scale = jnp.minimum(1.0, clip_norm / l2_norm)
+    if rescale_to_unit_norm:
+      scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
+    # If l2_norm is 0 or nan, set scale to 0.0.
+    scale = jnp.nan_to_num(scale, nan=0.0, posinf=0.0)
+    clipped = jax.tree.map(lambda x: jnp.astype(scale, x.dtype) * x, pytree)
+
   maybe_zero = lambda x: jax.lax.select(return_zero, jnp.zeros_like(x), x)
   return jax.tree.map(maybe_zero, clipped), l2_norm.astype(jnp.float32)
 
@@ -363,6 +388,7 @@ def clipped_fun(
     *,
     batch_argnums: int | Sequence[int] = 0,
     keep_batch_dim: bool = True,
+    per_layer: bool = False,
     l2_clip_norm: float = 1.0,
     rescale_to_unit_norm: bool = False,
     normalize_by: float = 1.0,
@@ -402,6 +428,11 @@ def clipped_fun(
       the value will be clipped + aggregated, `aux` will be returned on a
       per-example basis. Exercise caution when using this as the sensitivity
       guarantees of the returned Callable are only provided w.r.t. `value`.
+    per_layer: If True, the gradient clipping is performed on each leaf of the
+      PyTree. Rather than calculating a global L2 norm, the norm is calculated
+      & clipping threshold is applied on each parameter array of the PyTree.
+      Currently supports a single value (passed via l2_clip_norm), and applies
+      the same value across all leaves.
     batch_argnums: Specifies which argument(s) of `fun` contain the batch
       dimension. All arguments specified here must have the same size along the
       0th axis.
@@ -491,6 +522,7 @@ def clipped_fun(
         value = optax.tree.cast(value, dtype)
         clipped_value, l2_norm = clip_pytree(
             value,
+            per_leaf=per_layer,
             clip_norm=l2_clip_norm,
             rescale_to_unit_norm=rescale_to_unit_norm,
             nan_safe=nan_safe,
@@ -583,6 +615,7 @@ def clipped_grad(
     argnums: int | Sequence[int] = 0,
     has_aux: bool = False,
     *,
+    per_layer: bool = False,
     l2_clip_norm: float,
     rescale_to_unit_norm: bool = False,
     normalize_by: float = 1.0,
@@ -665,6 +698,11 @@ def clipped_grad(
       auxiliary data `aux` will be returned by the transformed function.
       Exercise caution when using this as no DP sensitivity guarantees are
       provided for the auxiliary data.
+    per_layer: If True, the gradient clipping is performed on each leaf of the
+      PyTree. Rather than calculating a global L2 norm, the norm is calculated
+      & clipping threshold is applied on each parameter array of the PyTree.
+      Currently supports a single value (passed via l2_clip_norm), and applies
+      the same value across all leaves.
     l2_clip_norm: The maximum L2 norm for each per-example gradient. Gradients
       with a norm larger than this value will be scaled down.
     rescale_to_unit_norm: If True, clipped gradients are rescaled by `1.0 /
@@ -753,6 +791,7 @@ def clipped_grad(
       grad_fn,
       has_aux=has_aux or return_values or return_grad_norms,
       batch_argnums=batch_argnums,
+      per_layer=per_layer,
       l2_clip_norm=l2_clip_norm,
       keep_batch_dim=keep_batch_dim,
       rescale_to_unit_norm=rescale_to_unit_norm,
