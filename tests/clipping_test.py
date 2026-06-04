@@ -128,12 +128,19 @@ class ClipPyTreeTest(parameterized.TestCase):
       )
   )
   def test_nan_safety(self, **kwargs):
-    pytree = jnp.array([3.0, 0.0, 1.0, jnp.nan, 2.0])
-    clipped, _ = clipping.clip_pytree(pytree, nan_safe=True, **kwargs)
+    pytree_nan = {
+        'a': np.array(3.0),
+        'b': np.array(jnp.nan),
+    }
+    pytree_inf = {
+        'a': np.array(3.0),
+        'b': np.array(jnp.inf),
+    }
+
+    clipped, _ = clipping.clip_pytree(pytree_nan, nan_safe=True, **kwargs)
     chex.assert_tree_all_finite(clipped)
 
-    pytree = jnp.array([3.0, 0.0, jnp.inf, -jnp.inf, 2.0])
-    clipped, _ = clipping.clip_pytree(pytree, nan_safe=True, **kwargs)
+    clipped, _ = clipping.clip_pytree(pytree_inf, nan_safe=True, **kwargs)
     chex.assert_tree_all_finite(clipped)
 
   def test_clip_pytree_with_nan(self):
@@ -157,6 +164,103 @@ class ClipPyTreeTest(parameterized.TestCase):
     chex.assert_trees_all_close(clipped, expected)
 
     self.assertLessEqual(jnp.linalg.norm(clipped), clip_norm)
+
+  def test_clip_pytree_per_layer_full_clip_norm_tree(self):
+    """Tests per-layer clipping with complete clip_norm tree."""
+    pytree = {'a': np.array([3.0, 4.0]), 'b': np.array([0.0, 10.0])}
+    clip_norm = {'a': np.array(1.0), 'b': np.array(15.0)}
+    expected_output = {
+        # 'a' base norm is 5.0. Limit is 1.0.
+        # Scale = 1.0 / 5.0 = 0.2
+        # Scaled output = [3.0, 4.0] * 0.2 = [0.6, 0.8]
+        'a': np.array([0.6, 0.8]),
+        # 'b' base norm is 10.0. Limit is 15.0 (Unclipped).
+        # Scale = 1.0
+        # Scaled output = [0.0, 10.0] * 1.0 = [0.0, 10.0]
+        'b': np.array([0.0, 10.0]),
+    }
+    expected_norms = {
+        'a': np.array(5.0, dtype=np.float32),
+        'b': np.array(10.0, dtype=np.float32),
+    }
+    clipped_output, norms = clipping.clip_pytree(pytree, clip_norm)
+    chex.assert_trees_all_close(clipped_output, expected_output)
+    chex.assert_trees_all_close(norms, expected_norms)
+
+  def test_clip_pytree_per_layer_zero_clip_norm_tree(self):
+    """Tests per-layer clipping with zero clip_norm tree."""
+    pytree = {
+        'layer1': {'w': np.array([0.0, 0.0]), 'b': np.array([0.0])},
+    }
+    clip_norm = {'layer1': np.array(2.0)}
+    expected_output = {
+        'layer1': {
+            # 'layer1' base norm = 0.0; sqrt(0^2 + 0^2 + 0^2).
+            'w': np.array([0.0, 0.0]),
+            'b': np.array([0.0]),
+        },
+    }
+    expected_norms = {
+        'layer1': np.array(0.0, dtype=np.float32),
+    }
+    clipped_output, norms = clipping.clip_pytree(pytree, clip_norm)
+    chex.assert_trees_all_close(clipped_output, expected_output)
+    chex.assert_trees_all_close(norms, expected_norms)
+
+  def test_clip_pytree_per_layer_tuple_nodes_full_norm_tree(self):
+    """Tests per-layer clipping with pytree containing tuple leaves."""
+    pytree = {'layer1': (np.array([3.0, 4.0]), np.array([0.0, 10.0]))}
+    clip_norm = {'layer1': (np.array(1.0), np.array(15.0))}
+    expected_output = {
+        'layer1': (
+            # Element 0: base norm is 5.0. Limit is 1.0.
+            # Scale = 1.0 / 5.0 = 0.2
+            # Scaled output = [3.0, 4.0] * 0.2 = [0.6, 0.8]
+            np.array([0.6, 0.8]),
+            # Element 1: base norm is 10.0. Limit is 15.0 (Unclipped).
+            # Scale = 1.0
+            # Scaled output = [0.0, 10.0] * 1.0 = [0.0, 10.0]
+            np.array([0.0, 10.0]),
+        )
+    }
+    expected_norms = {
+        'layer1': (
+            np.array(5.0, dtype=np.float32),
+            np.array(10.0, dtype=np.float32),
+        )
+    }
+    clipped_output, norms = clipping.clip_pytree(pytree, clip_norm)
+    chex.assert_trees_all_close(clipped_output, expected_output)
+    chex.assert_trees_all_close(norms, expected_norms)
+
+  def test_clip_pytree_per_layer_prefix_clip_norm_tree(self):
+    """Tests per-layer clipping with clip_norm as prefix of pytree."""
+    pytree = {
+        'layer1': {'w': np.array([0.0, 3.0]), 'b': np.array([4.0])},
+        'layer2': {'w': np.array([0.0, 8.0]), 'b': np.array([6.0])},
+    }
+    clip_norm = {'layer1': np.array(2.0), 'layer2': np.array(5.0)}
+    expected_output = {
+        'layer1': {
+            # 'layer1' base norm = 5.0; sqrt(0^2 + 3^2 + 4^2).
+            # Limit is 2.0. Scale = 2.0 / 5.0 = 0.4
+            'w': np.array([0.0, 1.2]),
+            'b': np.array([1.6]),
+        },
+        'layer2': {
+            # 'layer2' base norm = 10.0; sqrt(0^2 + 8^2 + 6^2).
+            # Limit is 5.0. Scale = 5.0 / 10.0 = 0.5
+            'w': np.array([0.0, 4.0]),
+            'b': np.array([3.0]),
+        },
+    }
+    expected_norms = {
+        'layer1': np.array(5.0, dtype=np.float32),
+        'layer2': np.array(10.0, dtype=np.float32),
+    }
+    clipped_output, norms = clipping.clip_pytree(pytree, clip_norm)
+    chex.assert_trees_all_close(clipped_output, expected_output)
+    chex.assert_trees_all_close(norms, expected_norms)
 
 
 class ClipAndRoundToGridTest(parameterized.TestCase):
@@ -251,17 +355,23 @@ class ClippedFunGridScaleTest(parameterized.TestCase):
           enable_x64=True,
           extra_kwargs={'normalize_by': 100.0},
       ),
+      dict(
+          testcase_name='incompatible_with_pytree_clip_norm',
+          enable_x64=True,
+          extra_kwargs={'l2_clip_norm': {'a': np.array(1.0)}},
+      ),
   )
   def test_clipped_fun_grid_scale_raises(self, enable_x64, extra_kwargs):
     """Tests that clipped_fun with grid_scale raises on invalid configs."""
+    kwargs = dict(
+        fun=lambda x: x,
+        batch_argnums=0,
+        l2_clip_norm=1.0,
+        grid_scale=1000,
+    )
+    kwargs.update(extra_kwargs)
     with jax.enable_x64(enable_x64), self.assertRaises(ValueError):
-      clipping.clipped_fun(
-          lambda x: x,
-          batch_argnums=0,
-          l2_clip_norm=1.0,
-          grid_scale=1000,
-          **extra_kwargs,
-      )
+      clipping.clipped_fun(**kwargs)
 
   def test_clipped_fun_grid_scale_properties(self):
     """Tests dtype, sensitivity, and per-example norm bound with grid_scale."""
@@ -433,6 +543,84 @@ class ClipTransformTest(parameterized.TestCase):
     self.assertEqual(aux_2d.shape, (15, 4))
     self.assertEqual(aux_3d.shape, (15, 4, 9))
     self.assertEqual(aux_4d.shape, (15, 4, 9, 10))
+
+
+class ClippedFunPerLayerTest(parameterized.TestCase):
+
+  def test_clip_per_layer_clipped_fun_full_norm_tree(self):
+    """Tests clipped_fun with norm tree having same structure as pytree."""
+    pytree = {'a': np.array([3.0, 4.0]), 'b': np.array([0.0, 10.0])}
+    clip_norm = {'a': np.array(1.0), 'b': np.array(15.0)}
+    expected_output = {
+        # 'a' base norm is 5.0.
+        # Scales = 1.0/5.0 (1x), 1.0/10.0 (2x), 1.0/15.0 (3x).
+        # The scaled output is always [0.6, 0.8]. Sum: 3 * [0.6, 0.8]
+        'a': np.array([1.8, 2.4]),
+        # 'b' base norm is 10.0.
+        # Batch 1 (norm 10): Unclipped. Scale = 1.0
+        # Batch 2 (norm 20): Clipped. Scale = 15.0 / 20.0 = 0.75
+        # Batch 3 (norm 30): Clipped. Scale = 15.0 / 30.0 = 0.5
+        # Sum: ([0, 10] * 1.0) + ([0, 20] * 0.75) + ([0, 30] * 0.5)
+        'b': np.array([0.0, 40.0]),
+    }
+    expected_norms = {
+        'a': np.array([5.0, 10.0, 15.0]),
+        'b': np.array([10.0, 20.0, 30.0]),
+    }
+    cf = clipping.clipped_fun(
+        lambda x: jax.tree.map(lambda leaf: leaf * x, pytree),
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=clip_norm,
+        rescale_to_unit_norm=False,
+        return_norms=True,
+    )
+    cf_output, cf_norms = cf(jnp.array([1.0, 2.0, 3.0]))
+    chex.assert_trees_all_close(cf_output, expected_output)
+    chex.assert_trees_all_close(cf_norms, expected_norms)
+
+  def test_clip_per_layer_clipped_fun_prefix_norm_tree(self):
+    """Tests clipped_fun with norm tree as prefix of pytree."""
+    pytree = {
+        'layer1': {'w': np.array([0.0, 3.0]), 'b': np.array([4.0])},
+        'layer2': {'w': np.array([0.0, 8.0]), 'b': np.array([6.0])},
+    }
+    clip_norm = {'layer1': np.array(2.0), 'layer2': np.array(5.0)}
+    expected_output = {
+        'layer1': {
+            # 'layer1' base norm = 5.0; sqrt(0^2 + 3^2 + 4^2).
+            # Batch 1 (norm 5.0): Clipped. Scale = 2.0 / 5.0
+            # Batch 2 (norm 10.0): Clipped. Scale = 2.0 / 10.0
+            # Batch 3 (norm 15.0): Clipped. Scale = 2.0 / 15.0
+            # Sum of 3 scaled batches = 3 * (2.0 / 5.0) = 1.2
+            'w': np.array([0.0, 3.0]) * 1.2,
+            'b': np.array([4.0]) * 1.2,
+        },
+        'layer2': {
+            # 'layer2' base norm = 10.0; sqrt(0^2 + 8^2 + 6^2)).
+            # Batch 1 (norm 10.0): Clipped. Scale = 5.0 / 10.0
+            # Batch 2 (norm 20.0): Clipped. Scale = 5.0 / 20.0
+            # Batch 3 (norm 30.0): Clipped. Scale = 5.0 / 30.0
+            # Sum of 3 scaled batches = 3 * (5.0 / 10.0) = 1.5
+            'w': np.array([0.0, 8.0]) * 1.5,
+            'b': np.array([6.0]) * 1.5,
+        },
+    }
+    expected_norms = {
+        'layer1': np.array([5.0, 10.0, 15.0], dtype=np.float32),
+        'layer2': np.array([10.0, 20.0, 30.0], dtype=np.float32),
+    }
+    cf = clipping.clipped_fun(
+        lambda x: jax.tree.map(lambda leaf: leaf * x, pytree),
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=clip_norm,
+        rescale_to_unit_norm=False,
+        return_norms=True,
+    )
+    cf_output, cf_norms = cf(jnp.array([1.0, 2.0, 3.0]))
+    chex.assert_trees_all_close(cf_output, expected_output)
+    chex.assert_trees_all_close(cf_norms, expected_norms)
 
 
 if __name__ == '__main__':
