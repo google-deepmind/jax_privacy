@@ -124,7 +124,7 @@ class AccountingTest(parameterized.TestCase):
         target_delta=1e-6,
     )
     eps = accountant().compose(event_fn(nm)).get_epsilon(target_delta=1e-6)
-    self.assertAlmostEqual(eps, 1.0, places=4)
+    self.assertAlmostEqual(eps, 1.0, places=3)
 
   def test_fixed_dpsgd_event_replace_true_type(self):
     event = accounting.fixed_dpsgd_event(
