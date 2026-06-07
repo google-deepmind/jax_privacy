@@ -112,10 +112,8 @@ def main(_):
       num_bands=BANDS,
       l2_clip_norm=L2_CLIP_NORM,
       normalize_by=EXPECTED_BATCH_SIZE,
-      epsilon=EPSILON,
-      delta=DELTA,
       sampling_prob=EXPECTED_BATCH_SIZE / train_users * BANDS,
-  )
+  ).calibrate(epsilon=EPSILON, delta=DELTA)
   print('Initialized BandMFExecutionPlanConfig')
   plan = config.make()
   grad_fn = plan.clipped_grad(logistic_loss, batch_argnums=(1, 2))

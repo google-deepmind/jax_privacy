@@ -27,8 +27,6 @@ import optax
 class ExecutionPlanTest(parameterized.TestCase):
 
   @parameterized.parameters(
-      {"epsilon": None, "delta": None, "noise_multiplier": None},
-      {"epsilon": 1.0, "delta": 1e-06, "noise_multiplier": 2.0},
       {"strategy": np.array([])},
       {"truncated_batch_size": 5, "num_examples": None},
   )
@@ -36,8 +34,6 @@ class ExecutionPlanTest(parameterized.TestCase):
     default_kwargs = {
         "strategy": np.linspace(1, 0, 10),
         "iterations": 20,
-        "epsilon": None,
-        "delta": None,
         "noise_multiplier": 1.0,
     }
     default_kwargs.update(kwargs)
@@ -46,21 +42,15 @@ class ExecutionPlanTest(parameterized.TestCase):
 
   @parameterized.parameters(
       {
-          "epsilon": None,
-          "delta": None,
           "noise_multiplier": 1.0,
       },
-      {"epsilon": 1.0, "delta": 1e-06, "noise_multiplier": None},
       {
-          "epsilon": None,
-          "delta": None,
           "noise_multiplier": 1.0,
           "truncated_batch_size": 5,
           "num_examples": 10,
       },
   )
   def test_bandmf_execution_plan_creation(self, **privacy_kwargs):
-
     iterations = 20
     config = execution_plan.BandMFExecutionPlanConfig.default(
         num_bands=10, iterations=iterations, **privacy_kwargs
@@ -69,9 +59,6 @@ class ExecutionPlanTest(parameterized.TestCase):
     plan = config.make()
 
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
-    # Assert that the batch selection strategy is CyclicPoissonSampling with
-    # sampling_prob = 1.0, which is equivalent to shuffling /
-    # (k, b)-participation.
     self.assertIsInstance(
         plan.batch_selection_strategy, batch_selection.CyclicPoissonSampling
     )
@@ -84,49 +71,33 @@ class ExecutionPlanTest(parameterized.TestCase):
         list(plan.batch_selection_strategy.batch_iterator(100)), iterations
     )
 
-    # TODO: b/415360727 - Add tests that the execution plan is correctly
-    # configured and has the expected DP properties.
-
     self.assertIsInstance(plan.dp_event, dp_accounting.DpEvent)
     batch_gen = plan.batch_selection_strategy.batch_iterator(100, rng=0)
     self.assertIsInstance(next(batch_gen), np.ndarray)
 
-  @parameterized.parameters(
-      {
-          "epsilon": None,
-          "delta": 1e-06,
-          "noise_multiplier": 1.0,
-      },
-      {
-          "epsilon": 1.0,
-          "delta": None,
-          "noise_multiplier": 1.0,
-      },
-      {
-          "epsilon": 1.0,
-          "delta": 1e-06,
-          "noise_multiplier": None,
-          "accountant": dp_accounting.pld.PLDAccountant(
-              dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE
-          ),
-          "truncated_batch_size": 5,
-      },
-  )
-  def test_bandmf_execution_plan_creation_raises_error(self, **privacy_kwargs):
+  def test_bandmf_calibrate(self):
+    config = execution_plan.BandMFExecutionPlanConfig.default(
+        num_bands=10, iterations=20
+    ).calibrate(epsilon=1.0, delta=1e-06)
+
+    self.assertIsNotNone(config.noise_multiplier)
+    self.assertGreater(config.noise_multiplier, 0)
+    plan = config.make()
+    self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+    self.assertIsInstance(plan.dp_event, dp_accounting.DpEvent)
+
+  def test_uncalibrated_make_raises_error(self):
+    config = execution_plan.BandMFExecutionPlanConfig.default(
+        num_bands=10, iterations=20
+    )
     with self.assertRaises(ValueError):
-      execution_plan.BandMFExecutionPlanConfig.default(
-          num_bands=10,
-          iterations=20,
-          **privacy_kwargs,
-      )
+      config.make()
 
   def test_make_with_default_performance_flags(self):
     config = execution_plan.BandMFExecutionPlanConfig.default(
         num_bands=10,
         iterations=20,
         noise_multiplier=1.0,
-        epsilon=None,
-        delta=None,
     )
     plan = config.make()
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
@@ -136,8 +107,6 @@ class ExecutionPlanTest(parameterized.TestCase):
         num_bands=10,
         iterations=20,
         noise_multiplier=1.0,
-        epsilon=None,
-        delta=None,
     )
     flags = execution_plan.PerformanceFlags(
         dtype=np.float64,

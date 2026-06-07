@@ -28,8 +28,6 @@ include standard DP-SGD as the special case `num_bands=1`.
 
 ```python
 import jax.numpy as jnp
-import dp_accounting
-from jax_privacy import batch_selection
 from jax_privacy import clipping
 from jax_privacy.experimental import execution_plan
 
@@ -44,13 +42,7 @@ config = execution_plan.BandMFExecutionPlanConfig.default(
     iterations=1000,
     num_bands=1,
     sampling_prob=128 / 60000,
-    epsilon=2.0,
-    delta=1e-6,
-    partition_type=batch_selection.PartitionType.INDEPENDENT,
-    accountant=dp_accounting.pld.PLDAccountant(
-        dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE
-    ),
-)
+).calibrate(epsilon=2.0, delta=1e-6)
 
 plan = config.make()
 

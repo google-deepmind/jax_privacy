@@ -247,13 +247,11 @@ def main(argv: Sequence[str]) -> None:
   config = execution_plan.BandMFExecutionPlanConfig.default(
       iterations=iterations,
       num_bands=1,
-      epsilon=epsilon,
-      delta=delta,
       sampling_prob=expected_batch_size / train_size,
       rescale_to_unit_norm=True,
       normalize_by=expected_batch_size,
       l2_clip_norm=clipping_norm,
-  )
+  ).calibrate(epsilon=epsilon, delta=delta)
   plan = config.make()
   grad_fn = plan.clipped_grad(
       loss_fn,
