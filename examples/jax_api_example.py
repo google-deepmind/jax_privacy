@@ -34,9 +34,7 @@ from jax import random
 import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import noise_addition
-from jax_privacy.accounting import accountants
-from jax_privacy.accounting import analysis
-from jax_privacy.accounting import calibrate
+from jax_privacy.experimental import accounting
 import tensorflow as tf
 
 
@@ -116,15 +114,14 @@ def main(_):
 
   # DP only begin.
   # Calculate noise_multiplier (stddev) given the privacy budget.
-  accountant = analysis.DpsgdTrainingAccountant(
-      dp_accountant_config=accountants.PldAccountantConfig()
+  num_updates = num_epochs * train_size // batch_size
+  make_event = lambda sigma: accounting.dpsgd_event(
+      sigma, num_updates, sampling_prob=batch_size / train_size
   )
-  noise_multiplier = calibrate.calibrate_noise_multiplier(
+  noise_multiplier = dp_accounting.calibrate_dp_mechanism(
+      dp_accounting.pld.PLDAccountant,
+      make_event,
       target_epsilon=1.0,
-      accountant=accountant,
-      batch_sizes=batch_size,
-      num_updates=num_epochs * train_size // batch_size,
-      num_samples=train_size,
       target_delta=1e-5,
   )
   noise_rng = random.key(42)
