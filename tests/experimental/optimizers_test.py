@@ -246,5 +246,16 @@ class ScaleThenPrivatizeE2ETest(parameterized.TestCase):
     chex.assert_trees_all_close(aug_params, base_params, atol=1e-5)
 
 
+class MiscellaneousTest(parameterized.TestCase):
+
+  def test_as_augmented_optimizer(self):
+    """Should convert a GradientTransformation to an AugmentedOptimizer."""
+    optimizer = optax.adam(1e-3)
+    augmented = optimizers.as_augmented_optimizer(optimizer)
+    self.assertIsInstance(augmented, optimizers.AugmentedGradientTransformation)
+    augmented_v2 = optimizers.as_augmented_optimizer(augmented)
+    self.assertIs(augmented, augmented_v2)
+
+
 if __name__ == '__main__':
   absltest.main()

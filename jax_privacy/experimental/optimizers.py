@@ -204,3 +204,16 @@ def scale_then_privatize(
       update=update,
       pre_clipping_transform=pre_clipping_transform,
   )
+
+
+def as_augmented_optimizer(
+    optimizer: AugmentedGradientTransformation | optax.GradientTransformation,
+) -> AugmentedGradientTransformation:
+  """Wraps a plain Optax optimizer with an identity pre-clipping transform."""
+  if isinstance(optimizer, AugmentedGradientTransformation):
+    return optimizer
+  return AugmentedGradientTransformation(
+      init=optimizer.init,
+      update=optimizer.update,
+      pre_clipping_transform=lambda opt_state: lambda x: x,
+  )
