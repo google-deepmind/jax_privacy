@@ -37,6 +37,7 @@
    :maxdepth: 2
    :caption: Examples
 
+   examples_guide
    _collections/examples/dp_sgd_flax_linen_mnist
    _collections/examples/dp_sgd_keras_gemma3_lora_finetuning_samsum
    _collections/examples/dp_sgd_keras_gemma3_synthetic_data
