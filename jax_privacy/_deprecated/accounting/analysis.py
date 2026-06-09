@@ -26,7 +26,7 @@ from typing import Protocol, TypeAlias
 from absl import logging
 import chex
 import dp_accounting
-from jax_privacy.accounting import accountants
+from jax_privacy._deprecated.accounting import accountants
 import numpy as np
 import optax
 from scipy import stats

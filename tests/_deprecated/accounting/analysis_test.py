@@ -14,8 +14,8 @@
 
 from absl.testing import absltest
 from absl.testing import parameterized
-from jax_privacy.accounting import accountants
-from jax_privacy.accounting import analysis
+from jax_privacy._deprecated.accounting import accountants
+from jax_privacy._deprecated.accounting import analysis
 import numpy as np
 
 _BATCH_SIZE = 1024

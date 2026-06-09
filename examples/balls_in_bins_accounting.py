@@ -26,12 +26,11 @@ import math
 
 from absl import app
 import dp_accounting
+from jax_privacy import accounting
 from jax_privacy import batch_selection
-from jax_privacy.experimental import accounting
 from jax_privacy.experimental.monte_carlo import delta_calculation
 from jax_privacy.experimental.monte_carlo import sample_generation
 import numpy as np
-
 
 ITERATIONS = 100
 EPOCH_LENGTH = 10

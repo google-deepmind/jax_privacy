@@ -25,6 +25,7 @@ Public API
   :toctree: _autosummary_output
   :nosignatures:
 
+  accounting
   batch_selection
   clipping
   noise_addition
@@ -55,5 +56,4 @@ Experimental Modules
 
   experimental.execution_plan
   experimental.compilation_utils
-  experimental.accounting
   experimental.monte_carlo

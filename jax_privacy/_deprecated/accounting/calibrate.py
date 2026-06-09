@@ -17,7 +17,7 @@
 from collections.abc import Callable, Sequence
 import math
 
-from jax_privacy.accounting import analysis
+from jax_privacy._deprecated.accounting import analysis
 import scipy.optimize
 
 

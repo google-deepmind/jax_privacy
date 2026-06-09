@@ -60,10 +60,10 @@ from typing import Callable
 
 import dp_accounting
 import jax
+from jax_privacy import accounting
 from jax_privacy import batch_selection
 from jax_privacy import clipping
 from jax_privacy import noise_addition
-from jax_privacy.experimental import accounting
 from jax_privacy.matrix_factorization import toeplitz
 import numpy as np
 import optax

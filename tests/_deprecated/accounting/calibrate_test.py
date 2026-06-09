@@ -13,9 +13,9 @@
 # limitations under the License.
 
 from absl.testing import absltest
-from jax_privacy.accounting import accountants
-from jax_privacy.accounting import analysis
-from jax_privacy.accounting import calibrate
+from jax_privacy._deprecated.accounting import accountants
+from jax_privacy._deprecated.accounting import analysis
+from jax_privacy._deprecated.accounting import calibrate
 import numpy as np
 
 
