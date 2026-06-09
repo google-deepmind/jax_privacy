@@ -140,7 +140,7 @@ def clip_pytree(
     nan_to_num = lambda x: jnp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
     pytree = jax.tree.map(nan_to_num, pytree)
   clip_norm = jnp.maximum(clip_norm, 0.0)
-  l2_norm = optax.global_norm(pytree)
+  l2_norm = optax.tree.norm(pytree)
   scale = jnp.minimum(1.0, clip_norm / l2_norm)
   if rescale_to_unit_norm:
     scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
@@ -743,7 +743,7 @@ def clipped_grad(
     if has_aux or return_values or return_grad_norms:
       aux = AuxiliaryOutput(
           values=value_and_aux[0] if return_values else None,
-          grad_norms=optax.global_norm(grad) if return_grad_norms else None,
+          grad_norms=optax.tree.norm(grad) if return_grad_norms else None,
           aux=value_and_aux[1] if has_aux else None,
       )
       return result, aux

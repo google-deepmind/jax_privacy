@@ -74,14 +74,14 @@ class ClipPyTreeTest(parameterized.TestCase):
     if kwargs['return_zero']:
       chex.assert_trees_all_close(clipped, optax.tree.zeros_like(pytree))
     if kwargs['rescale_to_unit_norm']:
-      self.assertLessEqual(optax.global_norm(clipped), 1.0)
+      self.assertLessEqual(optax.tree.norm(clipped), 1.0)
     else:
-      self.assertLessEqual(optax.global_norm(clipped), kwargs['clip_norm'])
+      self.assertLessEqual(optax.tree.norm(clipped), kwargs['clip_norm'])
 
   @parameterized.parameters(*cartesian_product(pytree=PYTREE_STRUCTS))
   def test_clip_pytree_with_large_clip_norm(self, pytree):
     pytree = optax.tree.random_like(jax.random.key(0), pytree)
-    clip_norm = optax.global_norm(pytree) * 1.5
+    clip_norm = optax.tree.norm(pytree) * 1.5
     clipped_tree, _ = clipping.clip_pytree(pytree, clip_norm)
     chex.assert_trees_all_close(clipped_tree, pytree, atol=1e-6)
 
@@ -94,7 +94,7 @@ class ClipPyTreeTest(parameterized.TestCase):
         pytree, clip_norm, rescale_to_unit_norm=True
     )
     self.assertAlmostEqual(norm, 5.0)
-    self.assertAlmostEqual(optax.global_norm(clipped), 1.0)
+    self.assertAlmostEqual(optax.tree.norm(clipped), 1.0)
     # Normalization is the limiting behavior as clip_norm -> 0.
     expected = {'a': jnp.array([0.6, 0.0]), 'b': jnp.array([0.0, 0.8])}
     chex.assert_trees_all_close(clipped, expected)
@@ -111,14 +111,14 @@ class ClipPyTreeTest(parameterized.TestCase):
     )
     self.assertAlmostEqual(norm, 0.0)
     chex.assert_trees_all_close(clipped, zero_tree)
-    self.assertAlmostEqual(optax.global_norm(clipped), 0.0)
+    self.assertAlmostEqual(optax.tree.norm(clipped), 0.0)
 
     clipped_rescaled, norm_rescaled = clipping.clip_pytree(
         zero_tree, clip_norm, rescale_to_unit_norm=True
     )
     self.assertAlmostEqual(norm_rescaled, 0.0)
     chex.assert_trees_all_close(clipped_rescaled, zero_tree)
-    self.assertAlmostEqual(optax.global_norm(clipped_rescaled), 0.0)
+    self.assertAlmostEqual(optax.tree.norm(clipped_rescaled), 0.0)
 
   @parameterized.parameters(
       *cartesian_product(
@@ -206,9 +206,9 @@ class ClipAndRoundToGridTest(parameterized.TestCase):
       rounded_ones, _ = clipping.clip_and_round_to_grid(
           grad_ones, l2_clip_norm, grid_scale
       )
-      self.assertLessEqual(optax.global_norm(rounded_ones), grid_scale)
+      self.assertLessEqual(optax.tree.norm(rounded_ones), grid_scale)
       self.assertLessEqual(
-          optax.global_norm(rounded_ones) * (l2_clip_norm / grid_scale),
+          optax.tree.norm(rounded_ones) * (l2_clip_norm / grid_scale),
           l2_clip_norm,
       )
 
@@ -220,9 +220,9 @@ class ClipAndRoundToGridTest(parameterized.TestCase):
         rounded_random, _ = clipping.clip_and_round_to_grid(
             grad_random, l2_clip_norm, grid_scale
         )
-        self.assertLessEqual(optax.global_norm(rounded_random), grid_scale)
+        self.assertLessEqual(optax.tree.norm(rounded_random), grid_scale)
         self.assertLessEqual(
-            optax.global_norm(rounded_random) * (l2_clip_norm / grid_scale),
+            optax.tree.norm(rounded_random) * (l2_clip_norm / grid_scale),
             l2_clip_norm,
         )
 
