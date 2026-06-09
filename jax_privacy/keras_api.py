@@ -50,13 +50,12 @@ import types
 from typing import Any
 
 import chex
+import dp_accounting
 import jax
 import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import batch_selection
-from jax_privacy.accounting import accountants
-from jax_privacy.accounting import analysis
-from jax_privacy.accounting import calibrate
+from jax_privacy.experimental import accounting as experimental_accounting
 import keras
 import numpy as np
 
@@ -148,12 +147,8 @@ class DPKerasConfig:
   microbatch_size: int | None = None
   seed: int | None = None
 
-  _accountant = analysis.DpsgdTrainingAccountant(
-      dp_accountant_config=accountants.PldAccountantConfig(
-          # Smaller values result in higher precision but slower computation.
-          value_discretization_interval=1e-3
-      )
-  )
+  # Smaller values result in higher precision but slower computation.
+  _pld_discretization = 1e-3
 
   @property
   def effective_batch_size(self) -> int:
@@ -175,13 +170,20 @@ class DPKerasConfig:
         f' {self.delta=}, {self.effective_batch_size=}, {self.train_steps=},'
         f' {self.train_size=}. This might take a few minutes.'
     )
-    calculated_noise_multiplier = calibrate.calibrate_noise_multiplier(
+    sampling_prob = self.effective_batch_size / self.train_size
+    make_event = lambda nm: experimental_accounting.dpsgd_event(
+        noise_multiplier=nm,
+        iterations=self.train_steps,
+        sampling_prob=sampling_prob,
+    )
+    calculated_noise_multiplier = dp_accounting.calibrate_dp_mechanism(
+        make_fresh_accountant=functools.partial(
+            dp_accounting.pld.PLDAccountant,
+            value_discretization_interval=self._pld_discretization,
+        ),
+        make_event_from_param=make_event,
         target_epsilon=self.epsilon,
         target_delta=self.delta,
-        accountant=self._accountant,
-        batch_sizes=self.effective_batch_size,
-        num_updates=self.train_steps,
-        num_samples=self.train_size,
     )
     print(
         'Finished calculating noise multiplier:'
@@ -234,14 +236,17 @@ class DPKerasConfig:
             f'Noise multiplier {self.noise_multiplier} must be positive.'
         )
       try:
-        resulting_epsilon = self._accountant.compute_epsilon(
-            self.train_steps,
-            analysis.DpParams(
-                noise_multipliers=self.noise_multiplier,
-                batch_size=self.batch_size,
-                num_samples=self.train_size,
-                delta=self.delta,
-            ),
+        sampling_prob = self.batch_size / self.train_size
+        event = experimental_accounting.dpsgd_event(
+            noise_multiplier=self.noise_multiplier,
+            iterations=self.train_steps,
+            sampling_prob=sampling_prob,
+        )
+        pld_accountant = dp_accounting.pld.PLDAccountant(
+            value_discretization_interval=self._pld_discretization,
+        )
+        resulting_epsilon = pld_accountant.compose(event).get_epsilon(
+            target_delta=self.delta,
         )
       except ValueError as e:
         raise ValueError(
