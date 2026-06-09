@@ -61,7 +61,6 @@ from typing import Iterator
 from jax_privacy import sharding_utils
 import numpy as np
 
-
 RngType = np.random.Generator | int | None
 
 
@@ -299,6 +298,55 @@ class BallsInBinsSampling(BatchSelectionStrategy):
 
     for i in range(self.iterations):
       yield groups[i % self.cycle_length]
+
+
+@dataclasses.dataclass(frozen=True)
+class RandomAllocationSampling(BatchSelectionStrategy):
+  """Implements k-out-of-t random allocation (aka balanced-iteration sampling).
+
+  Each example independently selects exactly k steps (out of iterations total)
+  to participate in, uniformly at random. For k=1, this participation pattern
+  is equivalent to BallsInBinsSampling.  See the below papers for details
+  about this strategy:
+  - https://arxiv.org/abs/2206.03151 (k=1 only)
+  - https://arxiv.org/abs/2410.06266 (k=1 only)
+  - https://arxiv.org/abs/2412.16802 (k=1 only)
+  - https://arxiv.org/abs/2502.08202 (k>1)
+  - https://arxiv.org/abs/2503.03043 (k>1)
+  - https://arxiv.org/abs/2601.21636 (k>1)
+  - https://arxiv.org/abs/2602.17284 (k>1)
+  - https://arxiv.org/abs/2605.07072 (k>1)
+
+
+  Formal guarantees of the batch_iterator:
+    - All batches consist of indices in the range [0, num_examples).
+    - Each example appears in exactly k of the iterations batches, chosen
+      uniformly at random without replacement from [0, iterations).
+    - The allocation for each example is independent of all other examples.
+
+  Attributes:
+    total_participations: The number of steps each example participates in (k).
+    iterations: The total number of iterations / batches to generate (t).
+  """
+
+  total_participations: int
+  iterations: int
+
+  def batch_iterator(
+      self, num_examples: int, rng: RngType = None
+  ) -> Iterator[np.ndarray]:
+    rng = np.random.default_rng(rng)
+    dtype = np.min_scalar_type(-num_examples)
+    # At step i, each example with r remaining participations and (t-i)
+    # remaining steps participates with probability r/(t-i). This is equivalent
+    # to each example choosing k steps uniformly without replacement, but uses
+    # only O(n) space instead of O(n*k).
+    remaining = np.full(num_examples, self.total_participations)
+    for i in range(self.iterations):
+      probs = remaining / (self.iterations - i)
+      mask = rng.random(num_examples) < probs
+      yield np.where(mask)[0].astype(dtype)
+      remaining -= mask
 
 
 @dataclasses.dataclass(frozen=True)

@@ -242,6 +242,92 @@ class BatchSelectionTest(parameterized.TestCase):
     _check_no_repeated_indices(batches[:cycle_length])
     _check_cyclic_property(batches, cycle_length)
 
+  @parameterized.product(
+      num_examples=[10, 100],
+      num_participations=[1, 3, 5],
+      iterations=[10, 20],
+  )
+  def test_random_allocation_sampling(
+      self, num_examples, num_participations, iterations
+  ):
+    """Tests that random allocation gives exact k participations per example."""
+    strategy = batch_selection.RandomAllocationSampling(
+        total_participations=num_participations,
+        iterations=iterations,
+    )
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    self.assertLen(batches, iterations)
+    _check_element_range(batches, num_examples)
+    _check_signed_indices(batches)
+    _check_max_participation(batches, num_participations)
+    # Each example must appear in *exactly* k batches.
+    all_indices = np.concatenate(batches)
+    counts = collections.Counter(int(x) for x in all_indices)
+    for example_idx in range(num_examples):
+      self.assertEqual(counts[example_idx], num_participations)
+    # Within each batch, no example should appear twice.
+    for batch in batches:
+      self.assertEqual(len(batch), len(set(batch.tolist())))
+
+  def test_random_allocation_sampling_k_equals_zero(self):
+    """All batches should be empty when num_participations=0."""
+    strategy = batch_selection.RandomAllocationSampling(
+        total_participations=0,
+        iterations=5,
+    )
+    batches = list(strategy.batch_iterator(10, rng=0))
+    self.assertLen(batches, 5)
+    for batch in batches:
+      self.assertEmpty(batch)
+
+  def test_random_allocation_sampling_k_equals_t(self):
+    """Every example should appear in every batch when k == t."""
+    strategy = batch_selection.RandomAllocationSampling(
+        total_participations=5,
+        iterations=5,
+    )
+    batches = list(strategy.batch_iterator(10, rng=0))
+    self.assertLen(batches, 5)
+    for batch in batches:
+      self.assertLen(batch, 10)
+    _check_element_range(batches, 10)
+
+  def test_random_allocation_sampling_expected_batch_size(self):
+    """Average batch size should be exactly n*k/t."""
+    num_examples = 1000
+    num_participations = 3
+    iterations = 50
+    strategy = batch_selection.RandomAllocationSampling(
+        total_participations=num_participations,
+        iterations=iterations,
+    )
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    expected_batch_size = num_examples * num_participations / iterations
+    actual_mean = sum(len(b) for b in batches) / iterations
+    self.assertAlmostEqual(actual_mean, expected_batch_size, delta=1e-5)
+
+  def test_random_allocation_sampling_is_deterministic(self):
+    """RandomAllocationSampling should respect the provided RNG."""
+    strategy = batch_selection.RandomAllocationSampling(
+        total_participations=2,
+        iterations=10,
+    )
+    batches_a = list(strategy.batch_iterator(50, rng=0))
+    batches_b = list(strategy.batch_iterator(50, rng=0))
+    for batch_a, batch_b in zip(batches_a, batches_b, strict=True):
+      np.testing.assert_array_equal(batch_a, batch_b)
+
+  def test_random_allocation_sampling_zero_examples(self):
+    """Should produce empty batches when there are no examples."""
+    strategy = batch_selection.RandomAllocationSampling(
+        total_participations=2,
+        iterations=5,
+    )
+    batches = list(strategy.batch_iterator(0, rng=0))
+    self.assertLen(batches, 5)
+    for batch in batches:
+      self.assertEmpty(batch)
+
   def test_cyclic_poisson_sampling_independent_is_deterministic(self):
     """CyclicPoissonSampling should respect the provided RNG."""
     strategy = batch_selection.CyclicPoissonSampling(
