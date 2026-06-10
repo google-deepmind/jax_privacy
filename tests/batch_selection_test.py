@@ -86,7 +86,7 @@ def _check_signed_indices(batches):
 
 
 def _check_all_equal(x):
-  assert np.all(x == x[0]), f"Elements of x are not all equal: {x}"
+  assert np.all(x == x[0]), f'Elements of x are not all equal: {x}'
 
 
 class BatchSelectionTest(parameterized.TestCase):
@@ -546,5 +546,5 @@ class BatchPaddingTest(parameterized.TestCase):
     np.testing.assert_array_equal(new_indices, np.array([], dtype=np.int32))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
   absltest.main()
