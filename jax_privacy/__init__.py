@@ -14,7 +14,6 @@
 
 """Algorithms for Privacy-Preserving Machine Learning in JAX."""
 
-from jax_privacy import accounting
 from jax_privacy import auditing
 from jax_privacy import batch_selection
 from jax_privacy import experimental
