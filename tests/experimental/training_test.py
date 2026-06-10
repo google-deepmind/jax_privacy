@@ -17,7 +17,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import jax
 import jax.numpy as jnp
-from jax_privacy.experimental import execution_plan
+from jax_privacy import execution_plan
 from jax_privacy.experimental import training
 import numpy as np
 import optax

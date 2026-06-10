@@ -17,7 +17,7 @@ import chex
 import jax
 import jax.numpy as jnp
 from jax_privacy import clipping
-from jax_privacy.experimental import optimizers
+from jax_privacy import optimizers
 import optax
 
 

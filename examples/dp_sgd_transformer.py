@@ -46,7 +46,7 @@ import jax
 from jax import random
 import jax.numpy as jnp
 from jax_privacy import batch_selection
-from jax_privacy.experimental import execution_plan
+from jax_privacy import execution_plan
 import optax
 import tensorflow_datasets as tfds
 

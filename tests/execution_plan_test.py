@@ -16,7 +16,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
 from jax_privacy import batch_selection
-from jax_privacy.experimental import execution_plan
+from jax_privacy import execution_plan
 import numpy as np
 import optax
 

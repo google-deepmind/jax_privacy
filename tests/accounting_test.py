@@ -17,7 +17,7 @@ import functools
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
-from jax_privacy.experimental import accounting
+from jax_privacy import accounting
 
 MAKE_EVENT_FNS = (
     lambda nm: accounting.dpsgd_event(nm, 128, sampling_prob=0.01),

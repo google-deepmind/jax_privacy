@@ -25,9 +25,12 @@ Public API
   :toctree: _autosummary_output
   :nosignatures:
 
+  accounting
   batch_selection
   clipping
+  execution_plan
   noise_addition
+  optimizers
   auditing
 
 Matrix Factorization
@@ -53,7 +56,5 @@ Experimental Modules
   :toctree: _autosummary_output
   :nosignatures:
 
-  experimental.execution_plan
   experimental.compilation_utils
-  experimental.accounting
   experimental.monte_carlo

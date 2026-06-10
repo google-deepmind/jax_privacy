@@ -54,8 +54,8 @@ import dp_accounting
 import jax
 import jax.numpy as jnp
 import jax_privacy
+from jax_privacy import accounting
 from jax_privacy import batch_selection
-from jax_privacy.experimental import accounting as experimental_accounting
 import keras
 import numpy as np
 
@@ -171,7 +171,7 @@ class DPKerasConfig:
         f' {self.train_size=}. This might take a few minutes.'
     )
     sampling_prob = self.effective_batch_size / self.train_size
-    make_event = lambda nm: experimental_accounting.dpsgd_event(
+    make_event = lambda nm: accounting.dpsgd_event(
         noise_multiplier=nm,
         iterations=self.train_steps,
         sampling_prob=sampling_prob,
@@ -237,7 +237,7 @@ class DPKerasConfig:
         )
       try:
         sampling_prob = self.batch_size / self.train_size
-        event = experimental_accounting.dpsgd_event(
+        event = accounting.dpsgd_event(
             noise_multiplier=self.noise_multiplier,
             iterations=self.train_steps,
             sampling_prob=sampling_prob,

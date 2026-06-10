@@ -40,8 +40,8 @@ import dp_accounting
 import jax
 import jax.numpy as jnp
 import jax_privacy
+from jax_privacy import accounting
 from jax_privacy import batch_selection
-from jax_privacy.experimental import accounting
 from jax_privacy.experimental import discrete_gaussian
 import numpy as np
 import optax

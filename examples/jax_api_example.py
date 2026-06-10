@@ -33,8 +33,8 @@ import jax
 from jax import random
 import jax.numpy as jnp
 import jax_privacy
+from jax_privacy import accounting
 from jax_privacy import noise_addition
-from jax_privacy.experimental import accounting
 import tensorflow as tf
 
 

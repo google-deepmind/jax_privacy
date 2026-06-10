@@ -25,8 +25,8 @@ import chex
 import jax
 import jax_privacy
 from jax_privacy import batch_selection
-from jax_privacy.experimental import execution_plan
-from jax_privacy.experimental import optimizers as aug_optimizers
+from jax_privacy import execution_plan
+from jax_privacy import optimizers as aug_optimizers
 import numpy as np
 import optax
 
