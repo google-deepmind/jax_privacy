@@ -54,7 +54,10 @@ class ClipPyTreeTest(parameterized.TestCase):
     pytree = optax.tree.random_like(jax.random.key(0), pytree)
     clipped, _ = clipping.clip_pytree(pytree, **kwargs)
 
-    jitted = jax.jit(clipping.clip_pytree, static_argnums=(2, 3))
+    jitted = jax.jit(
+        clipping.clip_pytree,
+        static_argnames=('rescale_to_unit_norm', 'nan_safe'),
+    )
     clipped2, _ = jitted(pytree, **kwargs)
     chex.assert_trees_all_equal_shapes_and_dtypes(pytree, clipped, clipped2)
 
@@ -157,6 +160,39 @@ class ClipPyTreeTest(parameterized.TestCase):
     chex.assert_trees_all_close(clipped, expected)
 
     self.assertLessEqual(jnp.linalg.norm(clipped), clip_norm)
+
+  def test_clip_pytree_per_leaf_bounds(self):
+    """Tests that every individual leaf is bounded by clip_norm when per_leaf=True."""
+    # Leaf 'a' has norm 5.0, Leaf 'b' has norm 10.0
+    pytree = {'a': jnp.array([3.0, 4.0]), 'b': jnp.array([0.0, 10.0])}
+    clip_norm = 2.0
+
+    clipped, _ = clipping.clip_pytree(pytree, clip_norm, per_leaf=True)
+
+    # Each leaf is scaled down to max of clip_norm
+    for leaf in jax.tree.leaves(clipped):
+      self.assertLessEqual(jnp.linalg.norm(leaf), clip_norm + 1e-6)
+
+  def test_clip_pytree_per_leaf_reconstructed_norm_is_same_as_global_norm(self):
+    """Tests that the reconstructed global norm matches the actual global norm."""
+    # Global norm is sqrt(3^2 + 4^2 + 12^2) = sqrt(9 + 16 + 144) = 13.0
+    pytree = {'a': jnp.array([3.0, 4.0]), 'b': jnp.array([0.0, 12.0])}
+
+    _, norm_global = clipping.clip_pytree(pytree, 2.0, per_leaf=False)
+    _, norm_per_leaf = clipping.clip_pytree(pytree, 2.0, per_leaf=True)
+
+    # The reconstructed sqrt(sum(n**2)) MUST equal optax.global_norm
+    self.assertAlmostEqual(float(norm_global), float(norm_per_leaf), places=5)
+
+  def test_clip_pytree_per_leaf_single_array_equivalence(self):
+    """Tests that per_leaf and global clipping are identical for a single array."""
+    pytree = jnp.array([3.0, 4.0, 12.0])  # A PyTree with only one leaf
+    clip_norm = 5.0
+
+    clipped_global, _ = clipping.clip_pytree(pytree, clip_norm, per_leaf=False)
+    clipped_leaf, _ = clipping.clip_pytree(pytree, clip_norm, per_leaf=True)
+
+    chex.assert_trees_all_close(clipped_global, clipped_leaf)
 
 
 class ClipAndRoundToGridTest(parameterized.TestCase):
