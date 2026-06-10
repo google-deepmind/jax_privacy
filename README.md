@@ -14,8 +14,7 @@ limitations under the License. -->
 
 # JAX-Privacy: Algorithms for Privacy-Preserving Machine Learning in JAX
 
-| [**Docs**](https://jax-privacy.readthedocs.io/) | [**Library**](#library) | [**Installation**](#installation) |
-[**Reproducing Results**](#reproducing-results) | [**Citing**](#citing) |
+| [**Docs**](https://jax-privacy.readthedocs.io/) | [**Citing**](#citing) |
 [**Contact**](#contact)
 
 This repository contains:
@@ -32,97 +31,8 @@ reproducibility for research purposes, and includes production-focused APIs for
 differentially private machine learning. Some rough edges should be expected,
 especially in the research components.
 
-## New: Production-Focused JAX Privacy Library <a id="library"></a>
-
-We are excited to introduce a more production-focused JAX Privacy API designed
-to simplify the development of differentially-private (DP) machine learning
-models, including Large Language Models (LLMs).
-
-**Key Features:**
-
-*   **Algorithm Support**: Currently supports the DP-SGD (Differentially Private
-    Stochastic Gradient Descent) algorithm. We are actively working on
-    incorporating more DP algorithms (e.g. DP-FTRL) in the near future.
-*   **Framework Integration**: The library provides APIs tailored for different
-    JAX-based development experiences:
-    *   **Keras**: A high-level API, excellent for common tasks like fine-tuning
-        LLMs. See
-        [Keras API simple example](https://github.com/google-deepmind/jax_privacy/blob/main/examples/keras_api_example.py)
-        and
-        [Gemma fine-tuning notebook](https://github.com/google-deepmind/jax_privacy/blob/main/examples/dp_sgd_keras_gemma3_lora_finetuning_samsum.ipynb)
-        to get started.
-    *   **Flax Linen**: Offers greater flexibility for custom model
-        architectures and training loops, at the cost of some additional
-        boilerplate. See
-        [MNIST notebook](https://github.com/google-deepmind/jax_privacy/blob/main/examples/dp_sgd_flax_linen_mnist.ipynb)
-        to get started.
-    *   **Raw JAX**: Provides the most low-level control. Recommended for
-        researchers who want to test out new ideas, people who want to use a
-        framework not listed above (e.g. equinox), or people who want a more
-        numpy-like experience.
-        <!-- TODO - b/398715962: add "External Contributions & Design" section, link to readthedocs -->
-
-This new JAX Privacy API aims to provide a more streamlined and robust
-experience for building DP ML models, complementing the existing
-research-focused components.
-
-We believe this new API will significantly lower the barrier to implementing DP
-in your machine learning projects.
-
-## Installation<a id="installation"></a>
-
-**Note:** to ensure that your installation is compatible with your local
-accelerators such as a GPU, we recommend to first follow the corresponding
-instructions to install [JAX](https://github.com/jax-ml/jax#installation).
-
-### Option 1: Static Installation
-
-This option is preferred for the purpose of re-using functionalities of our
-library without modifying them. The library package can be installed by running
-the following command-line:
-
-```
-pip install git+https://github.com/google-deepmind/jax_privacy
-```
-
-This will not install the training pipeline.
-
-### Option 2: Local Installation <a id="install-option2"></a>
-
-This option is preferred to either build on top of our codebase, or to reproduce
-our results using the training pipeline.
-
-*   The first step is to clone the repository:
-
-```
-git clone https://github.com/google-deepmind/jax_privacy
-```
-
-*   Then the code can be installed. We recommend local installation so
-    modifications to the code are reflected in imports of the package:
-
-```
-cd jax_privacy
-pip install -e .
-```
-
-## Reproducing Results<a id="reproducing-results"></a>
-
-### Unlocking High-Accuracy Differentially Private Image Classification through Scale
-
-*   Instructions:
-    [experiments/image_classification](experiments/image_classification).
-*   arXiv link: https://arxiv.org/abs/2204.13650.
-*   Bibtex reference:
-    [link](https://github.com/google-deepmind/jax_privacy/blob/main/bibtex/de2022unlocking.bib).
-
-### Unlocking Accuracy and Fairness in Differentially Private Image Classification
-
-*   Instructions:
-    [experiments/image_classification](experiments/image_classification).
-*   arXiv link: https://arxiv.org/abs/2308.10888.
-*   Bibtex reference:
-    [link](https://github.com/google-deepmind/jax_privacy/blob/main/bibtex/berrada2023unlocking.bib).
+For installation instructions, examples, and full API documentation, please
+visit the [JAX Privacy documentation](https://jax-privacy.readthedocs.io/).
 
 ## How to Cite This Repository <a id="citing"></a>
 
@@ -164,3 +74,4 @@ See https://creativecommons.org/licenses/by/4.0/legalcode for more details.
 ## Disclaimer
 
 This is not an official Google product.
+

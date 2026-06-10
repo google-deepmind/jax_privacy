@@ -18,22 +18,41 @@ limitations under the License. -->
 accelerators such as a GPU, we recommend to first follow the corresponding
 instructions to install [JAX](https://github.com/jax-ml/jax#installation).
 
-## Option 1: Static Installation
+## Recommended: Install from GitHub Head
 
-This option is preferred for the purpose of re-using functionalities of our
-library without modifying them. The library package can be installed by running
-the following command-line:
+We **highly recommend** installing JAX Privacy directly from GitHub head.
+The repository is under active development, and installing from head ensures
+you get the most recent features and the best version of the library.
 
 ```
 pip install git+https://github.com/google-deepmind/jax_privacy
 ```
 
-This will not install the training pipeline.
+### Dependency versions
 
-## Option 2: Local Installation
+*   [**DP Accounting**](https://github.com/google/differential-privacy/tree/main/python/dp_accounting):
+    JAX Privacy and DP Accounting are co-developed — we often add features to
+    DP Accounting and then surface them in JAX Privacy, so installing from head
+    ensures consistency.
 
-This option is preferred to either build on top of our codebase, or to reproduce
-our results using the training pipeline.
+*   [**Optax**](https://github.com/google-deepmind/optax):
+    Parts of JAX Privacy have been upstreamed to optax (optax.microbatching),
+    and JAX Privacy depends on this recently-added code. Installing from head
+    ensures updates to optax are reflected in JAX-Privacy.
+
+## Alternative: Install from PyPI
+
+You can also install JAX Privacy from PyPI (version 1.0 or 2.0), but note
+that these releases will not have all the features available on GitHub head.
+
+```
+pip install jax-privacy
+```
+
+## Local Development Installation
+
+This option is preferred if you want to build on top of our codebase or
+contribute to the library.
 
 *   The first step is to clone the repository:
 
@@ -48,3 +67,4 @@ git clone https://github.com/google-deepmind/jax_privacy
 cd jax_privacy
 pip install -e .
 ```
+

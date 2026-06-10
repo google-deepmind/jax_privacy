@@ -44,15 +44,17 @@
 
 .. toctree::
    :maxdepth: 2
-   :caption: Paper Results Reproduction
+   :caption: Sharp Edges
 
-   paper_reproductions
+   sharp_edges_variable_batch_sizes
+   sharp_edges_vmap_sharding
+   sharp_edges_mixed_precision
 
 .. toctree::
    :maxdepth: 2
    :caption: Technical Documentation
 
-   sharp_edges
+   paper_reproductions
    troubleshooting
    library_design
    contribution_guide

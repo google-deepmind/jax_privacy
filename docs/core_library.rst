@@ -56,5 +56,7 @@ Experimental Modules
   :toctree: _autosummary_output
   :nosignatures:
 
+  experimental.training
   experimental.compilation_utils
   experimental.monte_carlo
+
