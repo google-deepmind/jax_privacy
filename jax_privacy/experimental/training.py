@@ -24,6 +24,7 @@ from typing import Protocol, TypeAlias
 import chex
 import jax
 import jax_privacy
+from jax_privacy import _validate
 from jax_privacy import batch_selection
 from jax_privacy import execution_plan
 from jax_privacy import optimizers as aug_optimizers
@@ -91,20 +92,6 @@ class TrainingState:
   noise_state: NoiseState
 
 
-def _get_num_examples(dataset: Batch) -> int:
-  """Infers the total number of examples in the dataset."""
-  leaves = jax.tree.leaves(dataset)
-  if not leaves:
-    raise ValueError('Dataset is empty or contains no leaves.')
-  sizes = {leaf.shape[0] for leaf in leaves}
-  if len(sizes) != 1:
-    raise ValueError(
-        'All dataset leaves must have the same size along axis 0, '
-        f'got sizes: {sorted(sizes)}.'
-    )
-  return sizes.pop()
-
-
 def _get_batch(dataset: Batch, indices: np.ndarray) -> tuple[Batch, np.ndarray]:
   """Retrieves a batch from a PyTree dataset, zeroing padding examples.
 
@@ -169,7 +156,7 @@ def train(
   rng = np.random.default_rng(rng)
   loss_rng = jax.random.key(int(rng.integers(2**63)))
 
-  num_examples = _get_num_examples(dataset)
+  num_examples = _validate.batch(dataset)
 
   state = TrainingState(
       step=0,

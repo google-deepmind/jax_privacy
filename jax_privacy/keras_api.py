@@ -54,6 +54,7 @@ import dp_accounting
 import jax
 import jax.numpy as jnp
 import jax_privacy
+from jax_privacy import _validate
 from jax_privacy import accounting
 from jax_privacy import batch_selection
 import keras
@@ -198,43 +199,31 @@ class DPKerasConfig:
 
   def _validate_params(self) -> None:
     """Validates the parameters for DP-SGD training."""
-    if self.epsilon <= 0:
-      raise ValueError(f'Epsilon {self.epsilon} must be positive.')
-    if self.delta <= 0:
-      raise ValueError(f'Delta {self.delta} must be positive.')
-    if self.clipping_norm <= 0:
-      raise ValueError(f'Clipping norm {self.clipping_norm} must be positive.')
-    if self.batch_size <= 0:
-      raise ValueError(f'Batch size {self.batch_size} must be positive.')
-    if self.train_size <= 0:
-      raise ValueError(f'Train size {self.train_size} must be positive.')
+    _validate.positive(
+        epsilon=self.epsilon,
+        delta=self.delta,
+        clipping_norm=self.clipping_norm,
+        batch_size=self.batch_size,
+        train_size=self.train_size,
+    )
     if self.batch_size > self.train_size:
       raise ValueError(
           f'Batch size {self.batch_size} must be less than or equal to train'
           f' size {self.train_size}.'
       )
-    if self.train_steps <= 0:
-      raise ValueError(f'Train steps {self.train_steps} must be positive.')
-    if self.gradient_accumulation_steps <= 0:
-      raise ValueError(
-          f'Gradient accumulation steps {self.gradient_accumulation_steps} must'
-          ' be positive.'
-      )
+    _validate.positive(
+        train_steps=self.train_steps,
+        gradient_accumulation_steps=self.gradient_accumulation_steps,
+    )
     if self.microbatch_size is not None:
-      if self.microbatch_size <= 0:
-        raise ValueError(
-            f'Microbatch size {self.microbatch_size} must be positive.'
-        )
+      _validate.positive(microbatch_size=self.microbatch_size)
       if self.microbatch_size > self.batch_size:
         raise ValueError(
             f'Microbatch size {self.microbatch_size} must be less than or'
             f' equal to batch size {self.batch_size}.'
         )
     if self.noise_multiplier is not None:
-      if self.noise_multiplier <= 0:
-        raise ValueError(
-            f'Noise multiplier {self.noise_multiplier} must be positive.'
-        )
+      _validate.positive(noise_multiplier=self.noise_multiplier)
       try:
         sampling_prob = self.batch_size / self.train_size
         event = accounting.dpsgd_event(

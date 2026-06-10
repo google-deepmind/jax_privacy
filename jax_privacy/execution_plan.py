@@ -60,6 +60,7 @@ from typing import Callable
 
 import dp_accounting
 import jax
+from jax_privacy import _validate
 from jax_privacy import accounting
 from jax_privacy import batch_selection
 from jax_privacy import clipping
@@ -67,7 +68,6 @@ from jax_privacy import noise_addition
 from jax_privacy.matrix_factorization import toeplitz
 import numpy as np
 import optax
-import pydantic
 
 NeighboringRelation = dp_accounting.NeighboringRelation
 AccountantFn = Callable[[NeighboringRelation], dp_accounting.PrivacyAccountant]
@@ -158,11 +158,7 @@ class DPExecutionPlan:
   neighboring_relation: NeighboringRelation
 
 
-@pydantic.dataclasses.dataclass(
-    frozen=True,
-    kw_only=True,
-    config=pydantic.ConfigDict(arbitrary_types_allowed=True),
-)  # pytype: disable=wrong-keyword-args
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class BandMFExecutionPlanConfig:
   """Configuration for an Amplified BandMF-based DPExecutionPlan.
 
@@ -223,25 +219,33 @@ class BandMFExecutionPlanConfig:
     column_normalize: Whether to column-normalize the strategy matrix.
   """
 
-  iterations: int = pydantic.Field(ge=0)
-  strategy: np.typing.ArrayLike = pydantic.Field()
-  noise_multiplier: float | None = pydantic.Field(default=None, ge=0)
-  l2_clip_norm: float = pydantic.Field(default=1.0, ge=0)
-  rescale_to_unit_norm: bool = pydantic.Field(default=True)
-  normalize_by: float = pydantic.Field(default=1.0, ge=0)
-  sampling_prob: float = pydantic.Field(default=1.0, ge=0, le=1)
-  truncated_batch_size: int | None = pydantic.Field(default=None, ge=0)
-  num_examples: int | None = pydantic.Field(default=None, ge=0)
-  column_normalize: bool = pydantic.Field(default=False)
+  iterations: int
+  strategy: np.typing.ArrayLike
+  noise_multiplier: float | None = None
+  l2_clip_norm: float = 1.0
+  rescale_to_unit_norm: bool = True
+  normalize_by: float = 1.0
+  sampling_prob: float = 1.0
+  truncated_batch_size: int | None = None
+  num_examples: int | None = None
+  column_normalize: bool = False
 
   def __post_init__(self):
+    _validate.non_negative(
+        iterations=self.iterations,
+        l2_clip_norm=self.l2_clip_norm,
+        normalize_by=self.normalize_by,
+    )
+    _validate.in_range(0, 1, sampling_prob=self.sampling_prob)
+    if self.noise_multiplier is not None:
+      _validate.non_negative(noise_multiplier=self.noise_multiplier)
+    if self.truncated_batch_size is not None:
+      _validate.non_negative(truncated_batch_size=self.truncated_batch_size)
+    if self.num_examples is not None:
+      _validate.non_negative(num_examples=self.num_examples)
     if self.truncated_batch_size is not None and self.num_examples is None:
       raise ValueError('truncated_batch_size requires num_examples to be set.')
-    strategy = np.asarray(self.strategy)
-    if strategy.ndim != 1:
-      raise ValueError(f'strategy must be a 1D array, found {strategy.ndim}.')
-    if strategy.size == 0 or strategy.size > self.iterations:
-      raise ValueError(f'{strategy.size=} not in range [1, {self.iterations}].')
+    _validate.strategy(self.strategy, self.iterations)
 
   @property
   def _neighboring_relation(self) -> NeighboringRelation:
@@ -316,9 +320,7 @@ class BandMFExecutionPlanConfig:
         tol=tol,
     )
 
-    return dataclasses.replace(  # pytype: disable=wrong-arg-types
-        self, noise_multiplier=noise_multiplier
-    )
+    return dataclasses.replace(self, noise_multiplier=noise_multiplier)
 
   @classmethod
   def default(

@@ -69,7 +69,6 @@ extensions = [
 autodoc_type_aliases = {
     'ArrayLike': 'jax.typing.ArrayLike',
     'ArrayTree': 'chex.ArrayTree',
-    'PydanticDataclass': 'pydantic.PydanticDataclass',
 }
 
 autosummary_generate = True

@@ -58,6 +58,7 @@ import enum
 import itertools
 from typing import Iterator
 
+from jax_privacy import _validate
 from jax_privacy import sharding_utils
 import numpy as np
 
@@ -238,6 +239,13 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   cycle_length: int = 1
   partition_type: PartitionType = PartitionType.EQUAL_SPLIT
 
+  def __post_init__(self):
+    _validate.non_negative(iterations=self.iterations)
+    _validate.in_range(0, 1, sampling_prob=self.sampling_prob)
+    _validate.positive(cycle_length=self.cycle_length)
+    if self.truncated_batch_size is not None:
+      _validate.non_negative(truncated_batch_size=self.truncated_batch_size)
+
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
@@ -289,6 +297,10 @@ class BallsInBinsSampling(BatchSelectionStrategy):
   iterations: int
   cycle_length: int
 
+  def __post_init__(self):
+    _validate.non_negative(iterations=self.iterations)
+    _validate.positive(cycle_length=self.cycle_length)
+
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
@@ -332,6 +344,17 @@ class RandomAllocationSampling(BatchSelectionStrategy):
   total_participations: int
   iterations: int
 
+  def __post_init__(self):
+    _validate.non_negative(
+        total_participations=self.total_participations,
+        iterations=self.iterations,
+    )
+    if self.total_participations > self.iterations:
+      raise ValueError(
+          f'Expected total_participations={self.total_participations}'
+          f' <= iterations={self.iterations}.'
+      )
+
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
@@ -370,11 +393,14 @@ class FixedBatchSampling(BatchSelectionStrategy):
   iterations: int
   replace: bool = False
 
+  def __post_init__(self):
+    _validate.non_negative(
+        batch_size=self.batch_size, iterations=self.iterations
+    )
+
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
-    if self.batch_size < 0:
-      raise ValueError(f'batch_size must be >= 0, got {self.batch_size}.')
     if not self.replace and self.batch_size > num_examples:
       raise ValueError(
           'batch_size must be <= num_examples when replace is False.'
@@ -432,14 +458,11 @@ class BMinSepSampling(BatchSelectionStrategy):
   truncated_batch_size: int | None = None
 
   def __post_init__(self):
-    if self.min_sep <= 0:
-      raise ValueError('min_sep must be positive.')
-    if self.iterations < 0:
-      raise ValueError('iterations must be non-negative.')
-    if not 0 <= self.sampling_prob <= 1:
-      raise ValueError('sampling_prob must be in [0, 1]')
-    if self.truncated_batch_size is not None and self.truncated_batch_size < 0:
-      raise ValueError('truncated_batch_size must be non-negative.')
+    _validate.positive(min_sep=self.min_sep)
+    _validate.non_negative(iterations=self.iterations)
+    _validate.in_range(0, 1, sampling_prob=self.sampling_prob)
+    if self.truncated_batch_size is not None:
+      _validate.non_negative(truncated_batch_size=self.truncated_batch_size)
 
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
@@ -527,6 +550,11 @@ class UserSelectionStrategy:
   base_strategy: BatchSelectionStrategy
   examples_per_user_per_batch: int = 1
   shuffle_per_user: bool = False
+
+  def __post_init__(self):
+    _validate.positive(
+        examples_per_user_per_batch=self.examples_per_user_per_batch
+    )
 
   def batch_iterator(
       self, user_ids: np.ndarray, rng: RngType = None

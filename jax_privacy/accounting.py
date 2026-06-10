@@ -52,22 +52,15 @@ Example Usage (Calibrating Number of Iterations for DP-SGD):
 import math
 
 import dp_accounting
+from jax_privacy import _validate
 
 
-def _validate_args(noise_multiplier, iterations, sampling_prob):
-  """Validates the arguments for the DP events."""
-  if noise_multiplier < 0:
-    raise ValueError(
-        f'Noise multiplier must be non-negative, got {noise_multiplier}.'
-    )
-  if iterations < 0:
-    raise ValueError(
-        f'Number of iterations must be non-negative, got {iterations}.'
-    )
-  if not 0 <= sampling_prob <= 1:
-    raise ValueError(
-        f'Sampling probability must be in [0, 1], got {sampling_prob}.'
-    )
+def _validate_poisson_args(noise_multiplier, iterations, sampling_prob):
+  """Validates common arguments for Poisson-sampled DP events."""
+  _validate.non_negative(
+      noise_multiplier=noise_multiplier, iterations=iterations
+  )
+  _validate.in_range(0, 1, sampling_prob=sampling_prob)
 
 
 def _validate_fixed_args(
@@ -86,14 +79,12 @@ def _validate_fixed_args(
     batch_size: Batch size per iteration.
     replace: Whether sampling is done with replacement.
   """
-  if noise_multiplier < 0:
-    raise ValueError(f'Expected {noise_multiplier=} >= 0.')
-  if iterations < 0:
-    raise ValueError(f'Expected {iterations=} >= 0.')
-  if dataset_size < 0:
-    raise ValueError(f'Expected {dataset_size=} >= 0.')
-  if batch_size < 0:
-    raise ValueError(f'Expected {batch_size=} >= 0.')
+  _validate.non_negative(
+      noise_multiplier=noise_multiplier,
+      iterations=iterations,
+      dataset_size=dataset_size,
+      batch_size=batch_size,
+  )
   if not replace and batch_size > dataset_size:
     raise ValueError(
         f'Expected {batch_size=} <= {dataset_size=} for replace=False.'
@@ -140,7 +131,7 @@ def dpsgd_event(
   Returns:
     A DpEvent object.
   """
-  _validate_args(noise_multiplier, iterations, sampling_prob)
+  _validate_poisson_args(noise_multiplier, iterations, sampling_prob)
   gaussian = _gaussian_event(noise_multiplier, use_zcdp)
   sampled = dp_accounting.PoissonSampledDpEvent(sampling_prob, gaussian)
   return dp_accounting.SelfComposedDpEvent(sampled, iterations)
@@ -231,7 +222,7 @@ def truncated_dpsgd_event(
   Returns:
     A DpEvent object.
   """
-  _validate_args(noise_multiplier, iterations, sampling_prob)
+  _validate_poisson_args(noise_multiplier, iterations, sampling_prob)
   sampled_gaussian = dp_accounting.TruncatedSubsampledGaussianDpEvent(
       dataset_size=num_examples,
       sampling_probability=sampling_prob,
@@ -270,7 +261,7 @@ def amplified_bandmf_event(
   Returns:
     A DpEvent object.
   """
-  _validate_args(noise_multiplier, iterations, sampling_prob)
+  _validate_poisson_args(noise_multiplier, iterations, sampling_prob)
   rounds = math.ceil(iterations / num_bands)
   return dpsgd_event(
       noise_multiplier=noise_multiplier,
@@ -303,9 +294,9 @@ def truncated_amplified_bandmf_event(
     sampling_prob: The Poisson sampling probability of the mechanism, i.e., the
       probability an example will be included in each batch before truncation.
       Note that because the examples are partitioned into `num_bands` groups,
-      the expected batch size (before truncation) is actually
-      `dataset_size * sampling_prob / num_bands` (i.e., a factor of `num_bands`
-      smaller than DP-SGD).
+      the expected batch size (before truncation) is actually `dataset_size *
+      sampling_prob / num_bands` (i.e., a factor of `num_bands` smaller than
+      DP-SGD).
     largest_group_size: The number of examples in the largest group, usually
       math.ceil(num_examples / num_bands).
     truncated_batch_size: The maximum batch size.
@@ -313,7 +304,7 @@ def truncated_amplified_bandmf_event(
   Returns:
     A DpEvent object.
   """
-  _validate_args(noise_multiplier, iterations, sampling_prob)
+  _validate_poisson_args(noise_multiplier, iterations, sampling_prob)
   return truncated_dpsgd_event(
       noise_multiplier=noise_multiplier,
       sampling_prob=sampling_prob,

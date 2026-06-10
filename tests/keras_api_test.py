@@ -28,6 +28,7 @@ from jax_privacy import keras_api
 import keras
 import numpy as np
 from scipy import stats
+
 # pylint: enable=g-import-not-at-top, wrong-import-position
 
 
@@ -49,29 +50,27 @@ class KerasApiTest(parameterized.TestCase):
     valid_params = self._get_params()
 
     # Invalid epsilon
-    with self.assertRaisesRegex(ValueError, "Epsilon .* must be positive"):
+    with self.assertRaisesRegex(ValueError, "Expected epsilon=0.0 > 0"):
       dataclasses.replace(valid_params, epsilon=0.0)
 
     # Invalid delta
-    with self.assertRaisesRegex(ValueError, "Delta .* must be positive"):
+    with self.assertRaisesRegex(ValueError, "Expected delta=0.0 > 0"):
       dataclasses.replace(valid_params, delta=0.0)
 
     # Invalid batch size
-    with self.assertRaisesRegex(ValueError, "Batch size .* must be positive"):
+    with self.assertRaisesRegex(ValueError, "Expected batch_size=0 > 0"):
       dataclasses.replace(valid_params, batch_size=0)
 
     # Invalid clipping norm
-    with self.assertRaisesRegex(
-        ValueError, "Clipping norm .* must be positive"
-    ):
+    with self.assertRaisesRegex(ValueError, "Expected clipping_norm=0.0 > 0"):
       dataclasses.replace(valid_params, clipping_norm=0.0)
 
     # Invalid train steps
-    with self.assertRaisesRegex(ValueError, "Train steps .* must be positive"):
+    with self.assertRaisesRegex(ValueError, "Expected train_steps=0 > 0"):
       dataclasses.replace(valid_params, train_steps=0)
 
     # Invalid train size
-    with self.assertRaisesRegex(ValueError, "Train size .* must be positive"):
+    with self.assertRaisesRegex(ValueError, "Expected train_size=0 > 0"):
       dataclasses.replace(valid_params, train_size=0)
 
     # Batch size must not exceed train size.
@@ -83,7 +82,7 @@ class KerasApiTest(parameterized.TestCase):
 
     # Invalid noise multiplier
     with self.assertRaisesRegex(
-        ValueError, "Noise multiplier .* must be positive"
+        ValueError, "Expected noise_multiplier=0.0 > 0"
     ):
       dataclasses.replace(valid_params, noise_multiplier=0.0)
 
@@ -104,14 +103,14 @@ class KerasApiTest(parameterized.TestCase):
     # Gradient accumulation steps must be positive
     with self.assertRaisesRegex(
         ValueError,
-        "Gradient accumulation steps 0 must be positive",
+        "Expected gradient_accumulation_steps=0 > 0",
     ):
       dataclasses.replace(valid_params, gradient_accumulation_steps=0)
 
     # Invalid microbatch size
     with self.assertRaisesRegex(
         ValueError,
-        "Microbatch size 0 must be positive",
+        "Expected microbatch_size=0 > 0",
     ):
       dataclasses.replace(valid_params, microbatch_size=0)
 
