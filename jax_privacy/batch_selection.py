@@ -58,9 +58,10 @@ import enum
 import itertools
 from typing import Iterator
 
-from jax_privacy import _validate
-from jax_privacy import sharding_utils
 import numpy as np
+
+from . import _validate
+from . import sharding_utils
 
 RngType = np.random.Generator | int | None
 

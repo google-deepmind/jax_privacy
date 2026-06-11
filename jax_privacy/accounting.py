@@ -52,7 +52,8 @@ Example Usage (Calibrating Number of Iterations for DP-SGD):
 import math
 
 import dp_accounting
-from jax_privacy import _validate
+
+from . import _validate
 
 
 def _validate_poisson_args(noise_multiplier, iterations, sampling_prob):

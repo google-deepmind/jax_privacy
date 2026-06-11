@@ -14,17 +14,17 @@
 
 """Algorithms for Privacy-Preserving Machine Learning in JAX."""
 
-from jax_privacy import accounting
-from jax_privacy import auditing
-from jax_privacy import batch_selection
-from jax_privacy import execution_plan
-from jax_privacy import experimental
-from jax_privacy import matrix_factorization
-from jax_privacy import noise_addition
-from jax_privacy import optimizers
+from . import accounting
+from . import auditing
+from . import batch_selection
+from . import execution_plan
+from . import experimental
+from . import matrix_factorization
+from . import noise_addition
+from . import optimizers
 
 # pylint: disable=g-importing-member
 # Carefully selected member imports for the top-level public API.
-from jax_privacy.clipping import clipped_grad
+from .clipping import clipped_grad
 
 __version__ = '2.2.0.dev0'

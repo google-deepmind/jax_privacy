@@ -60,14 +60,15 @@ from typing import Callable
 
 import dp_accounting
 import jax
-from jax_privacy import _validate
-from jax_privacy import accounting
-from jax_privacy import batch_selection
-from jax_privacy import clipping
-from jax_privacy import noise_addition
-from jax_privacy.matrix_factorization import toeplitz
 import numpy as np
 import optax
+
+from . import _validate
+from . import accounting
+from . import batch_selection
+from . import clipping
+from . import noise_addition
+from .matrix_factorization import toeplitz
 
 NeighboringRelation = dp_accounting.NeighboringRelation
 AccountantFn = Callable[[NeighboringRelation], dp_accounting.PrivacyAccountant]

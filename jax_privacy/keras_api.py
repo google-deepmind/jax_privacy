@@ -53,12 +53,14 @@ import chex
 import dp_accounting
 import jax
 import jax.numpy as jnp
-import jax_privacy
-from jax_privacy import _validate
-from jax_privacy import accounting
-from jax_privacy import batch_selection
 import keras
 import numpy as np
+
+from . import _validate
+from . import accounting
+from . import batch_selection
+from . import clipping
+from . import noise_addition
 
 
 @dataclasses.dataclass(frozen=True)
@@ -956,7 +958,7 @@ def _noised_clipped_grads(
       batch_size = jax.tree.leaves(x)[0].shape[0]
       is_padding_example = jnp.zeros(batch_size, dtype=jnp.bool_)
 
-  clipped_grad_fn = jax_privacy.clipped_grad(
+  clipped_grad_fn = clipping.clipped_grad(
       fun=compute_loss_and_updates_fn,
       has_aux=True,
       return_values=True,
@@ -983,7 +985,7 @@ def _noised_clipped_grads(
   l2_sensitivity = clipped_grad_fn.l2_norm_bound
   accumulation_factor = np.sqrt(dp_params.gradient_accumulation_steps)
   stddev = noise_multiplier * l2_sensitivity / accumulation_factor
-  privatizer = jax_privacy.noise_addition.gaussian_privatizer(stddev=stddev)
+  privatizer = noise_addition.gaussian_privatizer(stddev=stddev)
 
   noisy_grads, new_noise_state = privatizer.update(clipped_grad, noise_state)
 
