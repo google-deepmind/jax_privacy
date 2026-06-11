@@ -24,7 +24,7 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 import numpy as np
 
-from . import checks
+from . import _checks as checks
 from . import optimization
 from . import sensitivity
 

@@ -17,7 +17,7 @@ from absl.testing import parameterized
 import hypothesis
 from hypothesis import strategies as st
 import jax.numpy as jnp
-from jax_privacy.matrix_factorization import checks
+from jax_privacy.matrix_factorization import _checks as checks
 
 
 class ChecksTest(parameterized.TestCase):

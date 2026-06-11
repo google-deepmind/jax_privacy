@@ -55,9 +55,12 @@ Poisson-sampled batches internally from those arrays.
 .. automodule:: jax_privacy.keras_api
    :no-members:
    :no-undoc-members:
+   :no-index:
 
 .. autoclass:: jax_privacy.keras_api.DPKerasConfig
    :members:
    :show-inheritance:
+   :no-index:
 
 .. autofunction:: jax_privacy.keras_api.make_private
+   :no-index:

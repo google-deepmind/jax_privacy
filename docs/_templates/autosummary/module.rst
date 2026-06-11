@@ -27,7 +27,9 @@
    :template: autosummary/module.rst
 
 {% for item in modules %}
+{% if not item.endswith('_test') and not item.startswith('_') %}
    {{ item }}
+{% endif %}
 {% endfor %}
 {% endif %}
 {% endblock %}

@@ -31,12 +31,12 @@
    :caption: API Documentation
 
    core_library
-   keras_api
 
 .. toctree::
    :maxdepth: 2
    :caption: Examples
 
+   keras_api
    examples_guide
    _collections/examples/dp_sgd_flax_linen_mnist
    _collections/examples/dp_sgd_keras_gemma3_lora_finetuning_samsum

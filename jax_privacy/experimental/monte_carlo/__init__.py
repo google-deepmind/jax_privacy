@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Monte Carlo module.
+"""Monte Carlo accounting module.
 
 .. autosummary::
    :toctree: _autosummary_output

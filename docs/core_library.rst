@@ -19,36 +19,31 @@ Core Library
 .. currentmodule:: jax_privacy
 
 
-Public API
-----------
-.. autosummary::
-  :toctree: _autosummary_output
-  :nosignatures:
-
-  accounting
-  batch_selection
-  clipping
-  execution_plan
-  noise_addition
-  optimizers
-  auditing
-
-Matrix Factorization
---------------------
+Individual Components
+---------------------
 .. autosummary::
   :toctree: _autosummary_output
   :nosignatures:
   :template: autosummary/module.rst
+  :recursive:
 
+  accounting
+  batch_selection
+  clipping
+  noise_addition
+  optimizers
+  auditing
   matrix_factorization
-  matrix_factorization.banded
-  matrix_factorization.buffered_toeplitz
-  matrix_factorization.checks
-  matrix_factorization.dense
-  matrix_factorization.optimization
-  matrix_factorization.sensitivity
-  matrix_factorization.streaming_matrix
-  matrix_factorization.toeplitz
+
+Higher-level APIs
+-----------------
+.. autosummary::
+  :toctree: _autosummary_output
+  :nosignatures:
+
+  execution_plan
+  experimental.training
+  keras_api
 
 Experimental Modules
 --------------------
@@ -56,7 +51,6 @@ Experimental Modules
   :toctree: _autosummary_output
   :nosignatures:
 
-  experimental.training
   experimental.compilation_utils
   experimental.monte_carlo
 

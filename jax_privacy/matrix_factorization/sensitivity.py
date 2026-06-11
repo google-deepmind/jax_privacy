@@ -19,7 +19,8 @@ from typing import Optional
 
 import jax
 import jax.numpy as jnp
-from . import checks
+
+from . import _checks as checks
 
 # Disabling pylint invalid-name to allow mathematical notation including
 # single-capital-letter variables for matrices.
