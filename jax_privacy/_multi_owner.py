@@ -184,3 +184,59 @@ class _ExampleUserCSR:
   def users_of(self, ex: int) -> np.ndarray:
     """Returns the user IDs attributed to example ``ex``."""
     return self.sorted_users[self.indptr[ex] : self.indptr[ex + 1]]
+
+
+def greedy_contribution_bound(
+    attribution: MultiOwnerGraph,
+    *,
+    max_degree: int = 8,
+) -> np.ndarray:
+  """Selects examples so each user appears at most once.
+
+  Specializes Algorithm 2 of [1] to k=1, processing examples in ascending
+  degree order.  Because each user is attributed to at most one selected
+  example, the result induces a user-to-example mapping that can be composed
+  with any example-level batch selection strategy.
+
+
+  References: [1] https://arxiv.org/abs/2503.03622
+
+  Args:
+    attribution: Multi-owner attribution data.
+    max_degree: Maximum number of owners per example to consider.
+
+  Returns:
+    1D array of selected example IDs.
+  """
+  n_ex = attribution.num_examples
+  degree = attribution.csr.degree
+  ex_ids = attribution.example_ids
+  u_ids = attribution.user_ids
+
+  # Priority key: (degree, example_id).  Lower selects first.
+  priority = degree[ex_ids].astype(np.int64) * n_ex + ex_ids
+  user_active = np.ones(attribution.num_users, dtype=bool)
+  best = np.empty(attribution.num_users, dtype=np.int64)
+  selected = []
+
+  # Round-based vectorized greedy: each round, every unclaimed user votes for
+  # its lowest-priority example, and examples with unanimous votes are selected.
+  for _ in range(max_degree):
+    active_counts = np.bincount(ex_ids[user_active[u_ids]], minlength=n_ex)
+    selectable = (active_counts == degree) & (degree <= max_degree)
+    active = user_active[u_ids] & selectable[ex_ids]
+    ae, au, ap = ex_ids[active], u_ids[active], priority[active]
+
+    # Each user votes for their lowest-priority active example.
+    best.fill(np.iinfo(np.int64).max)
+    np.minimum.at(best, au, ap)
+
+    # An example is selected iff every one of its users voted for it.
+    vote_count = np.bincount(ae[best[au] % n_ex == ae], minlength=n_ex)
+    new = np.where(vote_count == degree)[0]
+
+    new_edge_mask = np.isin(ex_ids, new)
+    user_active[u_ids[new_edge_mask]] = False
+    selected.append(new)
+
+  return np.concatenate(selected) if selected else np.array([], dtype=np.int64)

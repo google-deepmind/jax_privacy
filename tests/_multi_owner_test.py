@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 from absl.testing import absltest
 from absl.testing import parameterized
-from jax_privacy._multi_owner import MultiOwnerGraph
+from jax_privacy import _multi_owner
 import numpy as np
+
+MultiOwnerGraph = _multi_owner.MultiOwnerGraph
 
 
 class MultiOwnerGraphTest(parameterized.TestCase):
@@ -128,5 +131,116 @@ class MultiOwnerGraphTest(parameterized.TestCase):
       MultiOwnerGraph(example_ids=np.array([0, 0]), user_ids=np.array([1, 1]))
 
 
-if __name__ == '__main__':
+class GreedyContributionBoundTest(parameterized.TestCase):
+
+  def _verify_no_user_repeated(self, attribution, selected):
+    """Checks that no user appears more than once among selected examples."""
+    sel_mask = np.zeros(attribution.num_examples, dtype=bool)
+    sel_mask[selected] = True
+    edge_sel = sel_mask[attribution.example_ids]
+    counts = np.bincount(
+        attribution.user_ids[edge_sel], minlength=attribution.num_users
+    )
+    np.testing.assert_array_less(counts, 2, err_msg="User appeared twice")
+
+  def test_single_owner_examples(self):
+    """Single-owner examples: each user has 3 examples, only 1 selected."""
+    data = MultiOwnerGraph.from_owners_per_example(
+        [[0], [0], [0], [1], [1], [1]]
+    )
+    selected = _multi_owner.greedy_contribution_bound(data)
+    self._verify_no_user_repeated(data, selected)
+    # With k=1, exactly 1 per user.
+    self.assertLen(selected, 2)
+
+  def test_empty_input(self):
+    data = MultiOwnerGraph(
+        example_ids=np.array([], dtype=np.int64),
+        user_ids=np.array([], dtype=np.int64),
+    )
+    selected = _multi_owner.greedy_contribution_bound(data)
+    self.assertEmpty(selected)
+
+  def test_disjoint_users_selects_all(self):
+    """If no user is shared, all examples should be selected."""
+    data = MultiOwnerGraph.from_owners_per_example([[0], [1], [2]])
+    selected = _multi_owner.greedy_contribution_bound(data)
+    self.assertLen(selected, 3)
+
+  def test_max_degree_boundary(self):
+    """Verifies that max_degree correctly thresholds example selection."""
+    data = MultiOwnerGraph.from_owners_per_example([[0], [1], [2, 3], [4, 5]])
+
+    selected_0 = _multi_owner.greedy_contribution_bound(data, max_degree=0)
+    self.assertEmpty(selected_0)
+
+    selected_1 = _multi_owner.greedy_contribution_bound(data, max_degree=1)
+    np.testing.assert_array_equal(sorted(selected_1), [0, 1])
+
+    selected_2 = _multi_owner.greedy_contribution_bound(data, max_degree=2)
+    np.testing.assert_array_equal(sorted(selected_2), [0, 1, 2, 3])
+
+  @parameterized.parameters(
+      # (n_examples, n_users, max_owners, max_degree, seed)
+      (50, 20, 2, 1, 42),
+      (50, 20, 2, 2, 42),
+      (100, 30, 3, 1, 0),
+      (100, 30, 3, 2, 0),
+      (100, 30, 3, 3, 0),
+      (200, 50, 5, 1, 7),
+      (200, 50, 5, 3, 7),
+      (200, 50, 5, 5, 7),
+      (100, 100, 4, 3, 123),
+      (500, 100, 2, 1, 99),
+      (500, 100, 2, 2, 99),
+  )
+  def test_random_graph_properties(
+      self, n_examples, n_users, max_owners, max_degree, seed
+  ):
+    """Verifies constraint satisfaction, max_degree, and local optimality."""
+    data = _create_random_graph(n_examples, n_users, max_owners, seed)
+    selected = _multi_owner.greedy_contribution_bound(
+        data, max_degree=max_degree
+    )
+
+    # 1. Constraint satisfaction: no user is repeated.
+    self._verify_no_user_repeated(data, selected)
+
+    # Determine users that are owned by selected examples.
+    sel_mask = np.zeros(data.num_examples, dtype=bool)
+    sel_mask[selected] = True
+    selected_users = np.unique(data.user_ids[sel_mask[data.example_ids]])
+
+    # 2. Constraint satisfaction: selected examples satisfy max_degree.
+    for ex in selected:
+      self.assertLessEqual(
+          len(data.csr.users_of(ex)),
+          max_degree,
+          msg=f"Selected example {ex} has degree > {max_degree}",
+      )
+
+    # 3. Local optimality: no example can be added to the selection.
+    for ex in range(data.num_examples):
+      users = data.csr.users_of(ex)
+      if len(users) <= max_degree:
+        if not np.any(np.isin(users, selected_users)):
+          self.assertIn(
+              ex,
+              selected,
+              msg=f"Example {ex} could have been selected but was not.",
+          )
+
+
+def _create_random_graph(n_examples, n_users, max_owners, seed):
+  """Generates a random MultiOwnerGraph for testing."""
+  rng = np.random.RandomState(seed)
+  owners_per_example = []
+  for _ in range(n_examples):
+    n_owners = rng.randint(1, max_owners + 1)
+    owners = rng.choice(n_users, size=n_owners, replace=False)
+    owners_per_example.append(owners.tolist())
+  return MultiOwnerGraph.from_owners_per_example(owners_per_example)
+
+
+if __name__ == "__main__":
   absltest.main()
