@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+import math
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -179,6 +180,27 @@ class AccountingTest(parameterized.TestCase):
     inner = event.event.event
     self.assertIsInstance(inner, dp_accounting.dp_event.ZCDpEvent)
     self.assertAlmostEqual(inner.rho, 0.5 / noise_multiplier**2)
+
+  def test_dpsgd_event_zero_noise_does_not_crash(self):
+    """noise_multiplier=0 is permitted and must not raise in either branch.
+
+    `_validate_args` only rejects negative noise multipliers, so 0.0 is a valid
+    input denoting infinite privacy loss. The continuous branch already handles
+    it via GaussianDpEvent(0); the zCDP branch must likewise not raise a
+    ZeroDivisionError from 0.5 / noise_multiplier**2 and should report rho=inf.
+    """
+    continuous = accounting.dpsgd_event(0.0, 10, sampling_prob=0.01)
+    self.assertIsInstance(
+        continuous.event.event, dp_accounting.dp_event.GaussianDpEvent
+    )
+    self.assertEqual(continuous.event.event.noise_multiplier, 0.0)
+
+    discrete = accounting.dpsgd_event(
+        0.0, 10, sampling_prob=0.01, use_zcdp=True
+    )
+    inner = discrete.event.event
+    self.assertIsInstance(inner, dp_accounting.dp_event.ZCDpEvent)
+    self.assertTrue(math.isinf(inner.rho))
 
   def test_use_zcdp_matches_gaussian_privacy(self):
     """use_zcdp=True & default should give the same epsilon with RDP."""

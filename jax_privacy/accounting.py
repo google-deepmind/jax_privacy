@@ -100,7 +100,8 @@ def _gaussian_event(
 ) -> dp_accounting.DpEvent:
   """Returns the Gaussian or zCDP DpEvent for the given noise multiplier."""
   if use_zcdp:
-    return dp_accounting.ZCDpEvent(0.5 / noise_multiplier**2)
+    rho = math.inf if noise_multiplier == 0 else 0.5 / noise_multiplier**2
+    return dp_accounting.ZCDpEvent(rho)
   else:
     return dp_accounting.GaussianDpEvent(noise_multiplier)
 
