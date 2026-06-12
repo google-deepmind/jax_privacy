@@ -509,7 +509,7 @@ class KerasApiTest(parameterized.TestCase):
     np.testing.assert_allclose(mean, np.array([0.0, 0.0]))
 
   def test_dp_training_e2e_work(self):
-    np.random.seed(42)
+    keras.utils.set_random_seed(42)
     train_size = 200
     batch_size = 100
     epochs = 5
