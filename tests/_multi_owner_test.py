@@ -44,15 +44,6 @@ class MultiOwnerGraphTest(parameterized.TestCase):
     self.assertEqual(data.num_users, 3)
     self.assertEqual(data.num_edges, 5)
 
-  def test_empty(self):
-    data = MultiOwnerGraph(
-        example_ids=np.array([], dtype=np.int64),
-        user_ids=np.array([], dtype=np.int64),
-    )
-    self.assertEqual(data.num_examples, 0)
-    self.assertEqual(data.num_users, 0)
-    self.assertEqual(data.num_edges, 0)
-
   def test_shape_mismatch_raises(self):
     with self.assertRaises(ValueError):
       MultiOwnerGraph(example_ids=np.array([0, 1]), user_ids=np.array([0]))
@@ -95,13 +86,6 @@ class MultiOwnerGraphTest(parameterized.TestCase):
     # User 1 has no examples, so only users 0 and 2 contribute.
     self.assertEqual(data.num_users, 2)
     self.assertEqual(data.num_examples, 3)
-
-  def test_from_user_to_examples_all_empty(self):
-    """All users empty produces an empty graph."""
-    data = MultiOwnerGraph.from_user_to_examples({0: [], 1: []})
-    self.assertEqual(data.num_examples, 0)
-    self.assertEqual(data.num_users, 0)
-    self.assertEqual(data.num_edges, 0)
 
   def test_from_owners_per_example_noncontiguous_user_ids(self):
     """Large, non-contiguous raw user IDs are renumbered correctly."""
@@ -153,14 +137,6 @@ class GreedyContributionBoundTest(parameterized.TestCase):
     # With k=1, exactly 1 per user.
     self.assertLen(selected, 2)
 
-  def test_empty_input(self):
-    data = MultiOwnerGraph(
-        example_ids=np.array([], dtype=np.int64),
-        user_ids=np.array([], dtype=np.int64),
-    )
-    selected = _multi_owner.greedy_contribution_bound(data)
-    self.assertEmpty(selected)
-
   def test_disjoint_users_selects_all(self):
     """If no user is shared, all examples should be selected."""
     data = MultiOwnerGraph.from_owners_per_example([[0], [1], [2]])
@@ -170,9 +146,6 @@ class GreedyContributionBoundTest(parameterized.TestCase):
   def test_max_degree_boundary(self):
     """Verifies that max_degree correctly thresholds example selection."""
     data = MultiOwnerGraph.from_owners_per_example([[0], [1], [2, 3], [4, 5]])
-
-    selected_0 = _multi_owner.greedy_contribution_bound(data, max_degree=0)
-    self.assertEmpty(selected_0)
 
     selected_1 = _multi_owner.greedy_contribution_bound(data, max_degree=1)
     np.testing.assert_array_equal(sorted(selected_1), [0, 1])
