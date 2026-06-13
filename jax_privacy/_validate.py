@@ -43,6 +43,15 @@ def in_range(lo, hi, **kwargs):
       raise ValueError(f'Expected {name}={value} in [{lo}, {hi}].')
 
 
+def equal(expected, **kwargs):
+  """Validates that all values equal ``expected``."""
+  for name, value in kwargs.items():
+    if value != expected:
+      raise ValueError(
+          f'Provided {name}={value} does not match expected {expected}.'
+      )
+
+
 def batch(pytree) -> int:
   """Validates a batch pytree and returns the batch size.
 
@@ -101,3 +110,18 @@ def strategy(value, max_size):
     raise ValueError(
         f'strategy size must be in [1, {max_size}], got {arr.size}.'
     )
+
+
+def multi_owner(example_ids, user_ids):
+  """Validates parallel edge-list arrays for a MultiOwnerGraph."""
+  example_ids = np.asarray(example_ids)
+  user_ids = np.asarray(user_ids)
+  if example_ids.ndim != 1 or user_ids.ndim != 1:
+    raise ValueError('example_ids and user_ids must be 1D arrays.')
+  if len(example_ids) != len(user_ids):
+    raise ValueError('example_ids and user_ids must have the same length')
+  if len(example_ids) == 0:
+    raise ValueError('empty graphs are not allowed.')
+  pairs = np.stack([example_ids, user_ids], axis=1)
+  if len(np.unique(pairs, axis=0)) < len(pairs):
+    raise ValueError('Duplicate (example, user) id pairs are not allowed.')
