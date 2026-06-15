@@ -417,6 +417,41 @@ class BatchSelectionTest(parameterized.TestCase):
         self.assertGreaterEqual(len(batches[0]), 400)
         self.assertLessEqual(len(batches[0]), 600)
 
+  def test_b_min_sep_sampling_min_sep_one_warm_start(self):
+    """min_sep=1 with default warm_start reduces to plain Poisson(p)."""
+    sampling_prob = 0.01
+    iterations = 5
+    num_examples = 1000
+    strategy = batch_selection.BMinSepSampling(
+        sampling_prob=sampling_prob,
+        iterations=iterations,
+        min_sep=1,
+    )
+    # warm_start defaults to True; with min_sep == 1 (b == 1) there is no
+    # separation constraint and the warm-start history must be empty.
+    self.assertTrue(strategy.warm_start)
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    self.assertLen(batches, iterations)
+    _check_element_range(batches, num_examples)
+    _check_signed_indices(batches)
+
+  def test_b_min_sep_sampling_min_sep_one_poisson_frequency(self):
+    """Over many iterations, min_sep=1 gives per-example frequency ~= p."""
+    sampling_prob = 0.1
+    iterations = 2000
+    num_examples = 200
+    strategy = batch_selection.BMinSepSampling(
+        sampling_prob=sampling_prob,
+        iterations=iterations,
+        min_sep=1,
+    )
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    self.assertLen(batches, iterations)
+    mean_inclusion_freq = sum(len(batch) for batch in batches) / (
+        iterations * num_examples
+    )
+    self.assertAlmostEqual(mean_inclusion_freq, sampling_prob, delta=0.003)
+
   def test_user_selection_strategy(self):
     """Tests for UserSelectionStrategy."""
     base_strategy = batch_selection.CyclicPoissonSampling(
