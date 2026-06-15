@@ -28,7 +28,6 @@ import jax.numpy as jnp
 import optax
 from optax import microbatching
 
-
 PyTree: TypeAlias = chex.ArrayTree
 AuxiliaryOutput = collections.namedtuple('Aux', ['values', 'grad_norms', 'aux'])
 _REPLACE_SPECIAL = dp_accounting.NeighboringRelation.REPLACE_SPECIAL
@@ -643,17 +642,18 @@ def clipped_grad(
 
   Formal Guarantees:
     For the gradient output:
-      The L2 sensitivity of the returned function with respect to the batch
-      arguments (specified by `batch_argnums`) under add/remove or zero-out
-      differential privacy definitions is guaranteed to be 1.0 if
-      `rescale_to_unit_norm` is True. Otherwise, the sensitivity is
-      `l2_clip_norm`. Under replace-one DP, the sensitivity is doubled
-      (2.0 or 2 * `l2_clip_norm`).
+      The L2 sensitivity of the returned callable is a complex function of
+      the input parameters (``l2_clip_norm``, ``rescale_to_unit_norm``,
+      ``grid_scale``, per-layer clipping settings, etc.) and may change as
+      new features are added. Rather than reasoning about the sensitivity
+      from the parameters, callers should query the returned callable's
+      ``.sensitivity()`` method (or equivalently its ``.l2_norm_bound``
+      attribute for add-or-remove-one DP) directly.
     All auxiliary outputs (aux, values, grad_norms) are per-example. This
-      function guarantees that per-example outputs only depend the data for the
-      same example. This allows maximum flexibility for the caller to aggregate
-      these as desired (possibly with a DP mean, median, quantile, or histogram
-      mechanism).
+      function guarantees that per-example outputs only depend on the data for
+      the same example. This allows maximum flexibility for the caller to
+      aggregate these as desired (possibly with a DP mean, median, quantile,
+      or histogram mechanism).
 
   Args:
     fun: The function to be differentiated, which should return a scalar loss

@@ -50,6 +50,23 @@ References:
 [1] https://arxiv.org/abs/2211.06530
 [2] https://arxiv.org/abs/1607.00133
 [3] https://arxiv.org/abs/2306.08153
+
+Design Note (public vs. non-public information):
+  Batch selection strategy implementations are typically defined as frozen
+  dataclasses. Any fields defined on these dataclasses are generally considered
+  **public information** — they describe the sampling strategy itself and can
+  be shared freely (e.g., as part of a privacy analysis or hyperparameter
+  report).
+
+  In contrast, when constructing a concrete iterator over batches via
+  ``batch_iterator``, you must pass in potentially **non-public information**
+  such as ``num_examples`` (the dataset size) and ``rng`` (the random number
+  generator state). These are supplied as arguments rather than fields
+  precisely because they may be sensitive.
+
+  Some strategy dataclasses do include an optional ``num_examples`` field. In
+  those cases, if ``num_examples`` is set to a value other than ``None``, it
+  is considered public information for that strategy instance.
 """
 
 import abc
