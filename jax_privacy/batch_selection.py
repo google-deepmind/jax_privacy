@@ -619,3 +619,13 @@ class UserSelectionStrategy:
 
     for user_batch in self.base_strategy.batch_iterator(num_users, rng):
       yield np.array([get_user_batch(uid) for uid in user_batch])
+
+
+# Re-export multi-owner functionality from _multi_owner submodule.
+# Imports are at the bottom because _multi_owner imports batch_selection
+# (for BatchSelectionStrategy), creating a circular dependency at module level.
+# pylint: disable=wrong-import-position,ungrouped-imports,unused-import
+# pylint: disable=g-import-not-at-top,g-bad-import-order
+from jax_privacy._multi_owner import greedy_contribution_bound  # noqa: E402
+from jax_privacy._multi_owner import MultiOwnerGraph  # noqa: E402
+from jax_privacy._multi_owner import MultiOwnerMinSepSampling  # noqa: E402

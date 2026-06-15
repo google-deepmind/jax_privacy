@@ -22,13 +22,15 @@ References: https://arxiv.org/abs/2503.03622
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 import dataclasses
 import functools
+import math
 
 import numpy as np
 
 from . import _validate
+from . import batch_selection
 
 
 @dataclasses.dataclass(frozen=True)
@@ -224,6 +226,7 @@ def greedy_contribution_bound(
   # Round-based vectorized greedy: each round, every unclaimed user votes for
   # its lowest-priority example, and examples with unanimous votes are selected.
   for _ in range(max_degree):
+    # An example is selectable if all of it's users are eligible to participate.
     active_counts = np.bincount(ex_ids[user_active[u_ids]], minlength=n_ex)
     selectable = (active_counts == degree) & low_degree
     active = selectable[ex_ids]
@@ -242,3 +245,192 @@ def greedy_contribution_bound(
     selected.append(new)
 
   return np.concatenate(selected)
+
+
+class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
+  """Batch selection with b-min-sep for multi-owner attributed data.
+
+  WARNING: Initializing this class kicks off an example ordering greedy
+  algorithm which can be time consuming.
+
+  Note that both the attribution graph and the resulting batch assignments are
+  considered **public information** and are not protected by differential
+  privacy. The example ordering can be accessed directly via the `example_order`
+  field of the dataclass, which is precomputed at initialization.
+  As a result, the max_part values are not specified as inputs, but
+  rather computed post-hoc after identifying a valid example ordering.
+
+  Formal Guarantees:
+
+  - There is at most one example from each user across any ``min_sep``
+    consecutive batches.
+  - No user appears in more than ``user_maxpart`` batches (computed post-hoc).
+  - No example appears in more than ``example_maxpart`` batches (computed
+    post-hoc).
+
+  References: [1] https://arxiv.org/abs/2503.03622
+  """
+
+  def __init__(
+      self,
+      attribution: MultiOwnerGraph,
+      batch_size: int,
+      iterations: int,
+      min_sep: int,
+      user_example_ratio: float = 4,
+      shuffle_seed: int | None = None,
+  ):
+    """Initializes the MultiOwnerMinSepSampling strategy.
+
+    Args:
+      attribution: Multi-owner attribution data for the dataset.
+      batch_size: Number of examples per batch.
+      iterations: Number of batches to produce.
+      min_sep: Min batch separation between same-user appearances.
+      user_example_ratio: Ratio of per-user to per-example participation cap.
+        Controls per-example duplication relative to the per-user cap. Both caps
+        start at 1 and grow dynamically: when progress stalls due to cap
+        constraints, ``user_maxpart_cap`` increases by 1 and
+        ``example_maxpart_cap`` is recomputed as ``ceil(user_maxpart_cap /
+        user_example_ratio)``.
+      shuffle_seed: Seed for shuffling within degree classes each pass. ``None``
+        (default) disables shuffling.
+    """
+    _validate.positive(
+        min_sep=min_sep,
+        batch_size=batch_size,
+        iterations=iterations,
+        user_example_ratio=user_example_ratio,
+    )
+    self.attribution = attribution
+    self.batch_size = batch_size
+    self.iterations = iterations
+    self.min_sep = min_sep
+    self.user_example_ratio = user_example_ratio
+    self.shuffle_seed = shuffle_seed
+    example_order, user_maxpart, example_maxpart = self._precompute_order()
+    # Technically public info, but we don't want to encourage direct access.
+    self._example_order = example_order
+    self._user_maxpart = user_maxpart
+    self._example_maxpart = example_maxpart
+
+  @property
+  def example_maxpart(self) -> int:
+    """Maximum number of batches an example appears in."""
+    return self._example_maxpart
+
+  @property
+  def user_maxpart(self) -> int:
+    """Maximum number of batches a user appears in."""
+    return self._user_maxpart
+
+  def _precompute_order(self):
+    """Runs the greedy algorithm once, caching batches and maxpart stats."""
+    graph = self.attribution
+    num_examples = graph.num_examples
+    dtype = np.min_scalar_type(-num_examples)
+    user_count = np.zeros(graph.num_users, dtype=np.int32)
+    # Initialize last_batch so that every user is eligible in the first batch:
+    # current_batch(0) - last_batch(-min_sep) = min_sep >= min_sep.
+    last_batch = np.full(graph.num_users, -self.min_sep, dtype=np.int32)
+    example_count = np.zeros(num_examples, dtype=dtype)
+    slots: list[int] = []
+
+    user_maxpart_cap = 1
+    ex_maxpart_cap = 1
+    rng = np.random.default_rng(self.shuffle_seed)
+    eligible = np.argsort(graph.csr.degree, kind='stable')
+    while len(slots) < self.batch_size * self.iterations:
+      if self.shuffle_seed is not None:
+        _shuffle_in_place(eligible, graph.csr.degree, rng)
+      slots_before = len(slots)
+      eligible, capped = self._greedy_pass(
+          eligible,
+          slots,
+          user_count,
+          last_batch,
+          example_count,
+          user_maxpart_cap,
+          ex_maxpart_cap,
+      )
+      if len(slots) > slots_before:
+        continue
+      # No progress — relax caps if examples were blocked by them.
+      if not capped.size:
+        break
+      user_maxpart_cap += 1
+      ex_maxpart_cap = math.ceil(user_maxpart_cap / self.user_example_ratio)
+      eligible = np.concatenate([eligible, capped]) if eligible.size else capped
+
+    example_order = np.array(slots, dtype=dtype)
+    actual_user_maxpart = int(user_count.max())
+    actual_ex_maxpart = int(example_count.max())
+    return example_order, actual_user_maxpart, actual_ex_maxpart
+
+  def batch_iterator(
+      self, num_examples: int, rng: np.random.Generator | int | None = None
+  ) -> Iterator[np.ndarray]:
+    """Yields batches satisfying the b-min-sep property.
+
+    All batches are predetermined at initialization. Therefore, `num_examples`
+    is only used for validation, and `rng` is unused. See the class docstring
+    for more details.
+
+    Args:
+      num_examples: Must match ``attribution.num_examples``.
+      rng: Unused. Randomness is controlled by ``shuffle_seed``.
+
+    Yields:
+      1D arrays of example indices, each of length exactly ``batch_size``.
+    """
+    del rng  # Randomness controlled by shuffle_seed.
+    _validate.equal(self.attribution.num_examples, num_examples=num_examples)
+    for t in range(self.iterations):
+      yield self._example_order[t * self.batch_size : (t + 1) * self.batch_size]
+
+  def _greedy_pass(
+      self,
+      eligible,
+      slots,
+      user_count,
+      last_batch,
+      example_count,
+      user_maxpart_cap,
+      ex_maxpart_cap,
+  ):
+    """Runs one greedy pass, returning (min_sep_blocked, cap_blocked)."""
+    min_sep_blocked = []
+    cap_blocked = []
+    for ex in eligible.tolist():
+      if len(slots) >= self.batch_size * self.iterations:
+        break
+      current_batch = len(slots) // self.batch_size
+      users = self.attribution.csr.users_of(ex)
+      # Per-example cap.
+      if example_count[ex] >= ex_maxpart_cap:
+        cap_blocked.append(ex)
+        continue
+      # Per-user cap.
+      if np.any(user_count[users] >= user_maxpart_cap):
+        cap_blocked.append(ex)
+        continue
+      # Batch-level min-sep.
+      if np.any(current_batch - last_batch[users] < self.min_sep):
+        min_sep_blocked.append(ex)
+        continue
+      # Select.
+      slots.append(ex)
+      example_count[ex] += 1
+      user_count[users] += 1
+      last_batch[users] = current_batch
+    return np.array(min_sep_blocked, dtype=eligible.dtype), np.array(
+        cap_blocked, dtype=eligible.dtype
+    )
+
+
+def _shuffle_in_place(order, degree, rng):
+  """Shuffles elements of ``order`` in-place within each degree class."""
+  degrees = degree[order]
+  boundaries = np.r_[0, np.where(np.diff(degrees))[0] + 1, len(order)]
+  for i in range(len(boundaries) - 1):
+    rng.shuffle(order[boundaries[i] : boundaries[i + 1]])

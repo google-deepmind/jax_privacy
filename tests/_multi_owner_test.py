@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import collections
+import math
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -19,6 +21,44 @@ from jax_privacy import _multi_owner
 import numpy as np
 
 MultiOwnerGraph = _multi_owner.MultiOwnerGraph
+MultiOwnerMinSepSampling = _multi_owner.MultiOwnerMinSepSampling
+
+
+def _check_slot_level_min_sep(batches, data, min_sep):
+  """Checks batch-level min-sep for every user in multi-owner data."""
+  ex_to_users = collections.defaultdict(set)
+  for i in range(data.num_edges):
+    ex_to_users[int(data.example_ids[i])].add(int(data.user_ids[i]))
+  user_appearances = collections.defaultdict(list)
+  for t, batch in enumerate(batches):
+    for ex in batch:
+      for u in ex_to_users[int(ex)]:
+        user_appearances[u].append(t)
+  for u, appearances in user_appearances.items():
+    for i in range(len(appearances) - 1):
+      diff = appearances[i + 1] - appearances[i]
+      assert diff >= min_sep, (
+          f'User {u} in batches {appearances[i]} and {appearances[i + 1]}, '
+          f'separation {diff} < {min_sep}'
+      )
+
+
+def _get_user_participation_counts(batches, attribution):
+  """Returns {user: number_of_batches_containing_that_user}."""
+  ex_to_users = collections.defaultdict(set)
+  for i in range(attribution.num_edges):
+    ex_to_users[int(attribution.example_ids[i])].add(
+        int(attribution.user_ids[i])
+    )
+  user_counts = collections.defaultdict(int)
+  for batch in batches:
+    users_in_batch = set()
+    for ex in batch:
+      for user in ex_to_users[int(ex)]:
+        users_in_batch.add(user)
+    for user in users_in_batch:
+      user_counts[user] += 1
+  return user_counts
 
 
 class MultiOwnerGraphTest(parameterized.TestCase):
@@ -125,7 +165,22 @@ class GreedyContributionBoundTest(parameterized.TestCase):
     counts = np.bincount(
         attribution.user_ids[edge_sel], minlength=attribution.num_users
     )
-    np.testing.assert_array_less(counts, 2, err_msg="User appeared twice")
+    np.testing.assert_array_less(counts, 2, err_msg='User appeared twice')
+
+  def test_independent_set(self):
+    """The result is an independent set (no user appears twice)."""
+    data = MultiOwnerGraph.from_owners_per_example([[0, 1], [1, 2], [0, 2]])
+    selected = _multi_owner.greedy_contribution_bound(data)
+    self._verify_no_user_repeated(data, selected)
+    self.assertNotEmpty(selected)
+
+  def test_pentagon_graph(self):
+    """Pentagon graph: each example shares users with neighbors."""
+    data = MultiOwnerGraph.from_owners_per_example(
+        [[0, 1], [1, 2], [2, 3], [3, 4], [4, 0]]
+    )
+    selected = _multi_owner.greedy_contribution_bound(data)
+    self._verify_no_user_repeated(data, selected)
 
   def test_single_owner_examples(self):
     """Single-owner examples: each user has 3 examples, only 1 selected."""
@@ -136,6 +191,14 @@ class GreedyContributionBoundTest(parameterized.TestCase):
     self._verify_no_user_repeated(data, selected)
     # With k=1, exactly 1 per user.
     self.assertLen(selected, 2)
+
+  def test_mixed_single_and_multi_owner(self):
+    """Mix of single and multi-owner examples."""
+    data = MultiOwnerGraph.from_owners_per_example(
+        [[0], [1], [0, 1], [2], [2, 0]]
+    )
+    selected = _multi_owner.greedy_contribution_bound(data)
+    self._verify_no_user_repeated(data, selected)
 
   def test_disjoint_users_selects_all(self):
     """If no user is shared, all examples should be selected."""
@@ -189,7 +252,7 @@ class GreedyContributionBoundTest(parameterized.TestCase):
       self.assertLessEqual(
           len(data.csr.users_of(ex)),
           max_degree,
-          msg=f"Selected example {ex} has degree > {max_degree}",
+          msg=f'Selected example {ex} has degree > {max_degree}',
       )
 
     # 3. Local optimality: no example can be added to the selection.
@@ -200,8 +263,244 @@ class GreedyContributionBoundTest(parameterized.TestCase):
           self.assertIn(
               ex,
               selected,
-              msg=f"Example {ex} could have been selected but was not.",
+              msg=f'Example {ex} could have been selected but was not.',
           )
+
+
+class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
+
+  def test_basic(self):
+    data = MultiOwnerGraph.from_owners_per_example(
+        [[0, 1], [1, 2], [2, 3], [3, 4], [4, 0], [0], [1], [2], [3], [4]]
+    )
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=3,
+        iterations=5,
+        min_sep=2,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    self.assertLen(batches, 5)
+    for batch in batches:
+      self.assertLessEqual(len(batch), 3)
+    _check_slot_level_min_sep(batches, data, 2)
+
+  def test_single_owner_only(self):
+    data = MultiOwnerGraph.from_owners_per_example([[i % 5] for i in range(20)])
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=4,
+        iterations=5,
+        min_sep=2,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    self.assertLen(batches, 5)
+    _check_slot_level_min_sep(batches, data, 2)
+
+  def test_min_sep_one(self):
+    """min_sep=1 allows user in consecutive batches."""
+    data = MultiOwnerGraph.from_owners_per_example(
+        [[0], [0], [0], [1], [1], [1]]
+    )
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=2,
+        iterations=3,
+        min_sep=1,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    self.assertLen(batches, 3)
+    _check_slot_level_min_sep(batches, data, 1)
+
+  @parameterized.parameters(2, 3, 5)
+  def test_various_min_sep(self, min_sep):
+    data = MultiOwnerGraph.from_owners_per_example(
+        [[i % 10] for i in range(100)]
+    )
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=5,
+        iterations=10,
+        min_sep=min_sep,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    self.assertLen(batches, 10)
+    _check_slot_level_min_sep(batches, data, min_sep)
+
+  def test_valid_indices(self):
+    data = MultiOwnerGraph.from_owners_per_example([[0, 1], [2], [3], [0, 3]])
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=2,
+        iterations=4,
+        min_sep=2,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    for batch in batches:
+      for ex in batch:
+        self.assertGreaterEqual(ex, 0)
+        self.assertLess(ex, data.num_examples)
+
+  def test_zero_iterations(self):
+    data = MultiOwnerGraph.from_owners_per_example([[0], [1]])
+    with self.assertRaises(ValueError):
+      MultiOwnerMinSepSampling(
+          attribution=data,
+          batch_size=2,
+          iterations=0,
+          min_sep=1,
+      )
+
+  def test_invalid_params(self):
+    data = MultiOwnerGraph.from_owners_per_example([[0], [1]])
+    with self.assertRaises(ValueError):
+      MultiOwnerMinSepSampling(
+          attribution=data, batch_size=2, iterations=3, min_sep=0
+      )
+    with self.assertRaises(ValueError):
+      MultiOwnerMinSepSampling(
+          attribution=data, batch_size=0, iterations=3, min_sep=1
+      )
+    with self.assertRaises(ValueError):
+      MultiOwnerMinSepSampling(
+          attribution=data, batch_size=2, iterations=-1, min_sep=1
+      )
+
+  def test_batch_count_equals_iterations(self):
+    data = MultiOwnerGraph.from_owners_per_example([[0, 1], [2], [3, 4]])
+    for iters in [1, 5, 10]:
+      strategy = MultiOwnerMinSepSampling(
+          attribution=data,
+          batch_size=2,
+          iterations=iters,
+          min_sep=1,
+      )
+      batches = list(strategy.batch_iterator(data.num_examples))
+      self.assertLen(batches, iters)
+
+  @parameterized.parameters(
+      (30, 10, 3, 3, 5, 2),
+      (50, 15, 4, 5, 8, 3),
+      (100, 20, 2, 10, 10, 4),
+  )
+  def test_random_multi_owner(
+      self, n_ex, n_users, max_owners, bs, iters, min_sep
+  ):
+    rng = np.random.default_rng(0)
+    data = _random_multi_owner_graph(rng, n_ex, n_users, max_owners)
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=bs,
+        iterations=iters,
+        min_sep=min_sep,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    self.assertLen(batches, iters)
+    for batch in batches:
+      self.assertLessEqual(len(batch), bs)
+    _check_slot_level_min_sep(batches, data, min_sep)
+
+  def test_deterministic_across_calls(self):
+    """Same input always produces the same output."""
+    data = _random_multi_owner_graph(np.random.default_rng(42), 50, 10, 2.0)
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=5,
+        iterations=10,
+        min_sep=2,
+    )
+    batches1 = [b.copy() for b in strategy.batch_iterator(data.num_examples)]
+    batches2 = list(strategy.batch_iterator(data.num_examples))
+    for b1, b2 in zip(batches1, batches2):
+      np.testing.assert_array_equal(b1, b2)
+
+  def test_user_maxpart_matches_actual(self):
+    """user_maxpart equals the actual maximum user participation count."""
+    data = MultiOwnerGraph.from_owners_per_example([[i % 5] for i in range(50)])
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=5,
+        iterations=20,
+        min_sep=2,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    user_counts = _get_user_participation_counts(batches, data)
+    actual_max = max(user_counts.values())
+    self.assertEqual(strategy.user_maxpart, actual_max)
+    _check_slot_level_min_sep(batches, data, 2)
+
+  def test_example_maxpart_computed(self):
+    """example_maxpart reflects actual maximum example participation."""
+    data = MultiOwnerGraph.from_owners_per_example([[i % 3] for i in range(30)])
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=5,
+        iterations=10,
+        min_sep=2,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    all_selected = np.concatenate(batches)
+    _, counts = np.unique(all_selected, return_counts=True)
+    self.assertEqual(strategy.example_maxpart, int(counts.max()))
+    _check_slot_level_min_sep(batches, data, 2)
+
+  def test_shuffle_produces_different_results(self):
+    """shuffle_seed gives different assignments but still satisfies min-sep."""
+    data = _random_multi_owner_graph(np.random.default_rng(0), 100, 20, 2)
+    strategy_no_shuffle = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=10,
+        iterations=10,
+        min_sep=2,
+    )
+    strategy_shuffle = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=10,
+        iterations=10,
+        min_sep=2,
+        shuffle_seed=42,
+    )
+    batches_no = list(strategy_no_shuffle.batch_iterator(data.num_examples))
+    batches_yes = list(strategy_shuffle.batch_iterator(data.num_examples))
+    # Both should satisfy min-sep.
+    _check_slot_level_min_sep(batches_no, data, 2)
+    _check_slot_level_min_sep(batches_yes, data, 2)
+    # Results should differ.
+    any_different = any(
+        not np.array_equal(a, b) for a, b in zip(batches_no, batches_yes)
+    )
+    self.assertTrue(any_different, 'Shuffle did not change any batch.')
+
+  def test_user_example_ratio(self):
+    """user_example_ratio limits example duplication relative to user cap."""
+    data = MultiOwnerGraph.from_owners_per_example([[i % 5] for i in range(50)])
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=5,
+        iterations=20,
+        min_sep=2,
+        user_example_ratio=2,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    self.assertLessEqual(
+        strategy.example_maxpart,
+        math.ceil(strategy.user_maxpart / 2),
+    )
+    _check_slot_level_min_sep(batches, data, 2)
+
+  def test_high_ratio_limits_example_to_one(self):
+    """A high user_example_ratio forces each example to appear at most once."""
+    data = MultiOwnerGraph.from_owners_per_example([[i % 5] for i in range(50)])
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=5,
+        iterations=10,
+        min_sep=2,
+        user_example_ratio=100,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    self.assertEqual(strategy.example_maxpart, 1)
+    _check_slot_level_min_sep(batches, data, 2)
 
 
 def _create_random_graph(n_examples, n_users, max_owners, seed):
@@ -215,5 +514,15 @@ def _create_random_graph(n_examples, n_users, max_owners, seed):
   return MultiOwnerGraph.from_owners_per_example(owners_per_example)
 
 
-if __name__ == "__main__":
+def _random_multi_owner_graph(rng, n_examples, n_users, max_owners):
+  """Generates a random MultiOwnerGraph using a numpy Generator."""
+  owners_per_example = []
+  for _ in range(n_examples):
+    n_owners = rng.integers(1, int(max_owners) + 1)
+    owners = rng.choice(n_users, size=n_owners, replace=False)
+    owners_per_example.append(owners.tolist())
+  return MultiOwnerGraph.from_owners_per_example(owners_per_example)
+
+
+if __name__ == '__main__':
   absltest.main()

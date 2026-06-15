@@ -43,6 +43,15 @@ def in_range(lo, hi, **kwargs):
       raise ValueError(f'Expected {name}={value} in [{lo}, {hi}].')
 
 
+def equal(expected, **kwargs):
+  """Validates that all values equal ``expected``."""
+  for name, value in kwargs.items():
+    if value != expected:
+      raise ValueError(
+          f'Provided {name}={value} does not match expected {expected}.'
+      )
+
+
 def batch(pytree) -> int:
   """Validates a batch pytree and returns the batch size.
 
