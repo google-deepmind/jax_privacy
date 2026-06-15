@@ -16,6 +16,7 @@ import dataclasses
 import os
 import types
 from unittest import mock
+import warnings
 
 os.environ["KERAS_BACKEND"] = "jax"
 # pylint: disable=g-import-not-at-top, wrong-import-position
@@ -122,6 +123,42 @@ class KerasApiTest(parameterized.TestCase):
 
   def test_poisson_sampling_in_fit_defaults_to_disabled(self):
     self.assertFalse(self._get_params().poisson_sampling_in_fit)
+
+  def test_warns_when_poisson_sampling_in_fit_disabled(self):
+    # The accountant always assumes Poisson subsampling amplification, but the
+    # default fit() path (poisson_sampling_in_fit=False) does not perform it.
+    # Constructing such a config must emit an actionable UserWarning so the
+    # reported epsilon is not silently trusted.
+    with self.assertWarnsRegex(
+        UserWarning,
+        "assumes Poisson subsampling amplification",
+    ):
+      keras_api.DPKerasConfig(
+          epsilon=1.1,
+          delta=1e-5,
+          clipping_norm=1.0,
+          batch_size=10,
+          gradient_accumulation_steps=1,
+          train_steps=100,
+          train_size=1000,
+          poisson_sampling_in_fit=False,
+      )
+
+  def test_no_warning_when_poisson_sampling_in_fit_enabled(self):
+    # When Poisson sampling is performed in fit(), the amplified accounting is
+    # justified and no warning should be emitted.
+    with warnings.catch_warnings():
+      warnings.simplefilter("error", UserWarning)
+      keras_api.DPKerasConfig(
+          epsilon=1.1,
+          delta=1e-5,
+          clipping_norm=1.0,
+          batch_size=10,
+          gradient_accumulation_steps=1,
+          train_steps=100,
+          train_size=1000,
+          poisson_sampling_in_fit=True,
+      )
 
   def test_effective_batch_size(self):
     params1 = dataclasses.replace(self._get_params(), batch_size=5)

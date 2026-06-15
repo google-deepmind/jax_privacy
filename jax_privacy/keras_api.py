@@ -48,6 +48,7 @@ import inspect
 import math
 import types
 from typing import Any
+import warnings
 
 import chex
 import dp_accounting
@@ -201,6 +202,25 @@ class DPKerasConfig:
 
   def _validate_params(self) -> None:
     """Validates the parameters for DP-SGD training."""
+    if not self.poisson_sampling_in_fit:
+      # The privacy accountant (update_with_calibrated_noise_multiplier and the
+      # epsilon check below) always models DP-SGD as Poisson subsampling
+      # amplification via accounting.dpsgd_event. When
+      # poisson_sampling_in_fit=False, the wrapped fit() consumes the user's
+      # own pre-batched (typically shuffled, fixed-size) data, which does NOT
+      # satisfy Poisson subsampling, so the reported (epsilon, delta) assumes
+      # amplification the default data path does not provide.
+      warnings.warn(
+          'The reported (epsilon, delta) privacy guarantee assumes Poisson'
+          ' subsampling amplification, but poisson_sampling_in_fit=False. The'
+          ' default fit() path consumes your pre-batched (typically shuffled,'
+          ' fixed-size) data and does NOT perform Poisson sampling, so the'
+          ' computed epsilon may understate the true privacy loss. Either set'
+          ' poisson_sampling_in_fit=True, or ensure your input pipeline'
+          ' performs Poisson subsampling before passing data to fit().',
+          UserWarning,
+          stacklevel=2,
+      )
     _validate.positive(
         epsilon=self.epsilon,
         delta=self.delta,
