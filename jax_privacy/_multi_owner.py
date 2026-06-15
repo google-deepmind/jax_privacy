@@ -28,6 +28,8 @@ import functools
 
 import numpy as np
 
+from . import _validate
+
 
 @dataclasses.dataclass(frozen=True)
 class MultiOwnerGraph:
@@ -35,6 +37,10 @@ class MultiOwnerGraph:
 
   Entry ``(example_ids[i], user_ids[i])`` means that example
   ``example_ids[i]`` is attributed to user ``user_ids[i]``.
+
+  The attribution graph is considered **public information**: it is not
+  protected by differential privacy and may be used freely by the batch
+  selection algorithm.
 
   For smaller datasets, use ``from_owners_per_example`` or
   ``from_user_to_examples``.
@@ -54,30 +60,26 @@ class MultiOwnerGraph:
     example_ids: 1D integer array of example indices in ``[0, num_examples)``.
     user_ids: 1D integer array of user indices in ``[0, num_users)``, aligned
       with ``example_ids``.
+    validate: If ``False``, skip edge-list validation. Use for large graphs.
   """
 
   example_ids: np.ndarray
   user_ids: np.ndarray
+  validate: bool = True
 
   def __post_init__(self):
-    if self.example_ids.ndim != 1 or self.user_ids.ndim != 1:
-      raise ValueError('example_ids and user_ids must be 1D arrays.')
-    if len(self.example_ids) != len(self.user_ids):
-      raise ValueError('example_ids and user_ids must have the same length')
-    if len(self.example_ids) > 0:
-      pairs = np.stack([self.example_ids, self.user_ids], axis=1)
-      if len(np.unique(pairs, axis=0)) < len(pairs):
-        raise ValueError('Duplicate (example, user) id pairs are not allowed.')
+    if self.validate:
+      _validate.multi_owner(self.example_ids, self.user_ids)
 
   @property
   def num_examples(self) -> int:
     """Number of distinct examples (``max(example_ids) + 1``)."""
-    return int(self.example_ids.max()) + 1 if self.num_edges else 0
+    return int(self.example_ids.max()) + 1
 
   @property
   def num_users(self) -> int:
     """Number of distinct users (``max(user_ids) + 1``)."""
-    return int(self.user_ids.max()) + 1 if self.num_edges else 0
+    return int(self.user_ids.max()) + 1
 
   @property
   def num_edges(self) -> int:
@@ -111,8 +113,6 @@ class MultiOwnerGraph:
           'Every example must have at least one owner. '
           f'Example(s) at index {np.where(sizes == 0)[0].tolist()} have none.'
       )
-    if int(sizes.sum()) == 0:
-      return cls(np.array([], dtype=np.int64), np.array([], dtype=np.int64))
     example_ids = np.repeat(np.arange(len(sizes), dtype=np.int64), sizes)
     user_ids = np.concatenate(arrays)
     _, user_ids = np.unique(user_ids, return_inverse=True)
@@ -203,28 +203,30 @@ def greedy_contribution_bound(
 
   Args:
     attribution: Multi-owner attribution data.
-    max_degree: Maximum number of owners per example to consider.
+    max_degree: Maximum number of owners per example to consider. Must be >= 1.
 
   Returns:
     1D array of selected example IDs.
   """
+  _validate.positive(max_degree=max_degree)
   n_ex = attribution.num_examples
   degree = attribution.csr.degree
   ex_ids = attribution.example_ids
   u_ids = attribution.user_ids
 
-  # Priority key: (degree, example_id).  Lower selects first.
+  # Priority key: (degree, example_id). Lower selects first.
   priority = degree[ex_ids].astype(np.int64) * n_ex + ex_ids
   user_active = np.ones(attribution.num_users, dtype=bool)
   best = np.empty(attribution.num_users, dtype=np.int64)
   selected = []
+  low_degree = degree <= max_degree
 
   # Round-based vectorized greedy: each round, every unclaimed user votes for
   # its lowest-priority example, and examples with unanimous votes are selected.
   for _ in range(max_degree):
     active_counts = np.bincount(ex_ids[user_active[u_ids]], minlength=n_ex)
-    selectable = (active_counts == degree) & (degree <= max_degree)
-    active = user_active[u_ids] & selectable[ex_ids]
+    selectable = (active_counts == degree) & low_degree
+    active = selectable[ex_ids]
     ae, au, ap = ex_ids[active], u_ids[active], priority[active]
 
     # Each user votes for their lowest-priority active example.
@@ -239,4 +241,4 @@ def greedy_contribution_bound(
     user_active[u_ids[new_edge_mask]] = False
     selected.append(new)
 
-  return np.concatenate(selected) if selected else np.array([], dtype=np.int64)
+  return np.concatenate(selected)
