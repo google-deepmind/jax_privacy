@@ -227,7 +227,7 @@ class DPKerasConfig:
     if self.noise_multiplier is not None:
       _validate.positive(noise_multiplier=self.noise_multiplier)
       try:
-        sampling_prob = self.batch_size / self.train_size
+        sampling_prob = self.effective_batch_size / self.train_size
         event = accounting.dpsgd_event(
             noise_multiplier=self.noise_multiplier,
             iterations=self.train_steps,
