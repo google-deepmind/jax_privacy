@@ -120,6 +120,22 @@ class KerasApiTest(parameterized.TestCase):
     ):
       dataclasses.replace(valid_params, microbatch_size=11)
 
+  def test_validate_noise_multiplier_uses_effective_batch_size(self):
+    # Validation must account at the same sampling rate as
+    # update_with_calibrated_noise_multiplier, i.e. effective_batch_size =
+    # batch_size * gradient_accumulation_steps; the old code dropped the
+    # gradient_accumulation_steps factor. With gas > 1 that under-accounts:
+    # noise_multiplier=1.0 gives epsilon ~0.72 at the physical batch size (which
+    # the old check wrongly accepted against the target epsilon of 1.1) but ~5.6
+    # at the effective batch size, so it must be rejected.
+    params = dataclasses.replace(
+        self._get_params(), gradient_accumulation_steps=8
+    )
+    with self.assertRaisesRegex(
+        ValueError, "will lead to privacy budget exceed"
+    ):
+      dataclasses.replace(params, noise_multiplier=1.0)
+
   def test_poisson_sampling_in_fit_defaults_to_disabled(self):
     self.assertFalse(self._get_params().poisson_sampling_in_fit)
 
