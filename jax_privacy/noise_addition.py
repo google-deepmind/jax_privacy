@@ -138,7 +138,8 @@ def matrix_factorization_privatizer(
   promotion rules. The output of the privatize transformation will always match
   the input dtype.
 
-  For naming of these parameters, see ../matrix_factorization/README.md.
+  For naming of these parameters, see the `matrix_factorization README
+  <https://github.com/google-deepmind/jax_privacy/blob/main/jax_privacy/matrix_factorization/README.md>`_.
 
   Args:
     noising_matrix: A matrix used to generate correlated noise. Noise samples

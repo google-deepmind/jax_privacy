@@ -46,10 +46,16 @@ Example Usage (BandMF-style sampling) [3]:
   >>> print(*b.batch_iterator(12, rng=rng), sep=' ')
   [2 4] [1 8 9] [2 7 5 4] [11  1  3] [10  2  5  0  4] [ 1 11  6]
 
+This module also provides multi-owner differential privacy support via
+``MultiOwnerGraph``, ``MultiOwnerMinSepSampling``, and
+``greedy_contribution_bound``, which handle settings where examples may be
+attributed to multiple users [4].
+
 References:
-[1] https://arxiv.org/abs/2211.06530
-[2] https://arxiv.org/abs/1607.00133
-[3] https://arxiv.org/abs/2306.08153
+  * [1] https://arxiv.org/abs/2211.06530
+  * [2] https://arxiv.org/abs/1607.00133
+  * [3] https://arxiv.org/abs/2306.08153
+  * [4] https://arxiv.org/abs/2503.03622
 
 Design Note (public vs. non-public information):
   Batch selection strategy implementations are typically defined as frozen
@@ -81,6 +87,22 @@ from . import _validate
 from . import sharding_utils
 
 RngType = np.random.Generator | int | None
+
+__all__ = [
+    'BatchSelectionStrategy',
+    'BallsInBinsSampling',
+    'BMinSepSampling',
+    'CyclicPoissonSampling',
+    'FixedBatchSampling',
+    'MultiOwnerGraph',
+    'MultiOwnerMinSepSampling',
+    'PartitionType',
+    'RandomAllocationSampling',
+    'UserSelectionStrategy',
+    'greedy_contribution_bound',
+    'pad_to_multiple_of',
+    'split_and_pad_global_batch',
+]
 
 
 class PartitionType(enum.Enum):
@@ -214,10 +236,10 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   This generalizes several common sampling strategies [1,2,3,4].
 
   References:
-  [1] https://arxiv.org/abs/2211.06530
-  [2] https://arxiv.org/abs/1607.00133
-  [3] https://arxiv.org/abs/2306.08153
-  [4] https://arxiv.org/abs/2411.04205
+    * [1] https://arxiv.org/abs/2211.06530
+    * [2] https://arxiv.org/abs/1607.00133
+    * [3] https://arxiv.org/abs/2306.08153
+    * [4] https://arxiv.org/abs/2411.04205
 
   Formal guarantees of the batch_iterator:
     - All batches consist of indices in the range [0, num_examples).
@@ -336,16 +358,17 @@ class RandomAllocationSampling(BatchSelectionStrategy):
 
   Each example independently selects exactly k steps (out of iterations total)
   to participate in, uniformly at random. For k=1, this participation pattern
-  is equivalent to BallsInBinsSampling.  See the below papers for details
-  about this strategy:
-  - https://arxiv.org/abs/2206.03151 (k=1 only)
-  - https://arxiv.org/abs/2410.06266 (k=1 only)
-  - https://arxiv.org/abs/2412.16802 (k=1 only)
-  - https://arxiv.org/abs/2502.08202 (k>1)
-  - https://arxiv.org/abs/2503.03043 (k>1)
-  - https://arxiv.org/abs/2601.21636 (k>1)
-  - https://arxiv.org/abs/2602.17284 (k>1)
-  - https://arxiv.org/abs/2605.07072 (k>1)
+  is equivalent to BallsInBinsSampling.
+
+  References:
+    * https://arxiv.org/abs/2206.03151 (k=1 only)
+    * https://arxiv.org/abs/2410.06266 (k=1 only)
+    * https://arxiv.org/abs/2412.16802 (k=1 only)
+    * https://arxiv.org/abs/2502.08202 (k>1)
+    * https://arxiv.org/abs/2503.03043 (k>1)
+    * https://arxiv.org/abs/2601.21636 (k>1)
+    * https://arxiv.org/abs/2602.17284 (k>1)
+    * https://arxiv.org/abs/2605.07072 (k>1)
 
 
   Formal guarantees of the batch_iterator:
@@ -398,8 +421,9 @@ class FixedBatchSampling(BatchSelectionStrategy):
   batches are sampled without replacement within a batch, and with replacement
   across batches (i.e., the same example can appear in multiple iterations).
 
-  References: https://arxiv.org/abs/1807.01647 and
-  https://arxiv.org/abs/1908.10530
+  References:
+    * https://arxiv.org/abs/1807.01647
+    * https://arxiv.org/abs/1908.10530
 
   Attributes:
     batch_size: The number of examples per batch.
@@ -451,7 +475,8 @@ class BMinSepSampling(BatchSelectionStrategy):
     sampling. In particular, this reduces to balls-in-bins when warm_start =
     True and sampling_prob = 1.
 
-  See https://arxiv.org/abs/2602.09338 for more details.
+  References:
+    * https://arxiv.org/abs/2602.09338
 
   Attributes:
     sampling_prob: The probability an example is sampled in a given iteration,

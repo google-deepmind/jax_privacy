@@ -17,7 +17,8 @@
 Provides data structures and algorithms for the multi-owner model of
 differential privacy, where examples may be attributed to multiple users.
 
-References: https://arxiv.org/abs/2503.03622
+References:
+  * https://arxiv.org/abs/2503.03622
 """
 
 from __future__ import annotations
@@ -56,7 +57,8 @@ class MultiOwnerGraph:
     >>> data.num_edges
     5
 
-  References: https://arxiv.org/abs/2503.03622
+  References:
+    * https://arxiv.org/abs/2503.03622
 
   Attributes:
     example_ids: 1D integer array of example indices in ``[0, num_examples)``.
@@ -201,7 +203,8 @@ def greedy_contribution_bound(
   with any example-level batch selection strategy.
 
 
-  References: [1] https://arxiv.org/abs/2503.03622
+  References:
+    * [1] https://arxiv.org/abs/2503.03622
 
   Args:
     attribution: Multi-owner attribution data.
@@ -268,7 +271,8 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
   - No example appears in more than ``example_maxpart`` batches (computed
     post-hoc).
 
-  References: [1] https://arxiv.org/abs/2503.03622
+  References:
+    * [1] https://arxiv.org/abs/2503.03622
   """
 
   def __init__(

@@ -26,28 +26,28 @@ The primary use case is the "scale-then-privatize" technique from:
   Optimizers." arXiv:2507.01129.
 
 Example Usage (clipping but no noise):
->>> from jax_privacy import clipped_grad, noise_addition
->>> import optax
->>> import jax.numpy as jnp
->>> loss_fn = lambda params, batch: 0.5 * jnp.mean((params - batch) ** 2)
->>> optimizer = scale_then_privatize(optax.adamw(1e-3))
->>> params = jnp.ones(3)
->>> data = jnp.ones((10, 3))
->>> state = optimizer.init(params)
->>> noise_multiplier = 0.0
->>> noise_state = noise_addition.gaussian_privatizer(stddev=0.0).init(params)
->>> for _ in range(5):
-...   grad_fn = clipped_grad(
-...     loss_fn,
-...     l2_clip_norm=1,
-...     pre_clipping_transform=optimizer.pre_clipping_transform(state)
-...   )
-...   stddev = grad_fn.sensitivity() * noise_multiplier
-...   noise_fn = noise_addition.gaussian_privatizer(stddev=stddev)
-...   clipped_grads = grad_fn(params, data)
-...   noisy_grads, noise_state = noise_fn.update(clipped_grads, noise_state)
-...   updates, state = optimizer.update(noisy_grads, state, params)
-...   params = optax.apply_updates(params, updates)
+  >>> from jax_privacy import clipped_grad, noise_addition
+  >>> import optax
+  >>> import jax.numpy as jnp
+  >>> loss_fn = lambda params, batch: 0.5 * jnp.mean((params - batch) ** 2)
+  >>> optimizer = scale_then_privatize(optax.adamw(1e-3))
+  >>> params = jnp.ones(3)
+  >>> data = jnp.ones((10, 3))
+  >>> state = optimizer.init(params)
+  >>> noise_multiplier = 0.0
+  >>> noise_state = noise_addition.gaussian_privatizer(stddev=0.0).init(params)
+  >>> for _ in range(5):
+  ...   grad_fn = clipped_grad(
+  ...     loss_fn,
+  ...     l2_clip_norm=1,
+  ...     pre_clipping_transform=optimizer.pre_clipping_transform(state)
+  ...   )
+  ...   stddev = grad_fn.sensitivity() * noise_multiplier
+  ...   noise_fn = noise_addition.gaussian_privatizer(stddev=stddev)
+  ...   clipped_grads = grad_fn(params, data)
+  ...   noisy_grads, noise_state = noise_fn.update(clipped_grads, noise_state)
+  ...   updates, state = optimizer.update(noisy_grads, state, params)
+  ...   params = optax.apply_updates(params, updates)
 """
 
 from typing import Callable, NamedTuple, Protocol

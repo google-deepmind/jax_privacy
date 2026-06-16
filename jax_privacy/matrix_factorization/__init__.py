@@ -15,7 +15,8 @@
 """Public API for matrix factorization.
 
 For a good introductory overview of the matrix factorization API and usages,
-see jax_privacy/examples/dpmf_strategy_optimization.py.
+see `dpmf_strategy_optimization.py
+<https://github.com/google-deepmind/jax_privacy/blob/main/examples/dpmf_strategy_optimization.py>`_.
 """
 
 from . import banded
