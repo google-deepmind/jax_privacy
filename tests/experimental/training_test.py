@@ -43,8 +43,8 @@ def _make_plan(
   return config.make(performance_flags=performance_flags)
 
 
-class TrainTest(parameterized.TestCase):
-  """Tests for the train() function."""
+class DPTrainerTest(parameterized.TestCase):
+  """Tests for the DPTrainer class."""
 
   def test_basic_training_runs(self):
     """Train loop completes and returns a valid TrainingState."""
@@ -53,14 +53,12 @@ class TrainTest(parameterized.TestCase):
     plan = _make_plan(iterations=3)
     optimizer = optax.sgd(0.01)
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=_quadratic_loss,
-        params=params,
         optimizer=optimizer,
-        rng=0,
     )
+    state = trainer.fit(dataset, params, rng=0)
 
     self.assertIsInstance(state, training.TrainingState)
     self.assertEqual(int(state.step), 3)
@@ -72,14 +70,12 @@ class TrainTest(parameterized.TestCase):
     plan = _make_plan(iterations=5)
     optimizer = optax.sgd(0.1)
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=_quadratic_loss,
-        params=params,
         optimizer=optimizer,
-        rng=42,
     )
+    state = trainer.fit(dataset, params, rng=42)
 
     self.assertFalse(jnp.allclose(state.params, params))
 
@@ -98,15 +94,12 @@ class TrainTest(parameterized.TestCase):
       self.assertIsInstance(aux.values, jax.Array)
       self.assertIsNotNone(aux.aux)
 
-    training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=_quadratic_loss,
-        params=params,
         optimizer=optimizer,
-        callback=callback,
-        rng=0,
     )
+    trainer.fit(dataset, params, callback=callback, rng=0)
 
     self.assertLen(callback_log, iterations)
     self.assertEqual([s for s, _ in callback_log], [1, 2, 3])
@@ -118,15 +111,13 @@ class TrainTest(parameterized.TestCase):
     plan = _make_plan(iterations=2)
     optimizer = optax.sgd(0.01)
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=_quadratic_loss,
-        params=params,
         optimizer=optimizer,
         padding_multiple=4,
-        rng=0,
     )
+    state = trainer.fit(dataset, params, rng=0)
 
     self.assertEqual(int(state.step), 2)
 
@@ -142,14 +133,12 @@ class TrainTest(parameterized.TestCase):
     plan = _make_plan(iterations=1)
     optimizer = optax.sgd(0.01)
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=_quadratic_loss,
-        params=params,
         optimizer=optimizer,
-        rng=0,
     )
+    state = trainer.fit(dataset, params, rng=0)
 
     self.assertEqual(int(state.step), 1)
 
@@ -170,21 +159,77 @@ class TrainTest(parameterized.TestCase):
 
     jax.clear_caches()
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=counting_loss,
-        params=params,
         optimizer=optimizer,
-        rng=0,
     )
+    state = trainer.fit(dataset, params, rng=0)
 
     self.assertEqual(int(state.step), 3)
     self.assertLess(trace_count[0], 3 * 2)
 
+  def test_train_step_callable_directly(self):
+    """train_step should be directly callable outside of fit()."""
+    params = jnp.array([5.0, 5.0])
+    plan = _make_plan(iterations=2, noise_multiplier=0.0)
+    optimizer = optax.sgd(0.01)
 
-class TrainEdgeCasesTest(parameterized.TestCase):
-  """Edge case tests for the train() function."""
+    trainer = training.DPTrainer(
+        plan=plan,
+        loss_fn=_quadratic_loss,
+        optimizer=optimizer,
+    )
+
+    state = training.TrainingState(
+        step=0,
+        params=params,
+        opt_state=optimizer.init(params),
+        noise_state=plan.noise_addition_transform.init(params),
+    )
+
+    batch = jnp.array([[1.0, 0.0], [0.0, 1.0]])
+    is_padding = jnp.array([False, False])
+    loss_rng = jax.random.key(0)
+
+    new_state, _ = trainer.train_step(
+        state, batch, is_padding, loss_rng=loss_rng
+    )
+
+    self.assertEqual(int(new_state.step), 1)
+    self.assertFalse(jnp.allclose(new_state.params, params))
+
+  def test_train_step_jit_compilable(self):
+    """train_step should be JIT-compilable."""
+    params = jnp.array([5.0])
+    plan = _make_plan(iterations=1, noise_multiplier=0.0)
+    optimizer = optax.sgd(0.01)
+
+    trainer = training.DPTrainer(
+        plan=plan,
+        loss_fn=_quadratic_loss,
+        optimizer=optimizer,
+    )
+
+    state = training.TrainingState(
+        step=0,
+        params=params,
+        opt_state=optimizer.init(params),
+        noise_state=plan.noise_addition_transform.init(params),
+    )
+
+    batch = jnp.array([[1.0], [0.0]])
+    is_padding = jnp.array([False, False])
+    loss_rng = jax.random.key(0)
+
+    jit_step = jax.jit(trainer.train_step)
+    new_state, _ = jit_step(state, batch, is_padding, loss_rng=loss_rng)
+
+    self.assertEqual(int(new_state.step), 1)
+
+
+class DPTrainerEdgeCasesTest(parameterized.TestCase):
+  """Edge case tests for the DPTrainer class."""
 
   def test_epsilon_zero_high_noise(self):
     """Near-zero epsilon (very high noise) should run without error."""
@@ -193,14 +238,12 @@ class TrainEdgeCasesTest(parameterized.TestCase):
     plan = _make_plan(iterations=2, noise_multiplier=1e6)
     optimizer = optax.sgd(0.01)
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=_quadratic_loss,
-        params=params,
         optimizer=optimizer,
-        rng=0,
     )
+    state = trainer.fit(dataset, params, rng=0)
 
     self.assertEqual(int(state.step), 2)
     self.assertTrue(jnp.all(jnp.isfinite(state.params)))
@@ -212,14 +255,12 @@ class TrainEdgeCasesTest(parameterized.TestCase):
     plan = _make_plan(iterations=3, noise_multiplier=0.0)
     optimizer = optax.sgd(0.1)
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=_quadratic_loss,
-        params=params,
         optimizer=optimizer,
-        rng=0,
     )
+    state = trainer.fit(dataset, params, rng=0)
 
     self.assertEqual(int(state.step), 3)
     self.assertLess(
@@ -234,14 +275,12 @@ class TrainEdgeCasesTest(parameterized.TestCase):
     plan = _make_plan(iterations=2, noise_multiplier=0.0)
     optimizer = optax.sgd(0.1)
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=_quadratic_loss,
-        params=params,
         optimizer=optimizer,
-        rng=0,
     )
+    state = trainer.fit(dataset, params, rng=0)
 
     self.assertEqual(int(state.step), 2)
     self.assertTrue(jnp.all(jnp.isfinite(state.params)))
@@ -259,14 +298,12 @@ class TrainEdgeCasesTest(parameterized.TestCase):
     plan = _make_plan(iterations=2)
     optimizer = optax.sgd(0.01)
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=dict_loss,
-        params=params,
         optimizer=optimizer,
-        rng=0,
     )
+    state = trainer.fit(dataset, params, rng=0)
 
     self.assertEqual(int(state.step), 2)
 
@@ -282,14 +319,12 @@ class TrainEdgeCasesTest(parameterized.TestCase):
     )
     optimizer = optax.sgd(0.01)
 
-    state = training.train(
+    trainer = training.DPTrainer(
         plan=plan,
-        dataset=dataset,
         loss_fn=_quadratic_loss,
-        params=params,
         optimizer=optimizer,
-        rng=0,
     )
+    state = trainer.fit(dataset, params, rng=0)
 
     self.assertEqual(state.params.dtype, jnp.bfloat16)
 

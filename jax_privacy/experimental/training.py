@@ -14,11 +14,14 @@
 
 """End-to-end training loop for differentially private training.
 
-This module provides a general-purpose DP training loop driven by a
-`DPExecutionPlan`, supporting arbitrary mechanisms.
+This module provides :class:`DPTrainer`, a class that encapsulates the
+static configuration for a DP training loop (execution plan, loss function,
+optimizer) and exposes a reusable ``train_step`` that can be independently
+JIT-compiled or ahead-of-time compiled.
 """
 
 from collections.abc import Callable
+import dataclasses
 from typing import Protocol, TypeAlias
 
 import chex
@@ -49,7 +52,7 @@ class LossFn(Protocol):
 
   Any additional context the loss function needs — frozen parameters,
   model configuration, label smoothing constants, etc. — should be closed
-  over before passing the function to :func:`train`::
+  over before passing the function to :class:`DPTrainer`::
 
       frozen = model.freeze(some_params)
       def my_loss(params, data, prng):
@@ -57,14 +60,11 @@ class LossFn(Protocol):
           logits = model.apply(all_params, data['x'], rngs={'dropout': prng})
           return cross_entropy(logits, data['y']), {'logits': logits}
 
-      training.train(..., loss_fn=my_loss, ...)
+      trainer = DPTrainer(..., loss_fn=my_loss, ...)
 
-  **Mutable state that persists across steps is intentionally unsupported
-  by this signature.**  Patterns like batch-norm running statistics or
-  online accumulators that carry state from one step to the next are
-  generally incompatible with differential privacy unless extreme care is
-  taken, and are therefore excluded by design.  If you need such patterns,
-  fold the state into ``params`` and manage it explicitly.
+  NOTE: This signature does not support mutable model state that persists
+  across steps (e.g., batch-norm running statistics), as such state is
+  generally incompatible with DP-SGD or very difficult to handle correctly.
 
   Example signature::
 
@@ -114,68 +114,68 @@ def _get_batch(dataset: Batch, indices: np.ndarray) -> tuple[Batch, np.ndarray]:
   return jax.tree.map(_index_and_zero, dataset), is_padding
 
 
-def train(
-    plan: execution_plan.DPExecutionPlan,
-    dataset: Batch,
-    loss_fn: LossFn,
-    params: Params,
-    optimizer: (
-        aug_optimizers.AugmentedGradientTransformation
-        | optax.GradientTransformation
-    ),
-    padding_multiple: int = 1,
-    callback: Callable[[int, TrainingState, PerExampleAux], None] | None = None,
-    rng: np.random.Generator | int | None = None,
-) -> TrainingState:
-  """Runs an end-to-end differentially private training loop.
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class DPTrainer:
+  """Stateless trainer encapsulating the static configuration of a DP loop.
 
-  **Sharding**: This function does not shard params or data.  For
+  ``DPTrainer`` separates *configuration* (plan, loss, optimizer) from
+  *per-run state* (data, initial params, RNG seed).  This makes the
+  ``train_step`` method available as a standalone callable that can be
+  compiled or used independently of the training loop.
+
+  **Sharding**: This class does not shard params or data.  For
   multi-device training, provide ``params`` with explicit sharding
   annotations and configure ``spmd_axis_name`` through the plan's
   ``PerformanceFlags``.  If data sharding is needed, ``loss_fn``
   should reshard its inputs using sharding-in-types.
 
-  Args:
+  Attributes:
     plan: A ``DPExecutionPlan`` specifying the DP mechanism.
-    dataset: The training dataset, as a PyTree of arrays.
     loss_fn: The per-example loss function.  See :class:`LossFn`.
-    params: Initial parameter PyTree.
     optimizer: An ``AugmentedGradientTransformation`` or a plain
       ``optax.GradientTransformation``.
     padding_multiple: If set, batch sizes are padded to a multiple of this
       value.
-    callback: Called after each step as ``callback(step, state, aux)``. ``step``
-      is a Python int.
-    rng: Optional random seed or ``numpy.random.Generator`` for reproducibility.
-
-  Returns:
-    Final ``TrainingState``.
   """
-  optimizer = aug_optimizers.as_augmented_optimizer(optimizer)
 
-  rng = np.random.default_rng(rng)
-  loss_rng = jax.random.key(int(rng.integers(2**63)))
-
-  num_examples = _validate.batch(dataset)
-
-  state = TrainingState(
-      step=0,
-      params=params,
-      opt_state=optimizer.init(params),
-      noise_state=plan.noise_addition_transform.init(params),
+  plan: execution_plan.DPExecutionPlan
+  loss_fn: LossFn
+  optimizer: (
+      aug_optimizers.AugmentedGradientTransformation
+      | optax.GradientTransformation
   )
+  padding_multiple: int = 1
 
-  batch_iterator = plan.batch_selection_strategy.batch_iterator(
-      num_examples, rng=rng
-  )
+  def train_step(
+      self,
+      state: TrainingState,
+      batch: Batch,
+      is_padding_example: jax.Array,
+      *,
+      loss_rng: jax.Array,
+  ) -> tuple[TrainingState, PerExampleAux]:
+    """Executes a single DP training step.
 
-  @jax.jit
-  def step_fn(state, batch, is_padding_example):
+    This method is a pure function of its inputs and is safe to wrap with
+    ``jax.jit``, ``jax.jit(...).lower()``, or any other JAX transformation.
 
+    Args:
+      state: Current ``TrainingState``.
+      batch: A PyTree of arrays representing the current mini-batch.
+      is_padding_example: A boolean array indicating which examples in ``batch``
+        are padding (and should be ignored).
+      loss_rng: Base PRNG key; a step-specific key is derived via
+        ``jax.random.fold_in(loss_rng, state.step)``.
+
+    Returns:
+      A tuple ``(new_state, aux)`` where ``new_state`` is the updated
+      ``TrainingState`` and ``aux`` is the per-example auxiliary output.
+    """
+    optimizer = aug_optimizers.as_augmented_optimizer(self.optimizer)
     pre_clip_fn = optimizer.pre_clipping_transform(state.opt_state)
 
-    grad_fn = plan.clipped_grad(
-        loss_fn,
+    grad_fn = self.plan.clipped_grad(
+        self.loss_fn,
         has_aux=True,
         return_values=True,
         return_grad_norms=True,
@@ -188,7 +188,7 @@ def train(
         state.params, batch, rng, is_padding_example=is_padding_example
     )
 
-    dp_grad, new_noise_state = plan.noise_addition_transform.update(
+    dp_grad, new_noise_state = self.plan.noise_addition_transform.update(
         clipped_grad_sum, state.noise_state
     )
     updates, new_opt_state = optimizer.update(
@@ -204,17 +204,62 @@ def train(
     )
     return new_state, aux
 
-  step = 0
-  for indices in batch_iterator:
-    indices = batch_selection.pad_to_multiple_of(indices, padding_multiple)
-    batch, is_padding_example = _get_batch(dataset, indices)
+  def fit(
+      self,
+      dataset: Batch,
+      params: Params,
+      *,
+      callback: (
+          Callable[[int, TrainingState, PerExampleAux], None] | None
+      ) = None,
+      rng: np.random.Generator | int | None = None,
+  ) -> TrainingState:
+    """Runs an end-to-end differentially private training loop.
 
-    state, aux = step_fn(state, batch, is_padding_example)
-    step += 1
+    Args:
+      dataset: The training dataset, as a PyTree of arrays.
+      params: Initial parameter PyTree.
+      callback: Called after each step as ``callback(step, state, aux)``.
+        ``step`` is a Python int.
+      rng: Optional random seed or ``numpy.random.Generator`` for
+        reproducibility.
 
-    del indices, batch, is_padding_example
+    Returns:
+      Final ``TrainingState``.
+    """
+    rng = np.random.default_rng(rng)
+    loss_rng = jax.random.key(int(rng.integers(2**63)))
 
-    if callback is not None:
-      callback(step, state, aux)
+    num_examples = _validate.batch(dataset)
 
-  return state
+    optimizer = aug_optimizers.as_augmented_optimizer(self.optimizer)
+
+    state = TrainingState(
+        step=0,
+        params=params,
+        opt_state=optimizer.init(params),
+        noise_state=self.plan.noise_addition_transform.init(params),
+    )
+
+    batch_iterator = self.plan.batch_selection_strategy.batch_iterator(
+        num_examples, rng=rng
+    )
+
+    jit_step = jax.jit(self.train_step)
+
+    step = 0
+    for indices in batch_iterator:
+      indices = batch_selection.pad_to_multiple_of(
+          indices, self.padding_multiple
+      )
+      batch, is_padding_example = _get_batch(dataset, indices)
+
+      state, aux = jit_step(state, batch, is_padding_example, loss_rng=loss_rng)
+      step += 1
+
+      del indices, batch, is_padding_example
+
+      if callback is not None:
+        callback(step, state, aux)
+
+    return state
