@@ -306,14 +306,14 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
         iterations=iterations,
         user_example_ratio=user_example_ratio,
     )
-    self.attribution = attribution
-    self.batch_size = batch_size
-    self.iterations = iterations
-    self.min_sep = min_sep
-    self.user_example_ratio = user_example_ratio
-    self.shuffle_seed = shuffle_seed
-    example_order, user_maxpart, example_maxpart = self._precompute_order()
-    # Technically public info, but we don't want to encourage direct access.
+    self._batch_size = batch_size
+    self._iterations = iterations
+    self._min_sep = min_sep
+    self._user_example_ratio = user_example_ratio
+    self._num_examples = attribution.num_examples
+    example_order, user_maxpart, example_maxpart = self._precompute_order(
+        attribution, shuffle_seed
+    )
     self._example_order = example_order
     self._user_maxpart = user_maxpart
     self._example_maxpart = example_maxpart
@@ -328,27 +328,28 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
     """Maximum number of batches a user appears in."""
     return self._user_maxpart
 
-  def _precompute_order(self):
+  def _precompute_order(self, graph, seed):
     """Runs the greedy algorithm once, caching batches and maxpart stats."""
-    graph = self.attribution
     num_examples = graph.num_examples
+    total_slots = self._batch_size * self._iterations
     dtype = np.min_scalar_type(-num_examples)
     user_count = np.zeros(graph.num_users, dtype=np.int32)
     # Initialize last_batch so that every user is eligible in the first batch:
     # current_batch(0) - last_batch(-min_sep) = min_sep >= min_sep.
-    last_batch = np.full(graph.num_users, -self.min_sep, dtype=np.int32)
+    last_batch = np.full(graph.num_users, -self._min_sep, dtype=np.int32)
     example_count = np.zeros(num_examples, dtype=dtype)
     slots: list[int] = []
 
     user_maxpart_cap = 1
     ex_maxpart_cap = 1
-    rng = np.random.default_rng(self.shuffle_seed)
+    rng = np.random.default_rng(seed)
     eligible = np.argsort(graph.csr.degree, kind='stable')
-    while len(slots) < self.batch_size * self.iterations:
-      if self.shuffle_seed is not None:
+    while len(slots) < total_slots:
+      if seed is not None:
         _shuffle_in_place(eligible, graph.csr.degree, rng)
       slots_before = len(slots)
       eligible, capped = self._greedy_pass(
+          graph,
           eligible,
           slots,
           user_count,
@@ -363,9 +364,16 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
       if not capped.size:
         break
       user_maxpart_cap += 1
-      ex_maxpart_cap = math.ceil(user_maxpart_cap / self.user_example_ratio)
+      ex_maxpart_cap = math.ceil(user_maxpart_cap / self._user_example_ratio)
       eligible = np.concatenate([eligible, capped]) if eligible.size else capped
 
+    if len(slots) < total_slots:
+      raise ValueError(
+          f'Could not fill all {total_slots} slots '
+          f'(batch_size={self._batch_size} * iterations={self._iterations}). '
+          f'Only {len(slots)} slots were filled. '
+          f'Try reducing min_sep (currently {self._min_sep}).'
+      )
     example_order = np.array(slots, dtype=dtype)
     actual_user_maxpart = int(user_count.max())
     actual_ex_maxpart = int(example_count.max())
@@ -388,12 +396,15 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
       1D arrays of example indices, each of length exactly ``batch_size``.
     """
     del rng  # Randomness controlled by shuffle_seed.
-    _validate.equal(self.attribution.num_examples, num_examples=num_examples)
-    for t in range(self.iterations):
-      yield self._example_order[t * self.batch_size : (t + 1) * self.batch_size]
+    _validate.equal(self._num_examples, num_examples=num_examples)
+    for t in range(self._iterations):
+      yield self._example_order[
+          t * self._batch_size : (t + 1) * self._batch_size
+      ]
 
   def _greedy_pass(
       self,
+      attribution_graph,
       eligible,
       slots,
       user_count,
@@ -406,10 +417,10 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
     min_sep_blocked = []
     cap_blocked = []
     for ex in eligible.tolist():
-      if len(slots) >= self.batch_size * self.iterations:
+      if len(slots) >= self._batch_size * self._iterations:
         break
-      current_batch = len(slots) // self.batch_size
-      users = self.attribution.csr.users_of(ex)
+      current_batch = len(slots) // self._batch_size
+      users = attribution_graph.csr.users_of(ex)
       # Per-example cap.
       if example_count[ex] >= ex_maxpart_cap:
         cap_blocked.append(ex)
@@ -419,7 +430,7 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
         cap_blocked.append(ex)
         continue
       # Batch-level min-sep.
-      if np.any(current_batch - last_batch[users] < self.min_sep):
+      if np.any(current_batch - last_batch[users] < self._min_sep):
         min_sep_blocked.append(ex)
         continue
       # Select.

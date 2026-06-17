@@ -271,7 +271,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
 
   def test_basic(self):
     data = MultiOwnerGraph.from_owners_per_example(
-        [[0, 1], [1, 2], [2, 3], [3, 4], [4, 0], [0], [1], [2], [3], [4]]
+        [[2 * i, 2 * i + 1] for i in range(15)]
     )
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
@@ -286,7 +286,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
     _check_slot_level_min_sep(batches, data, 2)
 
   def test_single_owner_only(self):
-    data = MultiOwnerGraph.from_owners_per_example([[i % 5] for i in range(20)])
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(20)])
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=4,
@@ -299,9 +299,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
 
   def test_min_sep_one(self):
     """min_sep=1 allows user in consecutive batches."""
-    data = MultiOwnerGraph.from_owners_per_example(
-        [[0], [0], [0], [1], [1], [1]]
-    )
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(6)])
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=2,
@@ -314,9 +312,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
 
   @parameterized.parameters(2, 3, 5)
   def test_various_min_sep(self, min_sep):
-    data = MultiOwnerGraph.from_owners_per_example(
-        [[i % 10] for i in range(100)]
-    )
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(50)])
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=5,
@@ -328,11 +324,13 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
     _check_slot_level_min_sep(batches, data, min_sep)
 
   def test_valid_indices(self):
-    data = MultiOwnerGraph.from_owners_per_example([[0, 1], [2], [3], [0, 3]])
+    data = MultiOwnerGraph.from_owners_per_example(
+        [[0, 1], [2, 3], [4, 5], [6, 7]]
+    )
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=2,
-        iterations=4,
+        iterations=2,
         min_sep=2,
     )
     batches = list(strategy.batch_iterator(data.num_examples))
@@ -367,7 +365,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
       )
 
   def test_batch_count_equals_iterations(self):
-    data = MultiOwnerGraph.from_owners_per_example([[0, 1], [2], [3, 4]])
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(20)])
     for iters in [1, 5, 10]:
       strategy = MultiOwnerMinSepSampling(
           attribution=data,
@@ -379,9 +377,9 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
       self.assertLen(batches, iters)
 
   @parameterized.parameters(
-      (30, 10, 3, 3, 5, 2),
-      (50, 15, 4, 5, 8, 3),
-      (100, 20, 2, 10, 10, 4),
+      (200, 100, 3, 3, 5, 2),
+      (400, 200, 4, 5, 8, 3),
+      (500, 300, 2, 10, 10, 4),
   )
   def test_random_multi_owner(
       self, n_ex, n_users, max_owners, bs, iters, min_sep
@@ -402,7 +400,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
 
   def test_deterministic_across_calls(self):
     """Same input always produces the same output."""
-    data = _random_multi_owner_graph(np.random.default_rng(42), 50, 10, 2.0)
+    data = _random_multi_owner_graph(np.random.default_rng(42), 300, 200, 2.0)
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=5,
@@ -416,7 +414,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
 
   def test_user_maxpart_matches_actual(self):
     """user_maxpart equals the actual maximum user participation count."""
-    data = MultiOwnerGraph.from_owners_per_example([[i % 5] for i in range(50)])
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(100)])
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=5,
@@ -431,7 +429,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
 
   def test_example_maxpart_computed(self):
     """example_maxpart reflects actual maximum example participation."""
-    data = MultiOwnerGraph.from_owners_per_example([[i % 3] for i in range(30)])
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(50)])
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=5,
@@ -446,7 +444,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
 
   def test_shuffle_produces_different_results(self):
     """shuffle_seed gives different assignments but still satisfies min-sep."""
-    data = _random_multi_owner_graph(np.random.default_rng(0), 100, 20, 2)
+    data = _random_multi_owner_graph(np.random.default_rng(0), 500, 300, 2)
     strategy_no_shuffle = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=10,
@@ -473,7 +471,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
 
   def test_user_example_ratio(self):
     """user_example_ratio limits example duplication relative to user cap."""
-    data = MultiOwnerGraph.from_owners_per_example([[i % 5] for i in range(50)])
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(100)])
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=5,
@@ -490,7 +488,7 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
 
   def test_high_ratio_limits_example_to_one(self):
     """A high user_example_ratio forces each example to appear at most once."""
-    data = MultiOwnerGraph.from_owners_per_example([[i % 5] for i in range(50)])
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(50)])
     strategy = MultiOwnerMinSepSampling(
         attribution=data,
         batch_size=5,
@@ -501,6 +499,31 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
     batches = list(strategy.batch_iterator(data.num_examples))
     self.assertEqual(strategy.example_maxpart, 1)
     _check_slot_level_min_sep(batches, data, 2)
+
+  def test_infeasible_raises(self):
+    """ValueError when the greedy algorithm cannot fill all slots."""
+    # 2 examples owned by the same user: with min_sep=2 and batch_size=1,
+    # only 2 of the 10 requested slots can be filled.
+    data = MultiOwnerGraph.from_owners_per_example([[0], [0]])
+    with self.assertRaisesRegex(ValueError, 'Try reducing min_sep'):
+      MultiOwnerMinSepSampling(
+          attribution=data,
+          batch_size=1,
+          iterations=10,
+          min_sep=2,
+      )
+
+  def test_infeasible_multi_owner_raises(self):
+    """ValueError for multi-owner graph where min_sep makes it infeasible."""
+    # All examples share user 0, so at most 1 example per min_sep window.
+    data = MultiOwnerGraph.from_owners_per_example([[0, 1], [0, 2], [0, 3]])
+    with self.assertRaisesRegex(ValueError, 'Try reducing min_sep'):
+      MultiOwnerMinSepSampling(
+          attribution=data,
+          batch_size=2,
+          iterations=10,
+          min_sep=3,
+      )
 
 
 def _create_random_graph(n_examples, n_users, max_owners, seed):
