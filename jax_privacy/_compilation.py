@@ -30,7 +30,7 @@ import contextlib
 import copy
 import dataclasses
 import functools
-from typing import TYPE_CHECKING, TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 
 from absl import logging
 import jax
@@ -88,11 +88,25 @@ class AutotuneMicrobatch:
 CompilationStrategy: TypeAlias = PadToMultiple | AutotuneMicrobatch
 
 
+def _is_pygrain_map_dataset(dataset: Any) -> bool:
+  """Checks whether ``dataset`` is a PyGrain MapDataset, by class name."""
+  for cls in type(dataset).__mro__:
+    if cls.__name__ == "MapDataset":
+      return True
+  return False
+
+
 def _abstract_batch_and_padding(dataset, size):
   """Returns abstract ``(batch, is_padding)`` inputs of the given size."""
-  batch = jax.tree.map(
-      lambda x: jax.ShapeDtypeStruct((size, *x.shape[1:]), x.dtype), dataset
-  )
+  if _is_pygrain_map_dataset(dataset):
+    first_element = dataset[0]
+    batch = jax.tree.map(
+        lambda x: jax.ShapeDtypeStruct((size, *x.shape), x.dtype), first_element
+    )
+  else:
+    batch = jax.tree.map(
+        lambda x: jax.ShapeDtypeStruct((size, *x.shape[1:]), x.dtype), dataset
+    )
   padding = jax.ShapeDtypeStruct((size,), np.bool_)
   return batch, padding
 
@@ -106,7 +120,10 @@ def _dry_run_state(
   """Eval-shape setup; draws the same rng as training for JIT cache hits."""
   rng = copy.deepcopy(np.random.default_rng(rng_or_seed))
   seed = rng.integers(2**63)
-  n = _validate.batch(dataset)
+  if _is_pygrain_map_dataset(dataset):
+    n = len(dataset)
+  else:
+    n = _validate.batch(dataset)
   state = jax.eval_shape(trainer.init, params)
   key = jax.eval_shape(lambda x: x, jax.random.key(seed))
   return rng, n, state, key

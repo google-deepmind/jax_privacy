@@ -23,7 +23,7 @@ JIT-compiled or ahead-of-time compiled.
 from collections.abc import Callable
 import dataclasses
 import functools
-from typing import Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
 from absl import logging
 import jax
@@ -277,12 +277,15 @@ class DPTrainer:
       callback: CallbackFn | None = None,
       rng_or_seed: np.random.Generator | int | None = None,
       precompile: bool = True,
+      shard_options: Any = None,
+      preload: bool | None = None,
+      max_workers: int | None = None,
   ) -> TrainingState:
     """Runs an end-to-end differentially private training loop.
 
     Args:
       dataset: The training dataset, as a PyTree of arrays where the first axis
-        of each leaf is the batch / example dimension.
+        of each leaf is the batch / example dimension. Or a PyGrain MapDataset.
       params: Initial parameter PyTree.
       callback: Called after each step as ``callback(step, state, aux)``.
         ``step`` is a Python int.
@@ -295,6 +298,12 @@ class DPTrainer:
         compiling on the fly, which can idle accelerators during training.
         Strategies that resolve before training (e.g. ``AutotuneMicrobatch``)
         run even when this is ``False``.
+      shard_options: If specified, and dataset is a PyGrain MapDataset, only a
+        subset of the batch will be loaded.
+      preload: If dataset is a PyGrain MapDataset, whether to materialize the
+        full dataset into memory.
+      max_workers: If dataset is a PyGrain MapDataset, the maximum thread pool
+        workers for parallel loading.
 
     Returns:
       Final ``TrainingState``.
@@ -312,37 +321,59 @@ class DPTrainer:
     assert isinstance(trainer.compilation_strategy, PadToMultiple)
     warn_on_cache_miss = bool(futures)
 
+    # Lazy import: only pull in the data loader when the dataset is a
+    # PyGrain MapDataset. Detection is by class name, not import, so
+    # users who don't have grain installed never trigger this path.
+    from jax_privacy.experimental import _data_loader  # pylint: disable=g-import-not-at-top,import-outside-toplevel,protected-access
+
     # We need tight alignement between how rng is used here and in precompile().
     rng = np.random.default_rng(rng_or_seed)
     prng_key = jax.random.key(int(rng.integers(2**63)))
 
-    num_examples = _validate.batch(dataset)
     # Copy here due to the donate_argnames on the jit decorated train_step.
     state = trainer.init(jax.tree.map(jax.numpy.copy, params))
 
+    if _data_loader.is_pygrain_map_dataset(dataset):
+      batches = _data_loader.iterate_batches(
+          dataset,
+          trainer.plan.batch_selection_strategy,
+          rng,
+          shard_options=shard_options,
+          pad_to_multiple_of=trainer.compilation_strategy.multiple,
+          microbatch_size=trainer.performance_flags.microbatch_size,
+          preload=preload,
+          max_workers=max_workers,
+      )
+    else:
+      num_examples = _validate.batch(dataset)
+
+      def _in_memory_batches():
+        bss = trainer.plan.batch_selection_strategy
+        for indices in bss.batch_iterator(num_examples, rng=rng):
+          indices = batch_selection.pad_to_multiple_of(
+              indices,
+              trainer.compilation_strategy.multiple,
+              microbatch_size=trainer.performance_flags.microbatch_size,
+          )
+          yield _get_batch(dataset, indices)
+
+      batches = _in_memory_batches()
+
     step = 0
     with _compilation.hoist_closed_over_constants():
-      bss = trainer.plan.batch_selection_strategy
-      for indices in bss.batch_iterator(num_examples, rng=rng):
-        indices = batch_selection.pad_to_multiple_of(
-            indices,
-            trainer.compilation_strategy.multiple,
-            microbatch_size=trainer.performance_flags.microbatch_size,
-        )
-        batch, is_padding_example = _get_batch(dataset, indices)
+      for batch, is_padding_example in batches:
         step_fn = trainer.train_step
-        if indices.size in futures:
-          step_fn = futures[indices.size].result()
+        batch_size = is_padding_example.shape[0]
+        if batch_size in futures:
+          step_fn = futures[batch_size].result()
         elif warn_on_cache_miss:
-          logging.info(
-              "JIT-compiling train_step for batch size %d", indices.size
-          )
+          logging.info("JIT-compiling train_step for batch size %d", batch_size)
           logging.warning("Cache Miss! Precompile is not working as intended.")
 
         state, aux = step_fn(state, batch, is_padding_example, prng_key)
         step += 1
 
-        del indices, batch, is_padding_example
+        del batch, is_padding_example
 
         if callback is not None:
           callback(step, state, aux)
