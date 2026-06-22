@@ -18,6 +18,78 @@ All notable changes to this project will be documented in this file.
 
 The format is based on https://keepachangelog.com/en/1.1.0/
 
+## [2.2.0] - 2026-06-15
+
+### Added
+
+-   **Multi-owner DP support**: Added `greedy_contribution_bound` and
+    `MultiOwnerGraph` dataclass for multi-owner differential privacy based on
+    [arXiv:2503.03622](https://arxiv.org/abs/2503.03622).
+-   **Banded-inverse matrix factorization methods**: New strategies for
+    `BandInvMF` and `BISR` including
+    `banded_inverse_square_root_noising_coefs()`,
+    `compute_banded_inverse_sensitivity()`, and
+    `optimize_banded_inverse_toeplitz()`. Based on
+    [arXiv:2505.12128](https://arxiv.org/abs/2505.12128).
+    ([#218](https://github.com/google-deepmind/jax_privacy/pull/218))
+-   **Experimental `pre_clipping_transforms` API**: Allows optimizers to define
+    custom pre-clipping transforms.
+-   **Truncation support for b-min-sep sampling**: Added to both sample
+    generation and privacy loss computation.
+-   **Keras Poisson opt-in example**: Demonstrates Poisson sampling support
+    using the Keras API.
+    ([#196](https://github.com/google-deepmind/jax_privacy/pull/196))
+
+### Changed
+
+-   **Promoted experimental modules to public API**: Moved
+    `experimental/accounting.py`, `experimental/execution_plan.py`, and
+    `experimental/optimizers.py` to top-level `jax_privacy` modules.
+-   **Faster Bernoulli sample generation**: Performance improvement to batch
+    selection sampling.
+-   **Documentation overhaul**:
+    -   Rewrote installation docs to recommend GitHub head install and explain
+        co-developed dependency requirements (DP Accounting, Optax).
+    -   Simplified README.md by removing sections now covered by Read the Docs.
+    -   Split `sharp_edges.md` into three focused pages: variable batch sizes,
+        VMap + sharding, and mixed precision training.
+    -   Updated documentation for `clipped_grad` and `batch_selection`.
+
+### Fixed
+
+-   **`clipped_fun` `return_norms` output contract**: Fixed incorrect return
+    shape `(value, ((), norms))` → `(value, norms)` when `has_aux=False`.
+    Regression test added.
+    ([#224](https://github.com/google-deepmind/jax_privacy/pull/224))
+-   **`ZeroDivisionError` in zCDP accounting**: Fixed crash when
+    `noise_multiplier=0` by guarding the division in the zCDP branch and
+    returning `ZCDpEvent(inf)` (rho → ∞, i.e., no privacy). Includes regression
+    test. ([#255](https://github.com/google-deepmind/jax_privacy/pull/255))
+-   **JAX v0.9.0 / NumPy 2.4.0 compatibility**: Fixed implicit JAX array to
+    dtype conversion warnings that would become errors in future versions.
+-   **Keras Poisson example regression**: Increased batch size 128→512, seeded
+    Keras init for reproducibility, aligned Poisson sampling with accountant.
+    ([#222](https://github.com/google-deepmind/jax_privacy/pull/222))
+-   **Flaky `test_dp_training_e2e_work`**: Seeded Keras/JAX RNG to eliminate
+    test flakiness.
+    ([#264](https://github.com/google-deepmind/jax_privacy/pull/264))
+
+### Internal / Cleanups
+
+-   **Centralized `_validate` module**: Introduced `_validate.py` as the single
+    source of truth for parameter validation, replacing pydantic-based
+    validation. Provides generic validators (`non_negative`, `positive`,
+    `in_range`) with no external dependency.
+-   **Removed pydantic dependency**: Replaced by the centralized `_validate`
+    module.
+-   **Converted to relative imports**: All intra-package imports in core library
+    modules now use Python relative imports (`from . import X`).
+-   **Removed `skip_checks` args from `toeplitz.py`**: Extended
+    `toeplitz.minsep_sensitivity_squared` to support potentially increasing
+    toeplitz coefficients natively.
+-   **Deleted `jax_privacy/accounting/` directory**: Removed in favor of the
+    promoted top-level accounting module.
+
 ## [2.0.0] - 2026-04-16
 
 Since version 1.0.0, the **jax-privacy** library has undergone a major
@@ -131,7 +203,9 @@ and expanded support for matrix factorization mechanisms.
 
 <!-- disableFinding(LINK_UNUSED_ID) -->
 
-[unreleased]: https://github.com/google-deepmind/jax_privacy/compare/v1.0.0...HEAD.
+[unreleased]: https://github.com/google-deepmind/jax_privacy/compare/v2.2.0...HEAD.
+[2.2.0]: https://github.com/google-deepmind/jax_privacy/compare/v2.0.0...v2.2.0.
+[2.0.0]: https://github.com/google-deepmind/jax_privacy/compare/v1.0.0...v2.0.0.
 
 <!-- enableFinding(LINK_UNUSED_ID) -->
 
