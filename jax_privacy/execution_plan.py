@@ -14,10 +14,6 @@
 
 """Module for defining DP Execution Plans.
 
-**API Stability:**
-- `DPExecutionPlan`: 9/10 -- Stable, backwards-compatible changes possible.
-- `BandMFExecutionPlanConfig`: 7/10 -- Mostly stable, minor changes possible.
-
 # Writing General-Purpose DP Training Loops via DPExecutionPlan
 
 This module introduces the `DPExecutionPlan`, an object designed to encapsulate
@@ -49,10 +45,11 @@ guarantee.
 
 Constructors for these plans are highly configurable, offering access to the
 full capabilities of the underlying components while also providing sensible
-defaults. Our primary entry point is currently `BandMFExecutionPlanConfig`,
-although more will become available in the future when we feel the API has
-stabilized.
+defaults. Our primary entry point is currently `BandMFConfig`, although more
+will become available in the future.
 """
+
+from __future__ import annotations
 
 import dataclasses
 import functools
@@ -160,7 +157,7 @@ class DPExecutionPlan:
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
-class BandMFExecutionPlanConfig:
+class BandMFConfig:
   """Configuration for an Amplified BandMF-based DPExecutionPlan.
 
   This config is designed to be fully serializable, defined in terms of simple
@@ -168,45 +165,41 @@ class BandMFExecutionPlanConfig:
   created without one, call `calibrate()` to obtain a new config with a
   noise_multiplier calibrated to a target (epsilon, delta) guarantee.
 
-  The expected batch size of the batch selection strategy is
-  `(num_examples / num_bands) * sampling_prob`. `num_examples` may or may not be
-  passed to this config. It should only be passed if it is considered a public,
-  non-sensitive quantity (i.e., when using zero-out adjacency rather than
-  add-remove).
-
   Example Usage (Calibrate from epsilon/delta):
-    >>> config = BandMFExecutionPlanConfig.default(  # doctest: +SKIP
-    ...   num_bands=1, iterations=1000, sampling_prob=0.1,
+    >>> config = BandMFConfig.default(  # doctest: +SKIP
+    ...   num_bands=1, iterations=1000, expected_participations=100,
     ... ).calibrate(epsilon=1.0, delta=1e-5)
 
   Example Usage (Direct noise_multiplier):
-    >>> config = BandMFExecutionPlanConfig.default(
-    ...   num_bands=1, iterations=1000, sampling_prob=0.1,
+    >>> config = BandMFConfig.default(
+    ...   num_bands=1, iterations=1000, expected_participations=100,
     ...   noise_multiplier=1.0,
     ... )
 
   Example Usage (BandMF with custom strategy):
-    >>> config = BandMFExecutionPlanConfig(  # doctest: +SKIP
+    >>> config = BandMFConfig(  # doctest: +SKIP
     ...   strategy=np.array([1.0, 0.5, 0.2]),
-    ...   iterations=1000, sampling_prob=0.4,
+    ...   iterations=1000, expected_participations=400,
     ... ).calibrate(epsilon=1.0, delta=1e-5)
 
   References: https://arxiv.org/abs/2306.08153 and
   https://arxiv.org/abs/2405.15913
 
   Attributes:
+    iterations: The number of iterations the mechanism is defined for. Tip: Set
+      this to be a multiple of num_bands for the best utility.
+    expected_participations: The expected number of times each example
+      participates across all iterations. The Poisson sampling probability is
+      derived as `expected_participations * num_bands / iterations`.
+    strategy: The Toeplitz coefficients of the BandMF strategy matrix.
     noise_multiplier: The ratio of noise standard deviation to the query
       sensitivity. The actual noise stddev is determined by this value, the
       query sensitivity, and the strategy matrix column norm. If not set, use
       `calibrate()` to automatically determine it from target (epsilon, delta)
       privacy parameters.
-    iterations: The number of iterations the mechanism is defined for. Tip: Set
-      this to be a multiple of num_bands for the best utility.
-    strategy: The toeplitz coefficeints of the BandMF strategy matrix.
     l2_clip_norm: The maximum L2 norm of the per-example gradients.
     rescale_to_unit_norm: Divide the clipped gradient by the l2_clip_norm.
     normalize_by: Divide the sum-of-clipped gradients by this value.
-    sampling_prob: The Poisson sampling probability for each example in a group.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to. If set, the plan.batch_selection_strategy will always
       return batches of size at most truncated_batch_size, and accounting will
@@ -221,12 +214,12 @@ class BandMFExecutionPlanConfig:
   """
 
   iterations: int
+  expected_participations: float
   strategy: np.typing.ArrayLike
   noise_multiplier: float | None = None
   l2_clip_norm: float = 1.0
   rescale_to_unit_norm: bool = True
   normalize_by: float = 1.0
-  sampling_prob: float = 1.0
   truncated_batch_size: int | None = None
   num_examples: int | None = None
   column_normalize: bool = False
@@ -237,7 +230,12 @@ class BandMFExecutionPlanConfig:
         l2_clip_norm=self.l2_clip_norm,
         normalize_by=self.normalize_by,
     )
-    _validate.in_range(0, 1, sampling_prob=self.sampling_prob)
+    _validate.strategy(self.strategy, self.iterations)
+    _validate.in_range(
+        0,
+        self.iterations // self.num_bands,
+        expected_participations=self.expected_participations,
+    )
     if self.noise_multiplier is not None:
       _validate.non_negative(noise_multiplier=self.noise_multiplier)
     if self.truncated_batch_size is not None:
@@ -246,11 +244,38 @@ class BandMFExecutionPlanConfig:
       _validate.non_negative(num_examples=self.num_examples)
     if self.truncated_batch_size is not None and self.num_examples is None:
       raise ValueError('truncated_batch_size requires num_examples to be set.')
-    _validate.strategy(self.strategy, self.iterations)
+
+  @property
+  def num_bands(self) -> int:
+    """The number of bands in the strategy matrix."""
+    return len(self.strategy)
+
+  @property
+  def rmse(self) -> float:
+    """Root mean squared error of the mechanism on the prefix-sum workload.
+
+    Requires the config to be calibrated (noise_multiplier must be set).
+    The strategy's column norm is already accounted for via noise_multiplier
+    (the actual noise stddev is noise_multiplier * column_norm), so we do not
+    normalize here. This method normalizes by ``expected_participations``
+    so that you can fairly compare RMSE across instances with different
+    expected participations.
+
+    Returns:
+      The RMSE per query, in units of the clipped gradient.
+
+    Raises:
+      ValueError: If noise_multiplier has not been set.
+    """
+    self._check_calibrated()
+    strategy = np.asarray(self.strategy)
+    errors = toeplitz.per_query_error(strategy_coef=strategy, n=self.iterations)
+    coefficient = self.noise_multiplier / self.expected_participations
+    return float(coefficient * np.sqrt(np.mean(errors)))
 
   @property
   def _neighboring_relation(self) -> NeighboringRelation:
-    """Returns the neighboring relation and partition type for the config."""
+    """Returns the neighboring relation for the config."""
     if self.num_examples is not None:
       return NeighboringRelation.REPLACE_SPECIAL
     return NeighboringRelation.ADD_OR_REMOVE_ONE
@@ -264,23 +289,25 @@ class BandMFExecutionPlanConfig:
 
   def _get_dp_event(self, sigma: float) -> dp_accounting.DpEvent:
     """Returns a DpEvent for the BandMF mechanism."""
-    num_bands = len(self.strategy)
+    sampling_prob = (
+        self.expected_participations * self.num_bands / self.iterations
+    )
     if self.truncated_batch_size:
-      group_size = self.num_examples // num_bands
+      group_size = self.num_examples // self.num_bands
       return accounting.truncated_amplified_bandmf_event(
           noise_multiplier=sigma,
           iterations=self.iterations,
-          num_bands=num_bands,
+          num_bands=self.num_bands,
           largest_group_size=group_size,
-          sampling_prob=self.sampling_prob,
+          sampling_prob=sampling_prob,
           truncated_batch_size=self.truncated_batch_size,
       )
     else:
       return accounting.amplified_bandmf_event(
           noise_multiplier=sigma,
           iterations=self.iterations,
-          num_bands=num_bands,
-          sampling_prob=self.sampling_prob,
+          num_bands=self.num_bands,
+          sampling_prob=sampling_prob,
       )
 
   def _check_calibrated(self) -> None:
@@ -298,7 +325,7 @@ class BandMFExecutionPlanConfig:
       delta: float,
       tol: float | None = None,
       accountant_fn: AccountantFn = dp_accounting.pld.PLDAccountant,
-  ) -> 'BandMFExecutionPlanConfig':
+  ) -> BandMFConfig:
     """Returns a new config with a calibrated noise_multiplier.
 
     Args:
@@ -310,9 +337,8 @@ class BandMFExecutionPlanConfig:
         calibration given a neighboring relation. Defaults to PLDAccountant.
 
     Returns:
-      A new BandMFExecutionPlanConfig with calibrated noise_multiplier.
+      A new BandMFConfig with calibrated noise_multiplier.
     """
-
     noise_multiplier = dp_accounting.calibrate_dp_mechanism(
         make_fresh_accountant=lambda: accountant_fn(self._neighboring_relation),
         make_event_from_param=self._get_dp_event,
@@ -320,7 +346,6 @@ class BandMFExecutionPlanConfig:
         target_delta=delta,
         tol=tol,
     )
-
     return dataclasses.replace(self, noise_multiplier=noise_multiplier)
 
   @classmethod
@@ -328,30 +353,36 @@ class BandMFExecutionPlanConfig:
       cls,
       num_bands: int,
       iterations: int,
+      expected_participations: float,
       strategy_optimization_steps: int = 500,
       **kwargs,
-  ) -> 'BandMFExecutionPlanConfig':
-    """Returns a BandMFExecutionPlanConfig with an RMSE-optimized strategy.
+  ) -> BandMFConfig:
+    """Returns a BandMFConfig with an RMSE-optimized strategy.
 
-    See BandMFExecutionPlanConfig for the full list of keyword arguments.
+    See BandMFConfig for the full list of keyword arguments.
 
     Args:
       num_bands: The number of bands in the strategy matrix.
       iterations: The number of iterations the mechanism is defined for.
+      expected_participations: The expected number of times each example
+        participates across all iterations.
       strategy_optimization_steps: The number of optimization steps to use for
         the strategy matrix.
-      **kwargs: Keyword arguments to pass to BandMFExecutionPlanConfig.
+      **kwargs: Keyword arguments to pass to BandMFConfig.
 
     Returns:
-      A BandMFExecutionPlanConfig with an RMSE-optimized strategy.
+      A BandMFConfig with an RMSE-optimized strategy.
     """
     strategy = toeplitz.optimize_banded_toeplitz(
         n=iterations,
         bands=num_bands,
         max_optimizer_steps=strategy_optimization_steps,
     )
-    return BandMFExecutionPlanConfig(
-        iterations=iterations, strategy=strategy, **kwargs
+    return BandMFConfig(
+        iterations=iterations,
+        expected_participations=expected_participations,
+        strategy=strategy,
+        **kwargs,
     )
 
   def make(
@@ -389,10 +420,13 @@ class BandMFExecutionPlanConfig:
           spmd_axis_name=performance_flags.spmd_axis_name,
       )
 
+    sampling_prob = (
+        self.expected_participations * self.num_bands / self.iterations
+    )
     batch_selection_strategy = batch_selection.CyclicPoissonSampling(
-        sampling_prob=self.sampling_prob,
+        sampling_prob=sampling_prob,
         iterations=self.iterations,
-        cycle_length=len(self.strategy),
+        cycle_length=self.num_bands,
         truncated_batch_size=self.truncated_batch_size,
         partition_type=self._partition_type,
     )

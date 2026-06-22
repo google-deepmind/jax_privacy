@@ -20,6 +20,8 @@ from jax_privacy import execution_plan
 import numpy as np
 import optax
 
+BandMFConfig = execution_plan.BandMFConfig
+
 
 # pylint: disable=g-bad-todo
 # TODO: Improve test coverage, including correctness of the
@@ -34,11 +36,12 @@ class ExecutionPlanTest(parameterized.TestCase):
     default_kwargs = {
         "strategy": np.linspace(1, 0, 10),
         "iterations": 20,
+        "expected_participations": 2,
         "noise_multiplier": 1.0,
     }
     default_kwargs.update(kwargs)
     with self.assertRaises(ValueError):
-      execution_plan.BandMFExecutionPlanConfig(**default_kwargs)
+      BandMFConfig(**default_kwargs)
 
   @parameterized.parameters(
       {
@@ -52,8 +55,11 @@ class ExecutionPlanTest(parameterized.TestCase):
   )
   def test_bandmf_execution_plan_creation(self, **privacy_kwargs):
     iterations = 20
-    config = execution_plan.BandMFExecutionPlanConfig.default(
-        num_bands=10, iterations=iterations, **privacy_kwargs
+    config = BandMFConfig.default(
+        num_bands=10,
+        iterations=iterations,
+        expected_participations=iterations / 10,
+        **privacy_kwargs,
     )
 
     plan = config.make()
@@ -76,8 +82,10 @@ class ExecutionPlanTest(parameterized.TestCase):
     self.assertIsInstance(next(batch_gen), np.ndarray)
 
   def test_bandmf_calibrate(self):
-    config = execution_plan.BandMFExecutionPlanConfig.default(
-        num_bands=10, iterations=20
+    config = BandMFConfig.default(
+        num_bands=10,
+        iterations=20,
+        expected_participations=2,
     ).calibrate(epsilon=1.0, delta=1e-06)
 
     self.assertIsNotNone(config.noise_multiplier)
@@ -87,25 +95,29 @@ class ExecutionPlanTest(parameterized.TestCase):
     self.assertIsInstance(plan.dp_event, dp_accounting.DpEvent)
 
   def test_uncalibrated_make_raises_error(self):
-    config = execution_plan.BandMFExecutionPlanConfig.default(
-        num_bands=10, iterations=20
+    config = BandMFConfig.default(
+        num_bands=10,
+        iterations=20,
+        expected_participations=2,
     )
     with self.assertRaises(ValueError):
       config.make()
 
   def test_make_with_default_performance_flags(self):
-    config = execution_plan.BandMFExecutionPlanConfig.default(
+    config = BandMFConfig.default(
         num_bands=10,
         iterations=20,
+        expected_participations=2,
         noise_multiplier=1.0,
     )
     plan = config.make()
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
 
   def test_make_with_custom_performance_flags(self):
-    config = execution_plan.BandMFExecutionPlanConfig.default(
+    config = BandMFConfig.default(
         num_bands=10,
         iterations=20,
+        expected_participations=2,
         noise_multiplier=1.0,
     )
     flags = execution_plan.PerformanceFlags(
@@ -115,6 +127,28 @@ class ExecutionPlanTest(parameterized.TestCase):
     )
     plan = config.make(flags)
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+
+  def test_rmse_requires_calibration(self):
+    config = BandMFConfig.default(
+        num_bands=1,
+        iterations=10,
+        expected_participations=10,
+    )
+    with self.assertRaises(ValueError):
+      _ = config.rmse
+
+  def test_rmse_decreases_with_participations(self):
+    config1 = BandMFConfig.default(
+        num_bands=2,
+        iterations=16,
+        expected_participations=4,
+    ).calibrate(epsilon=1.0, delta=1e-06)
+    config2 = BandMFConfig.default(
+        num_bands=2,
+        iterations=16,
+        expected_participations=2,
+    ).calibrate(epsilon=1.0, delta=1e-06)
+    self.assertLess(config1.rmse, config2.rmse)
 
 
 if __name__ == "__main__":

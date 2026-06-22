@@ -107,14 +107,14 @@ def main(_):
   init_loss = logistic_loss(init_params, train_features, train_labels)
   print(f'Initial training loss: {init_loss:.3f}')
 
-  config = execution_plan.BandMFExecutionPlanConfig.default(
+  config = execution_plan.BandMFConfig.default(
       iterations=ITERATIONS,
       num_bands=BANDS,
       l2_clip_norm=L2_CLIP_NORM,
       normalize_by=EXPECTED_BATCH_SIZE,
-      sampling_prob=EXPECTED_BATCH_SIZE / train_users * BANDS,
+      expected_participations=EXPECTED_BATCH_SIZE * ITERATIONS / train_users,
   ).calibrate(epsilon=EPSILON, delta=DELTA)
-  print('Initialized BandMFExecutionPlanConfig')
+  print('Initialized BandMFConfig')
   plan = config.make()
   grad_fn = plan.clipped_grad(logistic_loss, batch_argnums=(1, 2))
 

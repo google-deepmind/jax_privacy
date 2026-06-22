@@ -27,4 +27,4 @@ from . import optimizers
 # Carefully selected member imports for the top-level public API.
 from .clipping import clipped_grad
 
-__version__ = '2.2.0.dev0'
+__version__ = '2.3.0.dev0'

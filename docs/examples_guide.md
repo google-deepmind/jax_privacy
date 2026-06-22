@@ -67,7 +67,7 @@ training pipeline.
 ### `dp_logistic_regression.py` ✅
 
 Trains a logistic regression model on synthetic data using DP-BandMF.
-Demonstrates the full pipeline: `BandMFExecutionPlanConfig` for calibration
+Demonstrates the full pipeline: `BandMFConfig` for calibration
 and plan construction, `CyclicPoissonSampling` for batch selection with
 proper padding, clipped gradient computation, correlated noise addition, and
 post-training privacy auditing with canary scores.
@@ -86,7 +86,7 @@ batches, integer-grid rounding of clipped gradients, and RDP accounting.
 ### `dp_sgd_transformer.py` ✅
 
 Trains a character-level Transformer decoder on the Tiny Shakespeare dataset
-using DP-SGD with `BandMFExecutionPlanConfig`. Demonstrates next-character
+using DP-SGD with `BandMFConfig`. Demonstrates next-character
 prediction with per-sequence privacy. Uses `CyclicPoissonSampling` (via the
 execution plan) for batch selection and normalizes by the expected batch size.
 

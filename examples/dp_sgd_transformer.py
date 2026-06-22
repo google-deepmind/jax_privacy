@@ -244,10 +244,10 @@ def main(argv: Sequence[str]) -> None:
   model_params = init_model_params(key, vocab_size=vocab_size, max_len=max_len)
 
   # Set up DP components
-  config = execution_plan.BandMFExecutionPlanConfig.default(
+  config = execution_plan.BandMFConfig.default(
       iterations=iterations,
       num_bands=1,
-      sampling_prob=expected_batch_size / train_size,
+      expected_participations=expected_batch_size * iterations / train_size,
       rescale_to_unit_norm=True,
       normalize_by=expected_batch_size,
       l2_clip_norm=clipping_norm,

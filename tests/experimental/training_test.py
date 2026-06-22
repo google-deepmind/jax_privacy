@@ -31,14 +31,19 @@ def _quadratic_loss(params, batch, prng):
 
 
 def _make_plan(
-    iterations, noise_multiplier=1.0, sampling_prob=1.0, performance_flags=None
+    iterations,
+    noise_multiplier=1.0,
+    expected_participations=None,
+    performance_flags=None,
 ):
   """Creates a simple BandMF execution plan for testing."""
-  config = execution_plan.BandMFExecutionPlanConfig.default(
+  if expected_participations is None:
+    expected_participations = iterations
+  config = execution_plan.BandMFConfig.default(
       num_bands=1,
       iterations=iterations,
       noise_multiplier=noise_multiplier,
-      sampling_prob=sampling_prob,
+      expected_participations=expected_participations,
   )
   return config.make(performance_flags=performance_flags)
 
@@ -122,7 +127,7 @@ class DPTrainerTest(parameterized.TestCase):
     self.assertEqual(int(state.step), 2)
 
   def test_zero_iterations_config_raises(self):
-    """BandMFExecutionPlanConfig requires iterations >= 1."""
+    """BandMFConfig requires iterations >= 1."""
     with self.assertRaises(Exception):
       _make_plan(iterations=0)
 
