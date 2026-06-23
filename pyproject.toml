@@ -26,14 +26,14 @@ authors = [
 license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
-    "absl-py",
+    "absl-py>=1.2.0",
     "dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting",
     "jax>=0.7.1",
     "jaxlib>=0.7.1",
-    "numpy",
+    "numpy>=2.0.0",
     "optax @ git+https://github.com/google-deepmind/optax.git",
-    "scipy",
-    "chex",
+    "scipy>=1.9.2",
+    "chex>=0.1.91",
 ]
 
 [project.optional-dependencies]
@@ -48,13 +48,12 @@ lint = [
 ]
 
 test = [
-    "pytest",
-    "pytest-xdist",
-    "pytest-cov",
-    "hypothesis",
-    "crc32c",
-    "keras",
-    "tensorflow",
+    "pytest>=7.2.0",
+    "pytest-xdist>=2.0.0",
+    "pytest-cov>=4.0.0",
+    "hypothesis>=6.54.0",
+    "keras>=3.0.0",
+    "tensorflow>=2.16.1",
 ]
 
 examples = [
