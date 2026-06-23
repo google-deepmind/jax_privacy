@@ -251,7 +251,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
     - With truncation, if > truncated_batch_size examples appear in a batch
       under the previous guarantee, then we select truncated_batch_size of
       them uniformly at random and discard the rest.
-    - If even_partition = True, num_examples % cycle_length examples are
+    - If partition_type = EQUAL_SPLIT, num_examples % cycle_length examples are
       discarded, i.e. never sampled.
 
   Attributes:
@@ -260,7 +260,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       expected_batch_size, one should ideally set sampling_prob =
       expected_batch_size / (num_examples // cycle_length).
     iterations: The number of total iterations / batches to generate.
-    truncated_batch_size: If True, after Poisson sampling, if we have more than
+    truncated_batch_size: If set, after Poisson sampling, if we have more than
       truncated_batch_size examples in a batch, we uniformly sample
       truncated_batch_size of them and discard the rest.
     cycle_length: If > 1, we use cyclic Poisson sampling: we partition the
@@ -515,7 +515,7 @@ class BMinSepSampling(BatchSelectionStrategy):
     b = self.min_sep
     rng = np.random.default_rng(rng)
     dtype = np.min_scalar_type(-num_examples)
-    if self.warm_start:
+    if self.warm_start and b > 1:
       size = rng.binomial(n=num_examples, p=(b - 1) * p / (1 + (b - 1) * p))
       concatenated_history = rng.choice(
           num_examples,

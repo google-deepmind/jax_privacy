@@ -144,7 +144,7 @@ def matrix_factorization_privatizer(
   Args:
     noising_matrix: A matrix used to generate correlated noise. Noise samples
       will be distributed according to a multivariate Gaussian with covariance
-      matrix `noising_matrix.T @ noising_matrix`.
+      matrix `noising_matrix @ noising_matrix.T`.
     stddev: Standard deviation to use for the noise of this privatizer.
     prng_key: An optional PRNGKey array representing the source of randomness.
     dtype: The dtype to use for intermediate noise. If specified, noise will be
@@ -155,7 +155,7 @@ def matrix_factorization_privatizer(
   Returns:
     An optax.GradientTransformation which adds samples from Gaussian correlated
     by `noising_matrix` (i.e., samples from a Gaussian with covariance
-    `noising_matrix.T @ noising_matrix`), keyed by `noise_key`, to its stream
+    `noising_matrix @ noising_matrix.T`), keyed by `noise_key`, to its stream
     of gradients.
   """
   if prng_key is None:
