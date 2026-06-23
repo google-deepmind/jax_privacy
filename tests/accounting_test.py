@@ -233,6 +233,95 @@ class AccountingTest(parameterized.TestCase):
     # as the continuous Gaussian with the same sigma.
     self.assertAlmostEqual(eps_continuous, eps_discrete, places=4)
 
+  # -- Structural-argument validation ----------------------------------------
+  # num_bands flows into math.ceil(iterations / num_bands); the truncated sizes
+  # flow into TruncatedSubsampledGaussianDpEvent. These were previously
+  # unvalidated: num_bands=0 raised an opaque ZeroDivisionError, num_bands<0
+  # raised a misleading "iterations=..." error, and negative sizes were silently
+  # accepted and produced a nonsensical event.
+
+  @parameterized.parameters(0, -1, -16)
+  def test_amplified_bandmf_event_rejects_nonpositive_num_bands(
+      self, num_bands
+  ):
+    with self.assertRaisesRegex(ValueError, rf"num_bands={num_bands} > 0"):
+      accounting.amplified_bandmf_event(
+          1.0, 128, num_bands=num_bands, sampling_prob=0.01
+      )
+
+  @parameterized.parameters(0, -1, -16)
+  def test_truncated_amplified_bandmf_rejects_nonpositive_num_bands(
+      self, num_bands
+  ):
+    with self.assertRaisesRegex(ValueError, rf"num_bands={num_bands} > 0"):
+      accounting.truncated_amplified_bandmf_event(
+          1.0,
+          128,
+          num_bands=num_bands,
+          sampling_prob=0.01,
+          largest_group_size=1000,
+          truncated_batch_size=16,
+      )
+
+  @parameterized.parameters(
+      dict(num_examples=-1, truncated_batch_size=16),
+      dict(num_examples=1000, truncated_batch_size=-1),
+      dict(num_examples=-5, truncated_batch_size=-3),
+  )
+  def test_truncated_dpsgd_event_rejects_negative_sizes(
+      self, num_examples, truncated_batch_size
+  ):
+    with self.assertRaisesRegex(ValueError, r">= 0"):
+      accounting.truncated_dpsgd_event(
+          1.0,
+          10,
+          sampling_prob=0.1,
+          num_examples=num_examples,
+          truncated_batch_size=truncated_batch_size,
+      )
+
+  def test_truncated_amplified_bandmf_rejects_negative_sizes(self):
+    # largest_group_size / truncated_batch_size are forwarded to
+    # truncated_dpsgd_event and validated there.
+    with self.assertRaisesRegex(ValueError, r">= 0"):
+      accounting.truncated_amplified_bandmf_event(
+          1.0,
+          128,
+          num_bands=16,
+          sampling_prob=0.01,
+          largest_group_size=-1,
+          truncated_batch_size=16,
+      )
+
+  def test_amplified_bandmf_event_valid_num_bands_unchanged(self):
+    # Regression: positive num_bands is unaffected. The mechanism runs
+    # rounds = ceil(iterations / num_bands) DP-SGD steps.
+    event = accounting.amplified_bandmf_event(
+        1.0, 128, num_bands=16, sampling_prob=0.01
+    )
+    self.assertIsInstance(event, dp_accounting.dp_event.SelfComposedDpEvent)
+    self.assertEqual(event.count, 8)  # ceil(128 / 16)
+
+  def test_truncated_amplified_bandmf_valid_args_unchanged(self):
+    event = accounting.truncated_amplified_bandmf_event(
+        1.0,
+        128,
+        num_bands=16,
+        sampling_prob=0.01,
+        largest_group_size=1000,
+        truncated_batch_size=16,
+    )
+    self.assertIsInstance(event, dp_accounting.dp_event.SelfComposedDpEvent)
+    self.assertEqual(event.count, 8)  # ceil(128 / 16)
+
+  def test_truncated_dpsgd_event_valid_args_unchanged(self):
+    # Regression: non-negative (incl. zero) sizes still build the event.
+    event = accounting.truncated_dpsgd_event(
+        1.0, 10, sampling_prob=0.1, num_examples=1000, truncated_batch_size=16
+    )
+    self.assertIsInstance(event, dp_accounting.dp_event.SelfComposedDpEvent)
+    self.assertEqual(event.count, 10)
+
 
 if __name__ == "__main__":
   absltest.main()
