@@ -607,6 +607,42 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     true_eps = dp_accounting.get_epsilon_gaussian(1 / mu, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=0.05)
 
+  def test_epsilon_from_gdp_null_is_zero(self):
+    rng = np.random.default_rng(seed=0xBAD5EED)
+    significance = 0.05
+    delta = 1e-5
+    m = 5000
+    in_canary_scores = rng.normal(0, 1, m)
+    out_canary_scores = rng.normal(0, 1, m)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+
+    eps = auditor.epsilon_from_gdp(significance, delta)
+    self.assertLessEqual(eps, 0.1)
+
+  def test_epsilon_from_gdp_separated_is_positive(self):
+    rng = np.random.default_rng(seed=0xBAD5EED)
+    significance = 0.05
+    delta = 1e-5
+    m = 5000
+    in_canary_scores = rng.normal(3.0, 1, m)
+    out_canary_scores = rng.normal(0, 1, m)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+
+    eps = auditor.epsilon_from_gdp(significance, delta)
+    self.assertGreater(eps, 1.0)
+
+  def test_epsilon_from_gdp_small_sample_null_is_zero(self):
+    rng = np.random.default_rng(seed=0xC0FFEE)
+    significance = 0.05
+    delta = 1e-5
+    m = 50
+    in_canary_scores = rng.normal(0, 1, m)
+    out_canary_scores = rng.normal(0, 1, m)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+
+    eps = auditor.epsilon_from_gdp(significance, delta)
+    self.assertLessEqual(eps, 0.1)
+
   @parameterized.product(
       quantiles=(0.025, 0.975, (0.025, 0.975), (0.025, 0.5, 0.975)),
       bootstrap_type=('quantile', 'bias_correction', 'acceleration'),
