@@ -920,12 +920,11 @@ class CanaryScoreAuditor:
     if not bounds.size:
       return 0
 
-    # Eq. 6 in https://arxiv.org/abs/1905.02383. If FPR + FNR is too large,
-    # the bound still holds in reverse (by switching D and D'), which has the
-    # effect of making mu from Eq. 6 negative. Hence we look for the maximum
-    # absolute value of mu.
-    max_mu = np.max(np.abs(_norm.isf(bounds[:, 0]) - _norm.ppf(bounds[:, 1])))
-    if max_mu == 0:
+    # Eq. 6 in https://arxiv.org/abs/1905.02383 gives the forward-rule bound
+    # mu >= isf(FPR) - ppf(FNR). Negative values are no evidence, not a reverse
+    # bound, so do not take an absolute value.
+    max_mu = np.max(_norm.isf(bounds[:, 0]) - _norm.ppf(bounds[:, 1]))
+    if max_mu <= 0:
       return 0
 
     # Conversion of GDP to (eps, delta)-DP. Corollary 2.13 in
