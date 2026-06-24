@@ -181,7 +181,11 @@ def split_and_pad_global_batch(
   return minibatches
 
 
-def pad_to_multiple_of(indices: np.ndarray, multiple: int) -> np.ndarray:
+def pad_to_multiple_of(
+    indices: np.ndarray,
+    multiple: int,
+    microbatch_size: int | None = None,
+) -> np.ndarray:
   """Pads the last dimension of indices to a multiple of multiple.
 
   Example Usage:
@@ -193,6 +197,9 @@ def pad_to_multiple_of(indices: np.ndarray, multiple: int) -> np.ndarray:
     indices: A 1D array of batch indices.
     multiple: A positive integer. The input batch will be padded to a multiple
       of this value.
+    microbatch_size: If set, reorders the padded indices so that padding
+      examples cluster into the last microbatches under Fortran-order reshaping.
+      See `sharding_utils.compute_early_stopping_order`.
 
   Returns:
     A new 1D array of indices padded with -1.
@@ -205,7 +212,10 @@ def pad_to_multiple_of(indices: np.ndarray, multiple: int) -> np.ndarray:
   pad_size = (multiple - curr_size) % multiple
   new_indices = np.full(curr_size + pad_size, -1, dtype=indices.dtype)
   new_indices[:curr_size] = indices
-  return new_indices
+  permutation = sharding_utils.compute_early_stopping_order(
+      new_indices.shape[0], microbatch_size
+  )
+  return new_indices[permutation]
 
 
 class BatchSelectionStrategy(abc.ABC):

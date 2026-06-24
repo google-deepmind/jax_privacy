@@ -86,7 +86,7 @@ def _check_signed_indices(batches):
 
 
 def _check_all_equal(x):
-  assert np.all(x == x[0]), f"Elements of x are not all equal: {x}"
+  assert np.all(x == x[0]), f'Elements of x are not all equal: {x}'
 
 
 class BatchSelectionTest(parameterized.TestCase):
@@ -572,7 +572,9 @@ class BatchPaddingTest(parameterized.TestCase):
     indices = np.random.randint(0, 1000, size=global_batch_size)
     new_indices = batch_selection.pad_to_multiple_of(indices, multiple)
     self.assertEqual(new_indices.size % multiple, 0)
-    np.testing.assert_array_equal(new_indices[new_indices != -1], indices)
+    np.testing.assert_array_equal(
+        np.sort(new_indices[new_indices != -1]), np.sort(indices)
+    )
 
   def test_pad_to_multiple_of_empty_indices(self):
     new_indices = batch_selection.pad_to_multiple_of(
@@ -580,6 +582,63 @@ class BatchPaddingTest(parameterized.TestCase):
     )
     np.testing.assert_array_equal(new_indices, np.array([], dtype=np.int32))
 
+  @parameterized.parameters(
+      (10, 12, 3),
+      (10, 12, 4),
+      (10, 12, 6),
+      (7, 12, 3),
+      (7, 12, 4),
+      (5, 6, 2),
+      (5, 6, 3),
+  )
+  def test_pad_to_multiple_of_with_microbatch_size(
+      self, global_batch_size, multiple, microbatch_size
+  ):
+    indices = np.arange(global_batch_size)
+    padded = batch_selection.pad_to_multiple_of(
+        indices, multiple, microbatch_size=microbatch_size
+    )
+    padded_size = padded.shape[0]
+    self.assertEqual(padded_size % multiple, 0)
+    self.assertEqual(padded_size % microbatch_size, 0)
+    # All original indices are preserved.
+    np.testing.assert_array_equal(
+        np.sort(padded[padded != -1]), np.sort(indices)
+    )
+    # Simulate the Fortran-order reshape that microbatching performs.
+    num_microbatches = padded_size // microbatch_size
+    microbatches = padded.reshape(num_microbatches, microbatch_size, order='F')
+    # Padding should be clustered in the last microbatch(es).
+    is_padding = microbatches == -1
+    for i in range(num_microbatches):
+      if is_padding[i].any():
+        # Every subsequent microbatch must be all-padding.
+        for j in range(i + 1, num_microbatches):
+          self.assertTrue(
+              is_padding[j].all(),
+              f'Microbatch {j} has real examples after microbatch {i} has'
+              ' padding.',
+          )
+        break
 
-if __name__ == "__main__":
+  def test_pad_to_multiple_of_microbatch_worked_example(self):
+    """Worked example: 10 real indices padded to 12 with microbatch_size=3."""
+    indices = np.arange(10)
+    padded = batch_selection.pad_to_multiple_of(
+        indices, multiple=12, microbatch_size=3
+    )
+    # Simulate the Fortran-order reshape: (12,) -> (4, 3).
+    microbatches = padded.reshape(4, 3, order='F')
+    # Microbatches 0-2 should be all real data; microbatch 3 should contain
+    # the 2 padding examples.
+    for i in range(3):
+      self.assertTrue(
+          (microbatches[i] != -1).all(),
+          f'Microbatch {i} should be all real data, got {microbatches[i]}.',
+      )
+    num_padding_in_last = (microbatches[3] == -1).sum()
+    self.assertEqual(num_padding_in_last, 2)
+
+
+if __name__ == '__main__':
   absltest.main()
