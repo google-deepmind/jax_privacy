@@ -135,7 +135,8 @@ class DPTrainer:
     optimizer: An ``AugmentedGradientTransformation`` or a plain
       ``optax.GradientTransformation``.
     padding_multiple: If set, batch sizes are padded to a multiple of this
-      value.
+      value. Padding reduces JIT recompilations from variable Poisson batch
+      sizes, since each unique batch shape triggers a separate XLA compilation.
   """
 
   plan: execution_plan.DPExecutionPlan
@@ -144,7 +145,7 @@ class DPTrainer:
       aug_optimizers.AugmentedGradientTransformation
       | optax.GradientTransformation
   )
-  padding_multiple: int = 1
+  padding_multiple: int = 32
 
   def train_step(
       self,
