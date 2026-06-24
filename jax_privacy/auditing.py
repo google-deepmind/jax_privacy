@@ -901,15 +901,17 @@ class CanaryScoreAuditor:
     if eps_tol <= 0:
       raise ValueError(f'eps_tol must be positive, got {eps_tol}.')
 
-    reverse_auditor = CanaryScoreAuditor(
+    _, reverse_tn_counts, reverse_fn_counts = _get_tn_fn_counts(
         self._out_canary_scores, self._in_canary_scores
     )
-    alpha = significance / (
-        2 * (len(self._fn_counts) + len(reverse_auditor._fn_counts))
-    )
+    alpha = significance / (2 * (len(self._fn_counts) + len(reverse_fn_counts)))
     max_mu = max(
-        self._mu_from_gdp_one_sided(alpha, delta),
-        reverse_auditor._mu_from_gdp_one_sided(alpha, delta),
+        self._mu_from_gdp_counts(
+            self._fn_counts, self._tn_counts, alpha, delta
+        ),
+        self._mu_from_gdp_counts(
+            reverse_fn_counts, reverse_tn_counts, alpha, delta
+        ),
     )
     if max_mu == 0:
       return 0
@@ -930,17 +932,19 @@ class CanaryScoreAuditor:
 
     return scipy.optimize.brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
 
-  def _mu_from_gdp_one_sided(
-      self,
+  @staticmethod
+  def _mu_from_gdp_counts(
+      fn_counts: np.ndarray,
+      tn_counts: np.ndarray,
       alpha: float,
       delta: float,
   ) -> float:
     """Calculates a one-sided GDP lower bound on mu."""
-    n_pos = self._fn_counts[-1]
-    n_neg = self._tn_counts[-1]
+    n_pos = fn_counts[-1]
+    n_neg = tn_counts[-1]
 
-    fnr_ubs = _clopper_pearson_upper(self._fn_counts, n_pos, alpha)
-    fpr_ubs = _clopper_pearson_upper(n_neg - self._tn_counts, n_neg, alpha)
+    fnr_ubs = _clopper_pearson_upper(fn_counts, n_pos, alpha)
+    fpr_ubs = _clopper_pearson_upper(n_neg - tn_counts, n_neg, alpha)
 
     keep = np.maximum(fpr_ubs, fnr_ubs) < 1 - delta
     if not np.any(keep):
