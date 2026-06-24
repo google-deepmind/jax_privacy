@@ -99,10 +99,16 @@ class DPKerasConfig:
         to memory constraints, therefore gradient accumulation technique is very
         useful during DP training.
       train_steps: The number of training steps (optimizer update steps). If you
-        try to train the model for more steps, it will fail. If you train by
-        epochs, then it is epochs * (train_size // batch_size). If you train
-        while the dataset iterator is not over then it is the length of the
-        dataset iterator.
+        try to train the model for more steps, it will fail. Because one
+        optimizer update consumes `gradient_accumulation_steps` batches, this is
+        the number of optimizer updates, not the number of (micro-)batches. If
+        you train by epochs, then it is epochs * (train_size //
+        effective_batch_size), where effective_batch_size = batch_size *
+        gradient_accumulation_steps (this reduces to epochs * (train_size //
+        batch_size) only when gradient_accumulation_steps == 1). If you train
+        while the dataset iterator is not over, then it is the number of
+        optimizer updates the iterator produces, i.e. its (micro-)batch length
+        // gradient_accumulation_steps.
       train_size: The number of training examples in the dataset. If you repeat
         the examples in your dataset iterator, it should be the number of
         training examples in the original dataset before repeating.
