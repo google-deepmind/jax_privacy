@@ -631,6 +631,18 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     eps = auditor.epsilon_from_gdp(significance, delta)
     self.assertGreater(eps, 1.0)
 
+  def test_epsilon_from_gdp_reverse_separated_is_positive(self):
+    rng = np.random.default_rng(seed=0xBAD5EED)
+    significance = 0.05
+    delta = 1e-5
+    m = 5000
+    in_canary_scores = rng.normal(0.0, 1, m)
+    out_canary_scores = rng.normal(3.0, 1, m)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+
+    eps = auditor.epsilon_from_gdp(significance, delta)
+    self.assertGreater(eps, 1.0)
+
   def test_epsilon_from_gdp_small_sample_null_is_zero(self):
     rng = np.random.default_rng(seed=0xC0FFEE)
     significance = 0.05
