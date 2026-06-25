@@ -92,6 +92,9 @@ class TrainingState:
   noise_state: NoiseState
 
 
+CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
+
+
 def _get_batch(dataset: Batch, indices: np.ndarray) -> tuple[Batch, np.ndarray]:
   """Retrieves a batch from a PyTree dataset, zeroing padding examples.
 
@@ -134,8 +137,8 @@ class DPTrainer:
     loss_fn: The per-example loss function.  See :class:`LossFn`.
     optimizer: An ``AugmentedGradientTransformation`` or a plain
       ``optax.GradientTransformation``.
-    padding_multiple: If set, batch sizes are padded to a multiple of this
-      value.
+    padding_multiple: If set, batch sizes are padded to a multiple of this value
+      to limit JIT recompilations from varying Poisson batch sizes.
   """
 
   plan: execution_plan.DPExecutionPlan
@@ -144,7 +147,7 @@ class DPTrainer:
       aug_optimizers.AugmentedGradientTransformation
       | optax.GradientTransformation
   )
-  padding_multiple: int = 1
+  padding_multiple: int = 32
 
   def train_step(
       self,
@@ -209,9 +212,7 @@ class DPTrainer:
       dataset: Batch,
       params: Params,
       *,
-      callback: (
-          Callable[[int, TrainingState, PerExampleAux], None] | None
-      ) = None,
+      callback: CallbackFn | None = None,
       rng: np.random.Generator | int | None = None,
   ) -> TrainingState:
     """Runs an end-to-end differentially private training loop.
