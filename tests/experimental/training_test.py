@@ -126,6 +126,16 @@ class DPTrainerTest(parameterized.TestCase):
 
     self.assertEqual(int(state.step), 2)
 
+  def test_default_padding_multiple(self):
+    """Default padding_multiple should be 32 to prevent JIT recompilation."""
+    plan = _make_plan(iterations=1)
+    trainer = training.DPTrainer(
+        plan=plan,
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+    )
+    self.assertEqual(trainer.padding_multiple, 32)
+
   def test_zero_iterations_config_raises(self):
     """BandMFConfig requires iterations >= 1."""
     with self.assertRaises(Exception):
