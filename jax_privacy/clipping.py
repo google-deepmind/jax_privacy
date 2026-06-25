@@ -26,7 +26,6 @@ import chex
 import dp_accounting
 import jax
 import jax.numpy as jnp
-from jax_privacy import _validate
 import optax
 from optax import microbatching
 
@@ -87,6 +86,8 @@ def clip_pytree(
     pytree: PyTree,
     clip_norm: float | PyTree,
     rescale_to_unit_norm: bool = False,
+    nan_safe: bool = True,
+    return_zero: bool = False,
 ):
   """Clips a PyTree of jax arrays.
 
@@ -109,14 +110,9 @@ def clip_pytree(
 
   Formal Guarantees:
 
-  - When the input PyTree is all-finite, the output PyTree will have norm at
-    most `clip_norm` if `rescale_to_unit_norm` is False, and at most 1.0 if
-    it is True. For low-precision leaves (e.g., float16), the norm bound may
-    be exceeded by up to the leaf dtype's machine epsilon due to rounding.
+  - The output PyTree will have norm at most `clip_norm` if
+    `rescale_to_unit_norm` is False, and norm at most 1.0 if it is True.
   - The output PyTree will have the same structure+dtypes as the input PyTree.
-  - The output PyTree may contain NaN or inf values, but only when the
-    returned L2 norm is non-finite (i.e., NaN or inf). If the returned L2
-    norm is finite, the output is guaranteed to be all-finite.
 
   Edge Case Handling:
 
@@ -140,6 +136,13 @@ def clip_pytree(
     rescale_to_unit_norm: If True, the output PyTree's norm is rescaled by `1.0
       / clip_norm` after potential clipping. If False, the output PyTree has
       norm at most `clip_norm`.
+    nan_safe: If True, NaNs and +/- infs are converted to 0 before clipping.
+      Must be True to preserve the formal guarantees in the presence of NaNs,
+      although it does require potentially additional computation. If False, the
+      NaNs in input PyTree will be preserved in the output PyTree. +/- infs will
+      be converted to NaNs as well.
+    return_zero: If True, the output PyTree is guaranteed to be zero no matter
+      what the inputs are. Does not influence the formal guarantees.
 
   Returns:
     A tuple `(clipped_pytree, original_l2_norm)`, where `clipped_pytree` is the
@@ -152,6 +155,8 @@ def clip_pytree(
     recursive_clip = functools.partial(
         clip_pytree,
         rescale_to_unit_norm=rescale_to_unit_norm,
+        nan_safe=nan_safe,
+        return_zero=return_zero,
     )
     results = jax.tree.map(
         lambda c_norm, p_tree: ClippedTreeAndNorm(
@@ -169,6 +174,9 @@ def clip_pytree(
   if isinstance(clip_norm, numbers.Real) and clip_norm < 0:
     raise ValueError(f'clip_norm must be non-negative, got {clip_norm=}.')
 
+  if nan_safe:
+    nan_to_num = lambda x: jnp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    pytree = jax.tree.map(nan_to_num, pytree)
   clip_norm = jnp.maximum(clip_norm, 0.0)
   l2_norm = optax.tree.norm(pytree)
   scale = jnp.minimum(1.0, clip_norm / l2_norm)
@@ -176,25 +184,9 @@ def clip_pytree(
     scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
   # If l2_norm is 0 or nan, set scale to 0.0.
   scale = jnp.nan_to_num(scale, nan=0.0, posinf=0.0)
-  # Multiply in float32 (scale's dtype) to avoid float16 overflow, then cast.
-  clipped = jax.tree.map(
-      lambda x: (scale * x.astype(scale.dtype)).astype(x.dtype), pytree
-  )
-  return clipped, l2_norm.astype(jnp.float32)
-
-
-def _maybe_zero(clipped, l2_norm, is_padding, nan_safe=True):
-  """Zeros out padding and (optionally) non-finite examples."""
-  should_zero = is_padding
-  if nan_safe:
-    # l2_norm may be a scalar or a pytree (per-layer clipping).
-    norm_leaves = jax.tree.leaves(l2_norm)
-    all_finite = functools.reduce(
-        lambda a, b: a & b,
-        (jnp.isfinite(n) for n in norm_leaves),
-    )
-    should_zero = should_zero | ~all_finite
-  return jax.tree.map(lambda x: jnp.where(should_zero, 0, x), clipped)
+  clipped = jax.tree.map(lambda x: jnp.astype(scale, x.dtype) * x, pytree)
+  maybe_zero = lambda x: jax.lax.select(return_zero, jnp.zeros_like(x), x)
+  return jax.tree.map(maybe_zero, clipped), l2_norm.astype(jnp.float32)
 
 
 def _adjusted_clip_norm(
@@ -235,10 +227,24 @@ def _adjusted_clip_norm(
   return adjusted
 
 
+def _check_x64_enabled():
+  """Raises ValueError if JAX 64-bit mode is not enabled."""
+  if not jax.config.jax_enable_x64:
+    raise ValueError(
+        'grid_scale requires 64-bit mode. Call '
+        "jax.config.update('jax_enable_x64', True) before using "
+        'grid_scale, otherwise jnp.int64 is silently truncated to '
+        'int32.'
+    )
+
+
 def clip_and_round_to_grid(
     gradient: PyTree,
     l2_clip_norm: float,
     grid_scale: int,
+    *,
+    nan_safe: bool = True,
+    return_zero: bool = False,
 ) -> tuple[PyTree, jax.Array]:
   """Clips a gradient and rounds it to an integer grid.
 
@@ -260,6 +266,10 @@ def clip_and_round_to_grid(
     gradient: A pytree of gradient arrays for a single example.
     l2_clip_norm: The desired L2 clip norm (in original units).
     grid_scale: Number of integer grid steps corresponding to l2_clip_norm.
+    nan_safe: If True, NaNs and +/- infs are converted to 0 before clipping. See
+      ``clip_pytree`` for details.
+    return_zero: If True, the output is guaranteed to be zero regardless of
+      inputs.  See ``clip_pytree`` for details.
 
   Returns:
     A tuple ``(rounded, l2_norm)`` where ``rounded`` is a pytree of int64
@@ -270,10 +280,12 @@ def clip_and_round_to_grid(
     ValueError: If grid_scale is too small relative to the number of
       parameters (the rounding error would exceed the clip norm).
   """
-  _validate.x64_enabled()
+  _check_x64_enabled()
   num_params = sum(x.size for x in jax.tree.leaves(gradient))
   adj_clip_norm = _adjusted_clip_norm(l2_clip_norm, grid_scale, num_params)
-  clipped, l2_norm = clip_pytree(gradient, adj_clip_norm)
+  clipped, l2_norm = clip_pytree(
+      gradient, adj_clip_norm, nan_safe=nan_safe, return_zero=return_zero
+  )
   scale = grid_scale / l2_clip_norm
   rounded = jax.tree.map(
       lambda g: jnp.round(g * scale).astype(jnp.int64), clipped
@@ -298,6 +310,27 @@ def _with_extra_batch_axis(
     return fun(*args_with_group_axis, **kwargs)
 
   return wrapped_fun
+
+
+def _validate_batch_args(batch_argnums, args):
+  """Validates the arguments to the per-example gradient clipping function."""
+  if isinstance(batch_argnums, int):
+    batch_argnums = (batch_argnums,)
+  max_argnum = max(batch_argnums)
+  if len(args) <= max_argnum:
+    raise ValueError(
+        f'Unable to find argnum={max_argnum}, was given {len(args)} args.'
+    )
+
+  batch_args = [args[i] for i in batch_argnums]
+  batch_axis_sizes = set(
+      jax.tree.flatten(jax.tree.map(lambda x: x.shape[0], batch_args))[0]
+  )
+  if len(batch_axis_sizes) > 1:
+    raise ValueError(
+        'Batch axis must have the same size for all inputs in batch_argnums, '
+        f'got {batch_axis_sizes}.'
+    )
 
 
 def _normalize_fun_to_return_aux(fun, has_aux):
@@ -427,8 +460,9 @@ def clipped_fun(
       on the groups within each microbatch being vectorized using `vmap`. This
       can be used to reduce peak memory usage at the cost of increased
       sequential computation.
-    nan_safe: If True, per-example outputs with non-finite L2 norms (NaN or inf)
-      are zeroed out before aggregation, preserving the formal guarantees.
+    nan_safe: If True, the formal guarantees of the returned Callable still
+      holds in the presence of NaNs and infs. See `clip_pytree` for more details
+      on this argument.
     dtype: Optional dtype for the clipped+aggregated PyTree. If None, the dtype
       will be the same as the dtypes of the function output. Can be useful to
       avoid overflow issues when using low-precision dtypes as the transformed
@@ -461,17 +495,26 @@ def clipped_fun(
   if isinstance(batch_argnums, int):
     batch_argnums = (batch_argnums,)
   if grid_scale is not None:
-    _validate.discrete_clipping(
-        grid_scale,
-        rescale_to_unit_norm,
-        normalize_by,
-        l2_clip_norm,
-    )
+    if rescale_to_unit_norm:
+      raise ValueError(
+          'rescale_to_unit_norm is not compatible with grid_scale.'
+      )
+    if normalize_by != 1.0:
+      raise ValueError(
+          'normalize_by is not compatible with grid_scale. Normalization '
+          'should be applied after noise addition.'
+      )
+    if not jnp.isscalar(l2_clip_norm):
+      raise ValueError(
+          'Per-layer PyTree clipping is not compatible with grid scale.'
+          'l2_clip_norm must be a Real scalar.'
+      )
+    _check_x64_enabled()
 
   fun = _normalize_fun_to_return_aux(fun, has_aux)
 
   def clipped_fn(*args, **kwargs):
-    _validate.batch([args[i] for i in batch_argnums])
+    _validate_batch_args(batch_argnums, args)
     is_padding_example = kwargs.get('is_padding_example', None)
     batch_size = jax.tree.leaves(args[batch_argnums[0]])[0].shape[0]
     if is_padding_example is None:
@@ -480,13 +523,26 @@ def clipped_fun(
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
-      value = optax.tree.cast(value, dtype)
       if grid_scale is not None:
-        clipped, norm = clip_and_round_to_grid(value, l2_clip_norm, grid_scale)
+        clipped_value, l2_norm = clip_and_round_to_grid(
+            value,
+            l2_clip_norm,
+            grid_scale,
+            nan_safe=nan_safe,
+            return_zero=is_padding_example,
+        )
       else:
-        clipped, norm = clip_pytree(value, l2_clip_norm, rescale_to_unit_norm)
-      clipped = _maybe_zero(clipped, norm, is_padding_example, nan_safe)
-      return clipped, aux, norm
+        value = optax.tree.cast(value, dtype)
+        clipped_value, l2_norm = clip_pytree(
+            value,
+            clip_norm=l2_clip_norm,
+            rescale_to_unit_norm=rescale_to_unit_norm,
+            nan_safe=nan_safe,
+            # See https://arxiv.org/pdf/2411.04205 for info on why this is
+            # useful.
+            return_zero=is_padding_example,
+        )
+      return clipped_value, aux, l2_norm
 
     num_real_mb = _num_real_microbatches(is_padding_example, microbatch_size)
     sum_ = microbatching.AccumulationType.SUM
@@ -712,8 +768,9 @@ def clipped_grad(
       microbatch_size=100, then the input will be broken into 5 microbatches of
       100 users, and when processing a microbatch, `fun` will be invoked 100
       times (in parallel with vmap) on groups of 7 examples.
-    nan_safe: If True, per-example gradients with non-finite L2 norms (NaN or
-      inf) are zeroed out before aggregation, preserving the formal guarantees.
+    nan_safe: If True, the formal guarantees of the returned Callable still
+      holds in the presence of NaNs and infs. See `clip_pytree` for more details
+      on this argument.
     dtype: Optional dtype for the returned gradient. If None, the dtype will be
       the same as the dtypes of the gradient function. Can be useful to avoid
       overflow issues when using low-precision dtypes as the returned function

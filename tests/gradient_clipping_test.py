@@ -72,7 +72,7 @@ class GradientClippingTest(parameterized.TestCase):
     params = jnp.zeros(3)
     x1 = jnp.zeros((10, 3))
     x2 = jnp.zeros(5)
-    with self.assertRaisesRegex(ValueError, 'same size along axis 0'):
+    with self.assertRaisesRegex(ValueError, 'Batch axis'):
       gradient_clipping.clipped_grad(
           mean_quadratic_loss,
           l2_clip_norm=1.0,

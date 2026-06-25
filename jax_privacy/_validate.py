@@ -15,7 +15,6 @@
 """Centralized validation utilities for jax_privacy."""
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -126,38 +125,3 @@ def multi_owner(example_ids, user_ids):
   pairs = np.stack([example_ids, user_ids], axis=1)
   if len(np.unique(pairs, axis=0)) < len(pairs):
     raise ValueError('Duplicate (example, user) id pairs are not allowed.')
-
-
-def x64_enabled():
-  """Validates that 64-bit mode is enabled."""
-  if not jax.config.jax_enable_x64:
-    raise ValueError(
-        'grid_scale requires 64-bit mode. Call '
-        "jax.config.update('jax_enable_x64', True) before using "
-        'grid_scale, otherwise jnp.int64 is silently truncated to '
-        'int32.'
-    )
-
-
-def discrete_clipping(
-    grid_scale,
-    rescale_to_unit_norm=False,
-    normalize_by=1.0,
-    l2_clip_norm=None,
-):
-  """Validates discrete Gaussian clipping parameters."""
-  if grid_scale is None:
-    return
-  if rescale_to_unit_norm:
-    raise ValueError('rescale_to_unit_norm cannot be set with grid_scale.')
-  if normalize_by != 1.0:
-    raise ValueError(
-        'normalize_by is not compatible with grid_scale. Normalization '
-        'should be applied after noise addition.'
-    )
-  if l2_clip_norm is not None and not jnp.isscalar(l2_clip_norm):
-    raise ValueError(
-        'Per-layer PyTree clipping is not compatible with grid scale. '
-        'l2_clip_norm must be a Real scalar.'
-    )
-  x64_enabled()

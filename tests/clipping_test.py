@@ -46,13 +46,15 @@ class ClipPyTreeTest(parameterized.TestCase):
           pytree=PYTREE_STRUCTS,
           clip_norm=[0.0, 1.0, 2.0, jnp.inf],
           rescale_to_unit_norm=[True, False],
+          nan_safe=[True, False],
+          return_zero=[True, False],
       )
   )
   def test_clip_pytree_output_dtype_matches_input(self, pytree, **kwargs):
     pytree = optax.tree.random_like(jax.random.key(0), pytree)
     clipped, _ = clipping.clip_pytree(pytree, **kwargs)
 
-    jitted = jax.jit(clipping.clip_pytree, static_argnums=(2,))
+    jitted = jax.jit(clipping.clip_pytree, static_argnums=(2, 3))
     clipped2, _ = jitted(pytree, **kwargs)
     chex.assert_trees_all_equal_shapes_and_dtypes(pytree, clipped, clipped2)
 
@@ -61,18 +63,20 @@ class ClipPyTreeTest(parameterized.TestCase):
           pytree=PYTREE_STRUCTS,
           clip_norm=[0.0, 1.0, 2.0, jnp.inf],
           rescale_to_unit_norm=[True, False],
+          nan_safe=[True, False],
+          return_zero=[True, False],
       )
   )
   def test_clip_pytree_has_bounded_norm(self, pytree, **kwargs):
     pytree = optax.tree.random_like(jax.random.key(0), pytree)
     clipped, _ = clipping.clip_pytree(pytree, **kwargs)
 
-    # Float16/bfloat16 rounding can exceed the bound by ~1 ULP.
-    atol = max(jnp.finfo(x.dtype).eps for x in jax.tree.leaves(clipped))
+    if kwargs['return_zero']:
+      chex.assert_trees_all_close(clipped, optax.tree.zeros_like(pytree))
     if kwargs['rescale_to_unit_norm']:
-      self.assertLessEqual(optax.tree.norm(clipped), 1.0 + atol)
+      self.assertLessEqual(optax.tree.norm(clipped), 1.0)
     else:
-      self.assertLessEqual(optax.tree.norm(clipped), kwargs['clip_norm'] + atol)
+      self.assertLessEqual(optax.tree.norm(clipped), kwargs['clip_norm'])
 
   @parameterized.parameters(*cartesian_product(pytree=PYTREE_STRUCTS))
   def test_clip_pytree_with_large_clip_norm(self, pytree):
@@ -103,7 +107,7 @@ class ClipPyTreeTest(parameterized.TestCase):
     zero_tree = optax.tree.zeros_like(pytree)
 
     clipped, norm = clipping.clip_pytree(
-        zero_tree, clip_norm, rescale_to_unit_norm=False
+        zero_tree, clip_norm, rescale_to_unit_norm=False, nan_safe=True
     )
     self.assertAlmostEqual(norm, 0.0)
     chex.assert_trees_all_close(clipped, zero_tree)
@@ -116,31 +120,50 @@ class ClipPyTreeTest(parameterized.TestCase):
     chex.assert_trees_all_close(clipped_rescaled, zero_tree)
     self.assertAlmostEqual(optax.tree.norm(clipped_rescaled), 0.0)
 
-  @parameterized.parameters([jnp.nan, jnp.inf, -jnp.inf])
-  def test_clip_pytree_non_finite_input_returns_non_finite_norm(self, bad):
-    """Output may be non-finite, but only when the returned norm is too."""
-    pytree = jnp.array([3.0, 0.0, bad, 2.0])
-    _, norm = clipping.clip_pytree(pytree, 1.0)
-    self.assertFalse(jnp.isfinite(norm))
-
   @parameterized.parameters(
       *cartesian_product(
-          clip_norm=[1e-5, 1.2e-5, 1e-6],
-          dtype=[jnp.float16, jnp.bfloat16],
+          clip_norm=[0.0, 1.0, 2.0, jnp.inf],
+          return_zero=[False, True],
+          rescale_to_unit_norm=[False, True],
       )
   )
-  def test_clip_pytree_float16_rescale_no_overflow(self, clip_norm, dtype):
-    """Scale factor may exceed dtype max; output must still be bounded."""
-    pytree = jnp.array([1e-5], dtype=dtype)
-    clipped, norm = clipping.clip_pytree(
-        pytree,
-        clip_norm,
-        rescale_to_unit_norm=True,
-    )
-    self.assertEqual(clipped.dtype, dtype)
-    self.assertTrue(jnp.isfinite(norm))
+  def test_nan_safety(self, **kwargs):
+    pytree_nan = {
+        'a': np.array(3.0),
+        'b': np.array(jnp.nan),
+    }
+    pytree_inf = {
+        'a': np.array(3.0),
+        'b': np.array(jnp.inf),
+    }
+
+    clipped, _ = clipping.clip_pytree(pytree_nan, nan_safe=True, **kwargs)
     chex.assert_tree_all_finite(clipped)
-    self.assertLessEqual(optax.tree.norm(clipped), 1.0)
+
+    clipped, _ = clipping.clip_pytree(pytree_inf, nan_safe=True, **kwargs)
+    chex.assert_tree_all_finite(clipped)
+
+  def test_clip_pytree_with_nan(self):
+    """Tests clip_pytree when the input pytree has nan."""
+    array = jnp.array([3.0, 0.0, 1.0, jnp.nan, 2.0])
+    array_no_nan = jnp.array([3.0, 0.0, 1.0, 0.0, 2.0])
+    clip_norm = 1.0
+    clipped = clipping.clip_pytree(array, clip_norm)[0]
+    self.assertLessEqual(jnp.linalg.norm(clipped), clip_norm)
+
+    expected = clipping.clip_pytree(array_no_nan, clip_norm)[0]
+    chex.assert_trees_all_close(clipped, expected)
+
+  def test_clip_pytree_with_inf(self):
+    """Tests clip_pytree when the input pytree has nan."""
+    pytree = jnp.array([3.0, 0.0, jnp.inf, -jnp.inf, 2.0])
+    pytree_no_inf = jnp.array([3.0, 0.0, 0.0, 0.0, 2.0])
+    clip_norm = 1.0
+    clipped = clipping.clip_pytree(pytree, clip_norm)[0]
+    expected = clipping.clip_pytree(pytree_no_inf, clip_norm)[0]
+    chex.assert_trees_all_close(clipped, expected)
+
+    self.assertLessEqual(jnp.linalg.norm(clipped), clip_norm)
 
   def test_clip_pytree_per_layer_full_clip_norm_tree(self):
     """Tests per-layer clipping with complete clip_norm tree."""
@@ -520,35 +543,6 @@ class ClipTransformTest(parameterized.TestCase):
     self.assertEqual(aux_2d.shape, (15, 4))
     self.assertEqual(aux_3d.shape, (15, 4, 9))
     self.assertEqual(aux_4d.shape, (15, 4, 9, 10))
-
-  @parameterized.parameters(
-      *cartesian_product(
-          bad_value=[jnp.nan, jnp.inf, -jnp.inf],
-          clip_norm=[0.0, 1.0],
-          rescale_to_unit_norm=[True, False],
-      )
-  )
-  def test_nan_safe_norm_check_produces_finite_output(
-      self, bad_value, clip_norm, rescale_to_unit_norm
-  ):
-    """nan_safe zeros NaN/inf/overflow examples and obeys sensitivity."""
-    data = jax.random.normal(jax.random.key(0), (8, 4))
-    data_with_bad = data.at[3].set(bad_value)
-
-    cf = clipping.clipped_fun(
-        single_example_fun,
-        batch_argnums=0,
-        keep_batch_dim=False,
-        l2_clip_norm=clip_norm,
-        rescale_to_unit_norm=rescale_to_unit_norm,
-        nan_safe=True,
-    )
-
-    # Clipped output should be finite even if input is not.
-    chex.assert_tree_all_finite(cf(data_with_bad))
-
-    # Clipped value for only the bad example should be zero.
-    chex.assert_trees_all_close(cf(data_with_bad[3:4]), 0)
 
 
 class ClippedFunPerLayerTest(parameterized.TestCase):
