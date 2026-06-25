@@ -22,7 +22,7 @@ JIT-compiled or ahead-of-time compiled.
 
 from collections.abc import Callable
 import dataclasses
-from typing import Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
 import chex
 import jax
@@ -213,24 +213,39 @@ class DPTrainer:
           Callable[[int, TrainingState, PerExampleAux], None] | None
       ) = None,
       rng: np.random.Generator | int | None = None,
+      shard_options: Any = None,
+      preload: bool | None = None,
+      max_workers: int | None = None,
   ) -> TrainingState:
     """Runs an end-to-end differentially private training loop.
 
     Args:
-      dataset: The training dataset, as a PyTree of arrays.
+      dataset: The training dataset.  This can be either a PyTree of NumPy
+        arrays (all data in memory) or a PyGrain ``MapDataset``.  When a
+        ``MapDataset`` is provided, PyGrain must be installed; it is not
+        required otherwise.
       params: Initial parameter PyTree.
       callback: Called after each step as ``callback(step, state, aux)``.
         ``step`` is a Python int.
       rng: Optional random seed or ``numpy.random.Generator`` for
         reproducibility.
+      shard_options: If specified, only a subset of the batch will be loaded
+        based on shard_index and shard_count. In multi-controller JAX setups,
+        use ``grain.ShardByJaxProcess()`` to have each process load a disjoint
+        subset of the batch.  Defaults to no sharding.
+      preload: Whether to materialize a PyGrain ``MapDataset`` into host memory
+        for fast numpy indexing.  ``True`` forces preloading, ``False`` forces
+        streaming, and ``None`` (default) auto-decides based on estimated
+        dataset size (preloads if < 1 GiB).
+      max_workers: Maximum thread pool workers for concurrent element loading.
+        Used in both preload and streaming modes.  Ignored when the dataset is
+        an in-memory PyTree.
 
     Returns:
       Final ``TrainingState``.
     """
     rng = np.random.default_rng(rng)
     loss_rng = jax.random.key(int(rng.integers(2**63)))
-
-    num_examples = _validate.batch(dataset)
 
     optimizer = aug_optimizers.as_augmented_optimizer(self.optimizer)
 
@@ -241,25 +256,45 @@ class DPTrainer:
         noise_state=self.plan.noise_addition_transform.init(params),
     )
 
-    batch_iterator = self.plan.batch_selection_strategy.batch_iterator(
-        num_examples, rng=rng
-    )
-
     jit_step = jax.jit(self.train_step)
 
-    step = 0
-    for indices in batch_iterator:
-      indices = batch_selection.pad_to_multiple_of(
-          indices, self.padding_multiple
-      )
-      batch, is_padding_example = _get_batch(dataset, indices)
+    # Lazy import: only pull in the data loader when the dataset is a
+    # PyGrain MapDataset.  Detection is by class name, not import, so
+    # users who don't have grain installed never trigger this path.
+    from jax_privacy.experimental import _data_loader  # pylint: disable=g-import-not-at-top,import-outside-toplevel,protected-access
 
+    if _data_loader.is_pygrain_map_dataset(dataset):
+      batches = _data_loader.iterate_batches(
+          dataset,
+          self.plan.batch_selection_strategy,
+          rng,
+          shard_options=shard_options,
+          pad_to_multiple_of=self.padding_multiple,
+          preload=preload,
+          max_workers=max_workers,
+      )
+    else:
+      num_examples = _validate.batch(dataset)
+      batches = self._in_memory_batches(dataset, num_examples, rng)
+
+    step = 0
+    for batch, is_padding_example in batches:
       state, aux = jit_step(state, batch, is_padding_example, loss_rng=loss_rng)
       step += 1
 
-      del indices, batch, is_padding_example
+      del batch, is_padding_example
 
       if callback is not None:
         callback(step, state, aux)
 
     return state
+
+  def _in_memory_batches(self, dataset, num_examples, rng):
+    """Yields ``(batch, is_padding)`` tuples from an in-memory PyTree."""
+    for indices in self.plan.batch_selection_strategy.batch_iterator(
+        num_examples, rng=rng
+    ):
+      indices = batch_selection.pad_to_multiple_of(
+          indices, self.padding_multiple
+      )
+      yield _get_batch(dataset, indices)
