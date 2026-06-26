@@ -22,6 +22,7 @@ from . import experimental
 from . import matrix_factorization
 from . import noise_addition
 from . import optimizers
+from . import training
 
 # pylint: disable=g-importing-member
 # Carefully selected member imports for the top-level public API.

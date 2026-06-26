@@ -19,6 +19,16 @@ Core Library
 .. currentmodule:: jax_privacy
 
 
+Higher-level APIs
+-----------------
+.. autosummary::
+  :toctree: _autosummary_output
+  :nosignatures:
+
+  training
+  execution_plan
+  keras_api
+
 Individual Components
 ---------------------
 .. autosummary::
@@ -34,16 +44,6 @@ Individual Components
   optimizers
   auditing
   matrix_factorization
-
-Higher-level APIs
------------------
-.. autosummary::
-  :toctree: _autosummary_output
-  :nosignatures:
-
-  execution_plan
-  experimental.training
-  keras_api
 
 Experimental Modules
 --------------------

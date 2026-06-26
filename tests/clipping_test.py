@@ -443,7 +443,7 @@ class ClipTransformTest(parameterized.TestCase):
     relation = dp_accounting.NeighboringRelation.REPLACE_ONE
     self.assertLessEqual(diff, sum_clip_mean.sensitivity(relation) + 1e-6)
 
-    is_padding_example_nbr = jnp.zeros(data.shape[0], jnp.bool_).at[3].set(1)
+    is_padding_example_nbr = jnp.zeros(data.shape[0], jnp.bool_).at[3].set(True)
     relation = dp_accounting.NeighboringRelation.REPLACE_SPECIAL
     new = sum_clip_mean(data, is_padding_example=is_padding_example_nbr)
     diff = jnp.linalg.norm(sum_clip_mean(data) - new)
