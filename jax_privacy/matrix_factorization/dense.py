@@ -112,7 +112,7 @@ def get_orthogonal_mask(n: int, epochs: int = 1) -> jax.Array:
   b = n // epochs
   for i in range(b):
     mask[i::b, i::b] = np.eye(epochs)
-  return jnp.array(mask)
+  return mask
 
 
 def _mean_loss_and_gradient(
@@ -213,7 +213,7 @@ def optimize(
   Returns:
     The strategy matrix C that minimizes expected total squared error.
   """
-  A = jnp.tri(n) if A is None else A
+  A = np.tri(n) if A is None else A
   mask = get_orthogonal_mask(n, epochs)
   if bands is not None:
     mask = mask * sensitivity.banded_symmetric_mask(n, bands)
@@ -247,7 +247,7 @@ def optimize(
 
   X = optimization.optimize(
       loss_and_projected_grad,
-      jnp.eye(n, dtype=jnp.float64) / epochs,
+      np.eye(n, dtype=np.float64) / epochs,
       max_optimizer_steps=max_optimizer_steps,
       grad=True,
       callback=callback,

@@ -23,10 +23,12 @@ doing the calculations on the materialized `n**2` matrices.
 import concurrent
 import dataclasses
 import functools
+import math
 from typing import Any, Callable
 import dp_accounting
 import jax
 import jax.numpy as jnp
+import numpy as np
 from . import optimization
 from . import sensitivity
 from . import streaming_matrix
@@ -419,7 +421,6 @@ def per_query_error(
   return jnp.cumsum(B_coef**2)
 
 
-@functools.partial(jax.jit, static_argnums=[1, 2])
 def loss(
     strategy_coef: jax.Array,
     n: int | None = None,
@@ -508,7 +509,7 @@ def optimize_banded_toeplitz(
 def _factors(n):
   result = functools.reduce(
       list.__add__,
-      ([i, n // i] for i in range(1, int(jnp.sqrt(n) + 1)) if n % i == 0),
+      ([i, n // i] for i in range(1, math.isqrt(n) + 1) if n % i == 0),
   )
   # Return a sorted list, remove duplicates.
   return list(sorted(set(result)))
@@ -546,12 +547,12 @@ class _AmplifiedBandMFHelper:
   def total_noise_multiplier(self, bands: int):
     """The total noise multiplier needed to achieve the privacy target."""
     # It is preferable if n % bands == 0.
-    max_participations = int(jnp.ceil(self.n / bands))
+    max_participations = math.ceil(self.n / bands)
 
     # It is also preferable if dataset_size % bands == 0.
     subset_size = self.dataset_size // bands
     sampling_probability = self.batch_size / subset_size
-    max_noise_multiplier = int(100 * jnp.sqrt(self.batch_size))
+    max_noise_multiplier = int(100 * math.sqrt(self.batch_size))
 
     def dpsgd_event(noise_multiplier):
       one_round_event = dp_accounting.PoissonSampledDpEvent(
@@ -656,8 +657,8 @@ class _AmplifiedBandMFHelper:
   def optimize_bands(self, **optimizer_kwargs) -> dict[str, Any]:
     """Returns best result (in terms of loss) from compute_loss_for_bands."""
     results = self.compute_loss_for_bands(**optimizer_kwargs)
-    losses = jnp.array([d['loss'] for d in results])
-    best_idx = jnp.argmin(losses)
+    losses = np.array([d['loss'] for d in results])
+    best_idx = np.argmin(losses)
     return results[best_idx]
 
 
@@ -721,7 +722,6 @@ def optimize_coefs_for_amplifications(
   return coef, stddev
 
 
-@functools.partial(jax.jit, static_argnums=[0])
 def banded_inverse_square_root_noising_coefs(
     num_bands: int,
     workload_coef: jax.Array | None = None,

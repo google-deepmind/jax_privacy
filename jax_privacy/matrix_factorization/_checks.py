@@ -14,9 +14,7 @@
 
 """Utilities for confirming various sybmols are used correctly."""
 
-from typing import Optional
-import jax
-import jax.numpy as jnp
+import numpy as np
 
 # Disabling pylint invalid-name to allow mathematical notation including
 # single-capital-letter variables for matrices.
@@ -28,39 +26,42 @@ def _pad(s: str):
   return s + ' ' if s else ''
 
 
-def check_lower_triangular(M: jnp.ndarray, name: str = '', **allclose_kwargs):
-  if not jnp.allclose(M, jnp.tril(M), **allclose_kwargs):
+def check_lower_triangular(
+    M: np.typing.ArrayLike, name: str = '', **allclose_kwargs
+):
+  if not np.allclose(M, np.tril(M), **allclose_kwargs):
     raise ValueError(
         f'Matrix {_pad(name)}should be lower-triangular, found\n{M}'
     )
 
 
-def check_is_matrix(M: jnp.ndarray, name: str = ''):
-  if len(M.shape) != 2:
-    raise ValueError(f'Matrix {_pad(name)}has unexpected shape {M.shape}')
+def check_is_matrix(M: np.typing.ArrayLike, name: str = ''):
+  if np.ndim(M) != 2:
+    raise ValueError(f'Matrix {_pad(name)}has unexpected shape {np.shape(M)}')
 
 
-def check_square(M: jnp.ndarray, name: str = ''):
-  if (len(M.shape) != 2) or (M.shape[0] != M.shape[1]):
+def check_square(M: np.typing.ArrayLike, name: str = ''):
+  if (np.ndim(M) != 2) or (np.shape(M)[0] != np.shape(M)[1]):
     raise ValueError(f'Matrix {_pad(name)}should be square, found\n{M}')
 
 
-def check_finite(M: jnp.ndarray, name: str):
-  if not jnp.all(jnp.isfinite(M)):
+def check_finite(M: np.typing.ArrayLike, name: str):
+  if not np.all(np.isfinite(M)):
     raise ValueError(f'Matrix {_pad(name)}is not finite, found\n{M}')
 
 
-def check_symmetric(M: jnp.ndarray, name: str, **allclose_kwargs):
-  if not jnp.allclose(M, M.T, **allclose_kwargs):
+def check_symmetric(M: np.typing.ArrayLike, name: str, **allclose_kwargs):
+  M = np.asarray(M)
+  if not np.allclose(M, M.T, **allclose_kwargs):
     raise ValueError(f'Matrix {_pad(name)}should be symmetric, found\n{M}')
 
 
 def check(
     *,
-    A: Optional[jnp.ndarray] = None,
-    B: Optional[jnp.ndarray] = None,
-    C: Optional[jnp.ndarray] = None,
-    X: Optional[jnp.ndarray] = None,
+    A: np.typing.ArrayLike | None = None,
+    B: np.typing.ArrayLike | None = None,
+    C: np.typing.ArrayLike | None = None,
+    X: np.typing.ArrayLike | None = None,
     **allclose_kwargs,
 ):
   """Apply checks to matrices A = B @ C and X = C.T @ C.
@@ -80,7 +81,7 @@ def check(
     B: The B decoder matrix, such that A = B @ C.
     C: The encoder matrix.
     X: Symmetric matrix C.T @ C.
-    **allclose_kwargs: kwargs to pass to jnp.allclose
+    **allclose_kwargs: kwargs to pass to np.allclose
 
   Raises:
     ValueError if matrices do not satisfy expected properties.
@@ -89,49 +90,49 @@ def check(
   n = None  # Number of iterations
 
   if A is not None:
+    n = np.shape(A)[0]
     check_finite(A, 'A')
     check_square(A, 'A')
     check_lower_triangular(A, 'A', **allclose_kwargs)
     not_none['A'] = A
-    n = A.shape[0]
 
   if B is not None:
+    n, k = np.shape(B)
     check_finite(B, 'B')
     check_is_matrix(B, 'B')
-    if B.shape[0] == B.shape[1]:
+    if n == k:
       # If B is square, it should be lower triangular.
       check_lower_triangular(B, 'B', **allclose_kwargs)
     not_none['B'] = B
-    n = B.shape[0]
 
   if C is not None:
+    k, n = np.shape(C)
     check_finite(C, 'C')
     check_is_matrix(C, 'C')
-    if C.shape[0] == C.shape[1]:
+    if k == n:
       # If C is square, it should be lower triangular.
       check_lower_triangular(C, 'C', **allclose_kwargs)
       # Note - square C should be invertible, but keeping checks lightweight.
     not_none['C'] = C
-    n = C.shape[1]
 
   if X is not None:
+    n = np.shape(X)[0]
     check_finite(X, 'X')
     check_square(X, 'X')
     check_symmetric(X, 'X', **allclose_kwargs)
     # Note - X should also PD, but for now keeping checks lightweight.
     not_none['X'] = X
-    n = X.shape[0]
 
   # Verify properties to make sure this set of matrices is consistent.
   # We could also consider checking A = B @ C and X = C.T @ C.
   # It might be better to split a flag for "full_check" or similar,
   # to allow different speed  safety tradeoffs.
 
-  if (B is not None) and (C is not None) and (B.shape[1] != C.shape[0]):
+  if (B is not None) and (C is not None) and (np.shape(B)[1] != np.shape(C)[0]):
     raise ValueError(
         'B and C shapes do not match. Expected '
         'B.shape[1] == C.shape[0], but found '
-        f'{B.shape=} and {C.shape=}'
+        f'{np.shape(B)=} and {np.shape(C)=}'
     )
 
   expected_shapes = {
@@ -149,6 +150,6 @@ def check(
 
   if not correct_shapes:
     raise ValueError(
-        'Expected matrix shapes to match {expected_shapes}, but found shapes:\n'
-        + str(jax.tree_util.tree_map(lambda x: x.shape, not_none))
+        f'Expected matrix shapes to match {expected_shapes}, but found shapes: '
+        + str({k: v.shape for k, v in not_none.items()})
     )

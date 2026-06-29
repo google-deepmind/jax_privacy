@@ -15,10 +15,11 @@
 """Library for computing sensitivity under multiple participations."""
 
 import functools
-from typing import Optional
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+import numpy.typing  # pylint: disable=unused-import  # Makes np.typing available
 
 from . import _checks as checks
 
@@ -28,10 +29,10 @@ from . import _checks as checks
 # pylint:disable=invalid-name
 
 
-def single_participation_sensitivity(C: jnp.ndarray) -> float:
+def single_participation_sensitivity(C: np.typing.ArrayLike) -> float:
   """Returns the sensitivity of a matrix with a single participation."""
   checks.check(C=C)
-  return jnp.linalg.norm(C, axis=0).max()
+  return np.linalg.norm(C, axis=0).max()
 
 
 def _ceil_div(x, y):
@@ -40,7 +41,7 @@ def _ceil_div(x, y):
 
 
 def minsep_true_max_participations(
-    n: int, min_sep: int, max_participations: Optional[int] = None
+    n: int, min_sep: int, max_participations: int | None = None
 ) -> int:
   """Returns the maximum number of participations for a min_sep pattern.
 
@@ -69,7 +70,7 @@ def minsep_true_max_participations(
 
 
 def max_participation_for_linear_fn(
-    x: jnp.ndarray, min_sep: int = 1, max_participations: Optional[int] = None
+    x: jnp.ndarray, min_sep: int = 1, max_participations: int | None = None
 ) -> float:
   r"""Returns max_u <x, u>, where u respects the given participation pattern.
 
@@ -123,7 +124,7 @@ def banded_lower_triangular_mask(n: int, num_bands: int) -> jnp.ndarray:
   b = num_bands
   if b < 1:
     raise ValueError(f'num_bands must be >= 0, found {num_bands}')
-  return (jnp.tri(n) - jnp.tri(n, k=-b)).astype(jnp.int32)
+  return (np.tri(n) - np.tri(n, k=-b)).astype(np.int32)
 
 
 def banded_symmetric_mask(n: int, num_bands: int) -> jnp.ndarray:
@@ -131,11 +132,11 @@ def banded_symmetric_mask(n: int, num_bands: int) -> jnp.ndarray:
   b = num_bands
   if b < 1:
     raise ValueError(f'num_bands must be >= 0, found {num_bands}')
-  return (jnp.tri(n, k=b - 1) - jnp.tri(n, k=-b)).astype(jnp.int32)
+  return (np.tri(n, k=b - 1) - np.tri(n, k=-b)).astype(np.int32)
 
 
 def get_min_sep_sensitivity_upper_bound_for_X(
-    X: jnp.ndarray, min_sep: int = 1, max_participations: Optional[int] = None
+    X: jnp.ndarray, min_sep: int = 1, max_participations: int | None = None
 ) -> float:
   """Computes an upper bound on the min_sep sensitivity of X.
 
@@ -190,7 +191,7 @@ def get_min_sep_sensitivity_upper_bound_for_X(
 
 
 def get_min_sep_sensitivity_upper_bound(
-    C: jnp.ndarray, min_sep: int = 1, max_participations: Optional[int] = None
+    C: jnp.ndarray, min_sep: int = 1, max_participations: int | None = None
 ) -> float:
   """Like get_min_sep_sensitivity_upper_bound_for_X, but takes the encoder C."""
   checks.check(C=C)
@@ -202,7 +203,7 @@ def get_min_sep_sensitivity_upper_bound(
 def get_sensitivity_banded_for_X(
     X: jnp.ndarray,
     min_sep: int = 1,
-    max_participations: Optional[int] = None,
+    max_participations: int | None = None,
 ) -> float:
   """Computes the sensitivity of an X.
 
@@ -250,7 +251,7 @@ def get_sensitivity_banded_for_X(
 def get_sensitivity_banded(
     C: jnp.ndarray,
     min_sep: int = 1,
-    max_participations: Optional[int] = None,
+    max_participations: int | None = None,
 ) -> float:
   """Like get_sensitivity_banded_for_X(), but takes the encoder C."""
   checks.check(C=C)

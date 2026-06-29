@@ -320,22 +320,22 @@ class BufferedToeplitz:
     # The (cs, scales) define a BLT object for C^{-1}
     inv_blt = cls.build(buf_decay=buf_decay, output_scale=output_scale)
     blt = inv_blt.inverse()
-    buf_decay = blt.buf_decay
-    output_scale = blt.output_scale
+    buf_decay = np.array(blt.buf_decay)
+    output_scale = np.array(blt.output_scale)
 
     # We now scale / project to ensure we are within the
     # max_buf_decay and max_pillutla_socre. First,
     # we scale all the buf decay values, which ensures the ordering
     # isn't change and we don't introduce duplicate values.
     largest_buf_decay = buf_decay[0]
-    scale = jnp.minimum(1.0, max_buf_decay / largest_buf_decay)
+    scale = np.minimum(1.0, max_buf_decay / largest_buf_decay)
     buf_decay *= scale
     assert buf_decay[0] <= max_buf_decay + 1e-12
-    score = jnp.sum(output_scale / buf_decay)
+    score = np.sum(output_scale / buf_decay)
     # If needed, rescale the output parameters to ensure the pillutla score
     # is less than the maximum.
     if max_pillutla_score is not None:
-      score_scale = jnp.minimum(1.0, max_pillutla_score / score)
+      score_scale = np.minimum(1.0, max_pillutla_score / score)
       output_scale *= score_scale
 
     blt = cls.build(
@@ -1037,7 +1037,7 @@ def _optimize_increasing_nbuf(
           nbuf,
           str(err),
       )
-      blt, loss = None, jnp.inf
+      blt, loss = None, float('inf')
 
     if rtol * loss < prev_loss:
       # Sufficient improvement, accept this BLT and maybe try more buffers:
@@ -1145,7 +1145,6 @@ def optimize(
     )
 
 
-@jax.jit
 def geometric_sum(
     a: jax.Array, r: jax.Array, num: chex.Numeric = jnp.inf
 ) -> jax.Array:

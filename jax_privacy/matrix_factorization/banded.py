@@ -86,8 +86,9 @@ class ColumnNormalizedBanded:
     bands = coefs.size
     if bands > n or bands < 1:
       raise ValueError(f'len(coefs) must be in the range [1, n], got {bands}')
-    coefs = coefs / jnp.linalg.norm(coefs)
-    params = jnp.broadcast_to(coefs, (n, bands))
+    coefs = np.asarray(coefs)
+    coefs = coefs / np.linalg.norm(coefs)
+    params = jnp.broadcast_to(jnp.array(coefs), (n, bands))
     params = jnp.tril(params[::-1])[::-1]  # set the lower right triangle to 0
     return cls(params=params)
 
@@ -108,8 +109,10 @@ class ColumnNormalizedBanded:
     Returns:
       A ColumnNormalizedBanded object.
     """
-    k = jnp.arange(bands)
-    coefs = jnp.cumprod(((2 * k - 1) / (2 * k)).at[0].set(1))
+    k = np.arange(bands)
+    ratios = (2 * k - 1) / (2 * k)
+    ratios[0] = 1
+    coefs = np.cumprod(ratios)
     return ColumnNormalizedBanded.from_banded_toeplitz(n, coefs)
 
   def materialize(self) -> jnp.ndarray:
