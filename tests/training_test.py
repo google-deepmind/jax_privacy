@@ -13,10 +13,12 @@
 # limitations under the License.
 
 
+import dataclasses
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
 import jax.numpy as jnp
+from jax_privacy import batch_selection
 from jax_privacy import execution_plan
 from jax_privacy import training
 import numpy as np
@@ -63,7 +65,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, params, rng=0)
+    state = trainer.fit(dataset, params, rng_or_seed=0)
 
     self.assertIsInstance(state, training.TrainingState)
     self.assertEqual(int(state.step), 3)
@@ -80,7 +82,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, params, rng=42)
+    state = trainer.fit(dataset, params, rng_or_seed=42)
 
     self.assertFalse(jnp.allclose(state.params, params))
 
@@ -104,7 +106,12 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    trainer.fit(dataset, params, callback=callback, rng=0)
+    trainer.fit(
+        dataset,
+        params,
+        callback=callback,
+        rng_or_seed=0,
+    )
 
     self.assertLen(callback_log, iterations)
     self.assertEqual([s for s, _ in callback_log], [1, 2, 3])
@@ -122,7 +129,7 @@ class DPTrainerTest(parameterized.TestCase):
         optimizer=optimizer,
         padding_multiple=4,
     )
-    state = trainer.fit(dataset, params, rng=0)
+    state = trainer.fit(dataset, params, rng_or_seed=0)
 
     self.assertEqual(int(state.step), 2)
 
@@ -143,7 +150,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, params, rng=0)
+    state = trainer.fit(dataset, params, rng_or_seed=0)
 
     self.assertEqual(int(state.step), 1)
 
@@ -169,7 +176,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=counting_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, params, rng=0)
+    state = trainer.fit(dataset, params, rng_or_seed=0)
 
     self.assertEqual(int(state.step), 3)
     self.assertLess(trace_count[0], 3 * 2)
@@ -188,18 +195,16 @@ class DPTrainerTest(parameterized.TestCase):
 
     state = training.TrainingState(
         step=0,
-        params=params,
+        params=jnp.copy(params),
         opt_state=optimizer.init(params),
         noise_state=plan.noise_addition_transform.init(params),
     )
 
     batch = jnp.array([[1.0, 0.0], [0.0, 1.0]])
     is_padding = jnp.array([False, False])
-    loss_rng = jax.random.key(0)
+    prng_key = jax.random.key(0)
 
-    new_state, _ = trainer.train_step(
-        state, batch, is_padding, loss_rng=loss_rng
-    )
+    new_state, _ = trainer.train_step(state, batch, is_padding, prng_key)
 
     self.assertEqual(int(new_state.step), 1)
     self.assertFalse(jnp.allclose(new_state.params, params))
@@ -225,10 +230,10 @@ class DPTrainerTest(parameterized.TestCase):
 
     batch = jnp.array([[1.0], [0.0]])
     is_padding = jnp.array([False, False])
-    loss_rng = jax.random.key(0)
+    prng_key = jax.random.key(0)
 
-    jit_step = jax.jit(trainer.train_step)
-    new_state, _ = jit_step(state, batch, is_padding, loss_rng=loss_rng)
+    # train_step is already @jax.jit decorated; call it directly.
+    new_state, _ = trainer.train_step(state, batch, is_padding, prng_key)
 
     self.assertEqual(int(new_state.step), 1)
 
@@ -248,7 +253,7 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, params, rng=0)
+    state = trainer.fit(dataset, params, rng_or_seed=0)
 
     self.assertEqual(int(state.step), 2)
     self.assertTrue(jnp.all(jnp.isfinite(state.params)))
@@ -265,7 +270,7 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, params, rng=0)
+    state = trainer.fit(dataset, params, rng_or_seed=0)
 
     self.assertEqual(int(state.step), 3)
     self.assertLess(
@@ -285,7 +290,7 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, params, rng=0)
+    state = trainer.fit(dataset, params, rng_or_seed=0)
 
     self.assertEqual(int(state.step), 2)
     self.assertTrue(jnp.all(jnp.isfinite(state.params)))
@@ -308,7 +313,7 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=dict_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, params, rng=0)
+    state = trainer.fit(dataset, params, rng_or_seed=0)
 
     self.assertEqual(int(state.step), 2)
 
@@ -329,9 +334,175 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, params, rng=0)
+    state = trainer.fit(dataset, params, rng_or_seed=0)
 
     self.assertEqual(state.params.dtype, jnp.bfloat16)
+
+
+class DPTrainerInitTest(parameterized.TestCase):
+  """Tests for DPTrainer.init."""
+
+  def test_init_returns_training_state(self):
+    """init() should return a TrainingState at step 0."""
+    params = jnp.array([1.0, 2.0])
+    plan = _make_plan(iterations=3)
+    optimizer = optax.sgd(0.01)
+
+    trainer = training.DPTrainer(
+        plan=plan,
+        loss_fn=_quadratic_loss,
+        optimizer=optimizer,
+    )
+    state = trainer.init(params)
+
+    self.assertIsInstance(state, training.TrainingState)
+    self.assertEqual(int(state.step), 0)
+    np.testing.assert_array_equal(state.params, params)
+
+
+class DPTrainerPrecompileTest(parameterized.TestCase):
+  """Tests for DPTrainer.precompile."""
+
+  def test_precompile_returns_futures(self):
+    """precompile() should return a dict of batch_size -> Future."""
+    params = jnp.array([1.0, 2.0])
+    dataset = np.array([[0.0, 0.0]] * 10)  # 10 examples.
+    plan = _make_plan(iterations=5)
+    optimizer = optax.sgd(0.01)
+
+    trainer = training.DPTrainer(
+        plan=plan,
+        loss_fn=_quadratic_loss,
+        optimizer=optimizer,
+    )
+    futures = trainer._precompile(dataset, params, rng_or_seed=42)
+
+    self.assertIsInstance(futures, dict)
+    self.assertNotEmpty(futures)
+    for size, future in futures.items():
+      self.assertIsInstance(size, int)
+      self.assertGreater(size, 0)
+      # Compilation should complete without error.
+      future.result()
+
+  def test_precompile_sizes_are_padded(self):
+    """All precompiled sizes should be multiples of padding_multiple."""
+    params = jnp.array([1.0])
+    dataset = np.array([[0.0]] * 20)  # 20 examples.
+    plan = _make_plan(iterations=10)
+    optimizer = optax.sgd(0.01)
+    padding_multiple = 8
+
+    trainer = training.DPTrainer(
+        plan=plan,
+        loss_fn=_quadratic_loss,
+        optimizer=optimizer,
+        padding_multiple=padding_multiple,
+    )
+    futures = trainer._precompile(dataset, params, rng_or_seed=0)
+
+    for size in futures:
+      self.assertEqual(size % padding_multiple, 0)
+
+    # Wait for all compilations.
+    for future in futures.values():
+      future.result()
+
+  def test_precompile_rng_not_consumed(self):
+    """precompile should deep-copy the RNG, not consume the caller's."""
+    params = jnp.array([1.0])
+    dataset = np.array([[0.0]] * 5)  # 5 examples.
+    plan = _make_plan(iterations=3)
+    optimizer = optax.sgd(0.01)
+
+    trainer = training.DPTrainer(
+        plan=plan,
+        loss_fn=_quadratic_loss,
+        optimizer=optimizer,
+    )
+
+    rng = np.random.default_rng(42)
+    state_before = rng.__getstate__()
+    futures = trainer._precompile(dataset, params, rng_or_seed=rng)
+    state_after = rng.__getstate__()
+
+    # RNG should not have been consumed.
+    np.testing.assert_equal(state_before, state_after)
+
+    for future in futures.values():
+      future.result()
+
+  def test_precompile_with_shape_dtype_struct(self):
+    """precompile() should work with abstract ShapeDtypeStruct inputs."""
+    params = jax.ShapeDtypeStruct((3,), jnp.float32)
+    dataset = jax.ShapeDtypeStruct((5, 3), jnp.float32)
+    plan = _make_plan(iterations=3)
+    optimizer = optax.sgd(0.01)
+
+    trainer = training.DPTrainer(
+        plan=plan,
+        loss_fn=_quadratic_loss,
+        optimizer=optimizer,
+    )
+    futures = trainer._precompile(dataset, params, rng_or_seed=0)
+
+    self.assertNotEmpty(futures)
+    for future in futures.values():
+      future.result()
+
+  def test_fit_precompile_aot_compiles_all_sizes(self):
+    """precompile=True should AOT-compile once per unique batch size."""
+    trace_count = [0]
+
+    def loss_fn(params, batch, _):
+      trace_count[0] += 1
+      return jnp.mean((params - batch) ** 2), {}
+
+    params = jnp.array([1.0])
+    dataset = np.array([[i] for i in range(50)])
+
+    plan = dataclasses.replace(
+        _make_plan(iterations=5),
+        batch_selection_strategy=batch_selection.CyclicPoissonSampling(0.5, 5),
+    )
+    trainer = training.DPTrainer(
+        plan=plan, loss_fn=loss_fn, optimizer=optax.sgd(1), padding_multiple=1
+    )
+
+    with self.assertLogs(level='INFO') as logs:
+      trainer.fit(dataset, params, rng_or_seed=0, precompile=True)
+      for log in logs.output:
+        self.assertIn('AOT-compiling train_step for batch size', log)
+        self.assertNotIn('JIT-compiling train_step for batch size', log)
+      self.assertEqual(trace_count[0], 5)
+      self.assertLen(logs.output, 5)
+
+  def test_fit_no_precompile_jit_compiles_all_sizes(self):
+    """precompile=False should JIT-compile once per unique batch size."""
+    trace_count = [0]
+
+    def loss_fn(params, batch, _):
+      trace_count[0] += 1
+      return jnp.mean((params - batch) ** 2), {}
+
+    params = jnp.array([1.0])
+    dataset = np.array([[i] for i in range(50)])
+
+    plan = dataclasses.replace(
+        _make_plan(iterations=5),
+        batch_selection_strategy=batch_selection.CyclicPoissonSampling(0.5, 5),
+    )
+    trainer = training.DPTrainer(
+        plan=plan, loss_fn=loss_fn, optimizer=optax.sgd(1), padding_multiple=1
+    )
+
+    with self.assertLogs(level='INFO') as logs:
+      trainer.fit(dataset, params, rng_or_seed=0, precompile=False)
+      for log in logs.output:
+        self.assertNotIn('AOT-compiling train_step for batch size', log)
+        self.assertIn('JIT-compiling train_step for batch size', log)
+      self.assertEqual(trace_count[0], 5)
+      self.assertLen(logs.output, 5)
 
 
 if __name__ == '__main__':
