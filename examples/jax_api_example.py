@@ -81,7 +81,7 @@ def batch_dataset(
 ) -> tf.data.Dataset:
   """Batches the data into batches of the given size."""
   return (
-      tf.data.Dataset.from_tensor_slices((x, y))
+      tf.data.Dataset.from_tensor_slices((x, y))  # pyrefly: ignore[bad-argument-type]
       .shuffle(buffer_size=1024)
       .batch(batch_size, drop_remainder=True)
       .prefetch(tf.data.AUTOTUNE)
@@ -152,7 +152,7 @@ def main(_):
     loss = aux_outputs.values.mean()
     mean_grads = jax.tree.map(lambda x: x / batch_size, grads)
     noisy_grads, noise_state = privatizer.update(mean_grads, noise_state)
-    updated_params = updated_model_params(model_params, noisy_grads)
+    updated_params = updated_model_params(model_params, noisy_grads)  # pyrefly: ignore[bad-argument-type]
     return updated_params, loss, noise_state
 
   # DP only end.

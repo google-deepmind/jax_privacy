@@ -84,7 +84,7 @@ def create_benchmark(
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
   labels = np.random.rand(samples) < jax.nn.sigmoid(logits)
 
-  return params, feature_matrix, labels
+  return params, feature_matrix, labels  # pyrefly: ignore[bad-return]
 
 
 def main(_):
@@ -138,7 +138,7 @@ def main(_):
         clipped_grad_sum, noise_state
     )
     updates, opt_state = optimizer.update(noisy_grad, opt_state)
-    params = optax.apply_updates(params, updates)
+    params = optax.apply_updates(params, updates)  # pyrefly: ignore[bad-assignment]
     return params, noise_state, opt_state
 
   params = init_params
