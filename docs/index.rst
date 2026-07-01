@@ -46,6 +46,7 @@
    :maxdepth: 2
    :caption: Sharp Edges
 
+   sharp_edges_dp_training_pitfalls
    sharp_edges_variable_batch_sizes
    sharp_edges_vmap_sharding
    sharp_edges_mixed_precision
