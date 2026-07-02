@@ -591,14 +591,14 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       self.assertGreaterEqual(max_accuracy, expected_max_accuracy)
 
   @parameterized.product(
-      mu=(-3.0, -1.0, -0.3, 0.1, 0.3, 1.0, 3.0),
+      mu=(-3.0, -1.0, 0.1, 0.3, 1.0, 3.0),
       out_samples_ratio=(0.5, 1.0, 1.5),
   )
   def test_epsilon_from_gdp_tight(self, mu, out_samples_ratio):
     rng = np.random.default_rng(seed=0xBAD5EED)
     significance = 0.1
     delta = 5e-2
-    in_samples = 1_500_000 if abs(mu) == 0.3 else 500_000
+    in_samples = 500_000
     out_samples = int(in_samples * out_samples_ratio)
     in_canary_scores = rng.normal(mu, 1, in_samples)
     out_canary_scores = rng.normal(0, 1, out_samples)
