@@ -901,30 +901,21 @@ class CanaryScoreAuditor:
     if eps_tol <= 0:
       raise ValueError(f'eps_tol must be positive, got {eps_tol}.')
 
-    n_pos = self._fn_counts[-1]
-    n_neg = self._tn_counts[-1]
-
-    n = len(self._fn_counts)
-
-    # Apply Bonferroni correction over 2 * n hypotheses.
-    fnr_ubs = _clopper_pearson_upper(
-        self._fn_counts, n_pos, significance / (2 * n)
+    # Swapping in/out scores audits the D', D direction with its own frontier.
+    _, reverse_tn_counts, reverse_fn_counts = _get_tn_fn_counts(
+        self._out_canary_scores, self._in_canary_scores
     )
-    fp_counts = n_neg - self._tn_counts
-    fpr_ubs = _clopper_pearson_upper(fp_counts, n_neg, significance / (2 * n))
-
-    bounds = np.stack([fpr_ubs, fnr_ubs], axis=1)
-
-    # Filter any thresholds where TNR or TPR is too small.
-    bounds = bounds[np.max(bounds, axis=1) < 1 - delta]
-    if not bounds.size:
-      return 0
-
-    # Eq. 6 in https://arxiv.org/abs/1905.02383. If FPR + FNR is too large,
-    # the bound still holds in reverse (by switching D and D'), which has the
-    # effect of making mu from Eq. 6 negative. Hence we look for the maximum
-    # absolute value of mu.
-    max_mu = np.max(np.abs(_norm.isf(bounds[:, 0]) - _norm.ppf(bounds[:, 1])))
+    bound_significance = significance / (
+        2 * (len(self._fn_counts) + len(reverse_fn_counts))
+    )
+    max_mu = max(
+        self._mu_from_gdp_counts(
+            self._fn_counts, self._tn_counts, bound_significance, delta
+        ),
+        self._mu_from_gdp_counts(
+            reverse_fn_counts, reverse_tn_counts, bound_significance, delta
+        ),
+    )
     if max_mu == 0:
       return 0
 
@@ -943,6 +934,30 @@ class CanaryScoreAuditor:
       return eps_ub
 
     return scipy.optimize.brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
+
+  @staticmethod
+  def _mu_from_gdp_counts(
+      fn_counts: np.ndarray,
+      tn_counts: np.ndarray,
+      bound_significance: float,
+      delta: float,
+  ) -> float:
+    """Calculates a one-sided GDP lower bound on mu from one frontier."""
+    n_pos = fn_counts[-1]
+    n_neg = tn_counts[-1]
+
+    fnr_ubs = _clopper_pearson_upper(fn_counts, n_pos, bound_significance)
+    fpr_ubs = _clopper_pearson_upper(
+        n_neg - tn_counts, n_neg, bound_significance
+    )
+
+    keep = np.maximum(fpr_ubs, fnr_ubs) < 1 - delta
+    if not np.any(keep):
+      return 0.0
+
+    # Eq. 6 in https://arxiv.org/abs/1905.02383 gives
+    # mu >= isf(FPR) - ppf(FNR). Negative values are no evidence.
+    return max(0.0, np.max(_norm.isf(fpr_ubs[keep]) - _norm.ppf(fnr_ubs[keep])))
 
   def _epsilon_one_run_all_thresholds(
       self,
