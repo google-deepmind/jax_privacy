@@ -134,7 +134,7 @@ def optimize_strategy(
             coef, column_normalize_for_n=n
         )
         A = streaming_matrix.prefix_sum()
-        B = A @ C_inv
+        B = A @ C_inv  # pyrefly: ignore[unsupported-operation]
         return reduction_fn(B.row_norms_squared(n))
 
       initial_strategy_coef = toeplitz.optimal_max_error_strategy_coefs(sep)
@@ -180,7 +180,7 @@ def optimize_strategy(
       # https://arxiv.org/abs/2306.08153
       # https://arxiv.org/abs/2405.15913
       loss_reduction_fn = jnp.mean if objective == 'mean' else jnp.max
-      strategy = banded.optimize(
+      strategy = banded.optimize(  # pyrefly: ignore[bad-assignment]
           n,
           bands=sep,
           max_optimizer_steps=1000,
@@ -188,7 +188,7 @@ def optimize_strategy(
           scan_fn='dinosaur',
       )
       sensitivity_squared = banded.minsep_sensitivity_squared(
-          strategy, min_sep=sep, max_participations=participations
+          strategy, min_sep=sep, max_participations=participations  # pyrefly: ignore[bad-argument-type]
       )
       squared_error = loss_reduction_fn(banded.per_query_error(strategy))
       loss = squared_error * sensitivity_squared
@@ -213,7 +213,7 @@ def optimize_strategy(
       )
       loss = loss_fn.loss(strategy)
 
-  loss = float(jnp.sqrt(loss))
+  loss = float(jnp.sqrt(loss))  # pyrefly: ignore[bad-argument-type]
   t1 = time.time()
 
   print(f'{strategy=} {n=} {participations=} {objective=} {loss=} time={t1-t0}')

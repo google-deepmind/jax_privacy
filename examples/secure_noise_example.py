@@ -122,7 +122,7 @@ def create_benchmark(
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
   labels = np.random.rand(samples) < jax.nn.sigmoid(logits)
 
-  return params, feature_matrix, labels
+  return params, feature_matrix, labels  # pyrefly: ignore[bad-return]
 
 
 def main(_):

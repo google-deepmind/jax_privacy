@@ -131,7 +131,7 @@ def main(_) -> None:
       )
   )
   if passes_verification:
-    print(f'Best noise multiplier: {nm_sweep[best_nm_index]}')
+    print(f'Best noise multiplier: {nm_sweep[best_nm_index]}')  # pyrefly: ignore[bad-index]
   else:
     # If all the verifications fail, we fall back to nm_upper_bound, which we
     # know achieves (EPSILON, BASE_DELTA)-DP.
