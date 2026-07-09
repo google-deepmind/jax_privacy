@@ -50,13 +50,112 @@ or shuffled order, rather than adhering to the exact batch selection strategy
 required to obtain the desired formal DP guarantees. While we don't recommend
 doing this, our batch selection strategies can be ignored in such cases.
 
-Then on top of the core library the following backend-specific public high-level
- APIs are built:
+---
 
-*   [Keras](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/keras_api.py)
+(api-tiers)=
+## API Tiers
 
-These APIs abstract some complexity and reduce the amount of code necessary to
-implement DP training at the cost of less flexibility. Currently, the only
-supported mechanism available when using the Keras API is DP-SGD with
-internally Poisson-sampled batches built from random-access per-example arrays
-(with accounting done using the same Poisson-sampling assumption).
+JAX Privacy provides three levels of API, each trading flexibility for stronger
+built-in DP assurance. Each tier builds on the one below it: the higher-level
+tiers compose the building blocks for you, so that privacy-critical
+coupling decisions are made once in the library rather than once per user.
+
+```{tip}
+**Design principle:** You should not be able to configure any individual
+JAX Privacy utility in a way that breaks its stated guarantees. If you can,
+that is a bug. We attempt to enforce this at the API level, even when it
+sacrifices some flexibility.
+```
+
+### Tier 1: End-to-end training loops
+
+*   [Keras API](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/keras_api.py),
+    [`training`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)
+
+These consume a `DPExecutionPlan` and write the entire training loop for
+you — batch selection, gradient computation, noise addition, parameter
+updates, and privacy accounting. The resulting training satisfies the stated DP
+guarantee unconditionally. It is a design goal of JAX Privacy that you should
+not need to reason about how the components interact; the library handles this
+for you.
+
+Currently, the only supported mechanism available when using the Keras API is
+DP-SGD with internally Poisson-sampled batches built from random-access
+per-example arrays (with accounting done using the same Poisson-sampling
+assumption).
+
+### Tier 2: `DPExecutionPlan`
+
+*   [`execution_plan.py`](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/execution_plan.py)
+    (currently only `BandMFConfig` exists)
+
+A single config object bundles batch selection, clipped gradient computation,
+noise addition, and the corresponding `DpEvent` into a verified
+`DPExecutionPlan`. When you use the plan's components as documented to write
+your own training loop, the resulting loop inherits the stated DP guarantee *by
+construction*. See
+[`dp_sgd_transformer.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/dp_sgd_transformer.py)
+and
+[`dp_logistic_regression.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/dp_logistic_regression.py)
+for examples.
+
+### Tier 3: Core API (low-level building blocks)
+
+*   [`batch_selection`](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/batch_selection.py),
+    [`clipping`](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/clipping.py),
+    [`noise_addition`](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/noise_addition.py),
+    [`accounting`](https://github.com/google-deepmind/jax_privacy/tree/main/jax_privacy/accounting.py)
+
+Users compose the individual modules directly. **Any**
+`BatchSelectionStrategy` can be used, **any** noise addition scheme can be
+composed, and **any** `DpEvent` can be used for privacy analysis — including
+Monte Carlo accounting via `jax_privacy.experimental.monte_carlo` for
+combinations where PLD/RDP accounting is not available. Each individual
+component is designed so that you should not be able to configure it in a way
+that breaks its own *local formal guarantees* — and if you can, that is a bug.
+Importantly, these local guarantees are not DP guarantees: individual components
+do not satisfy DP by themselves. They are properties like sensitivity bounds and
+per-example isolation that serve as the building blocks for *proving* DP for the
+higher-level compositions. The risk at this tier is in *composition*: wiring
+components together incorrectly (e.g., calibrating noise to the wrong
+sensitivity, or using an accounting method that does not match the batch
+selection strategy). See
+[`jax_api_example.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/jax_api_example.py)
+and
+[`balls_in_bins_accounting.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/balls_in_bins_accounting.py)
+for examples.
+
+### Your responsibilities at each tier
+
+Which parts of DP correctness you own depends on the tier you build on:
+
+- **Tier 1 (end-to-end training loops):** Nothing, as far as component
+  composition goes. Configure the mechanism and the library handles batch
+  selection, clipping, noise, and accounting so the training loop satisfies the
+  stated guarantee.
+- **Tier 2 (`DPExecutionPlan`):** Use the plan's components as documented. The
+  privacy-critical pieces are already coupled consistently; your job is to wire
+  them into your training loop as described.
+- **Tier 3 (Core API):** You own composition. You are responsible for
+  calibrating noise to the right sensitivity and using an accounting method that
+  matches your batch selection. The components are designed so that assembling a
+  basic DP-SGD loop is straightforward; going beyond that (e.g., custom
+  mechanisms or accounting) requires genuine DP expertise, and that is a
+  deliberate, acceptable trade-off for the flexibility this tier provides.
+
+This is a direct consequence of JAX Privacy's **flat, auditable design**:
+privacy-critical logic is not buried across nested abstraction layers. Each
+component (clipping, noise addition, batch selection, accounting) stands alone
+and can be understood, tested, and audited in isolation; coupling happens only
+at the higher-level API layer, where the joint guarantees are stated explicitly.
+See the [Common Pitfalls](sharp_edges_dp_training_pitfalls) page for how each
+pitfall interacts with the tier system.
+
+```{important}
+**What JAX Privacy can and cannot control.** JAX Privacy governs what it
+*computes*: the sensitivity of a gradient, the noise added, the accounting of
+a mechanism. It cannot govern what you *release*. It will not stop you from
+logging a PRNG seed, or checkpointing raw training state to unencrypted storage.
+You must always reason about what leaves your trust boundary, and to whom. This
+is a property of *your* deployment, not of the library.
+```
