@@ -591,7 +591,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       self.assertGreaterEqual(max_accuracy, expected_max_accuracy)
 
   @parameterized.product(
-      mu=(-3.0, -1.0, 0.1, 0.3, 1.0, 3.0),
+      mu=(0.1, 0.3, 1.0, 3.0),
       out_samples_ratio=(0.5, 1.0, 1.5),
   )
   def test_epsilon_from_gdp_tight(self, mu, out_samples_ratio):
@@ -604,15 +604,15 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     out_canary_scores = rng.normal(0, 1, out_samples)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     eps = auditor.epsilon_from_gdp(significance, delta)
-    true_eps = dp_accounting.get_epsilon_gaussian(1 / abs(mu), delta)
+    true_eps = dp_accounting.get_epsilon_gaussian(1 / mu, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=0.05)
 
-  @parameterized.product(m=(50, 5000))
-  def test_epsilon_from_gdp_null_is_zero(self, m):
+  @parameterized.product(m=(50, 5000), mu=(-1.0, 0.0))
+  def test_epsilon_from_gdp_no_forward_evidence_is_zero(self, m, mu):
     rng = np.random.default_rng(seed=0xBAD5EED)
     significance = 0.05
     delta = 1e-5
-    in_canary_scores = rng.normal(0, 1, m)
+    in_canary_scores = rng.normal(mu, 1, m)
     out_canary_scores = rng.normal(0, 1, m)
     auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
 
