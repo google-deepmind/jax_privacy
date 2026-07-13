@@ -223,6 +223,14 @@ class DPKerasConfig:
         train_steps=self.train_steps,
         gradient_accumulation_steps=self.gradient_accumulation_steps,
     )
+    if self.effective_batch_size > self.train_size:
+      raise ValueError(
+          f'Effective batch size {self.effective_batch_size}'
+          f' (batch_size {self.batch_size} * gradient_accumulation_steps'
+          f' {self.gradient_accumulation_steps}) must be less than or equal to'
+          f' train size {self.train_size}, otherwise the Poisson sampling'
+          ' probability would exceed 1.'
+      )
     if self.microbatch_size is not None:
       _validate.positive(microbatch_size=self.microbatch_size)
       if self.microbatch_size > self.batch_size:

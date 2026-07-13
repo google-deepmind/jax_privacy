@@ -80,6 +80,34 @@ class KerasApiTest(parameterized.TestCase):
     ):
       dataclasses.replace(valid_params, batch_size=1001)
 
+    # Effective batch size must not exceed train size. Without an explicit
+    # check, such configs (with noise_multiplier=None) construct silently and
+    # only fail later inside noise calibration with an opaque
+    # "Expected sampling_prob=2.0 in [0, 1]" error.
+    with self.assertRaisesRegex(
+        ValueError,
+        "Effective batch size 2000 .* must be less than or equal to train"
+        " size 1000",
+    ):
+      dataclasses.replace(
+          valid_params, batch_size=100, gradient_accumulation_steps=20
+      )
+
+    # The effective batch size check must fire even when noise_multiplier is
+    # set, instead of the misleading "Maybe the noise multiplier is too small?"
+    # error raised by the epsilon calculation.
+    with self.assertRaisesRegex(
+        ValueError,
+        "Effective batch size 2000 .* must be less than or equal to train"
+        " size 1000",
+    ):
+      dataclasses.replace(
+          valid_params,
+          batch_size=100,
+          gradient_accumulation_steps=20,
+          noise_multiplier=1.0,
+      )
+
     # Invalid noise multiplier
     with self.assertRaisesRegex(
         ValueError, "Expected noise_multiplier=0.0 > 0"
