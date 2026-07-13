@@ -696,32 +696,43 @@ def _create_fit_fn_with_validation(
         train_size=validated_train_size,
     )
 
-    performed_optimizer_steps = (
+    # The `_optimizer_steps` weight and the helper below count train_step
+    # calls, i.e. batches. One optimizer update consumes
+    # `gradient_accumulation_steps` batches, so the budget of `train_steps`
+    # optimizer updates allows `train_steps * gradient_accumulation_steps`
+    # train_step calls.
+    performed_train_step_calls = (
         _get_non_trainable_weight('_optimizer_steps', self).numpy().item()
     )
-    optimizer_steps_to_perform = _calculate_optimizer_steps_to_perform_in_fit(
+    train_step_calls_to_perform = _calculate_train_step_calls_in_fit(
         self._dp_params.train_size,  # pylint: disable=protected-access
         batch_size,
         epochs,
         initial_epoch,
         steps_per_epoch,
     )
+    gradient_accumulation_steps = (
+        self._dp_params.gradient_accumulation_steps  # pylint: disable=protected-access
+    )
+    max_train_step_calls = (
+        self._dp_params.train_steps * gradient_accumulation_steps  # pylint: disable=protected-access
+    )
     if (
-        performed_optimizer_steps + optimizer_steps_to_perform
-        > self._dp_params.train_steps  # pylint: disable=protected-access
+        performed_train_step_calls + train_step_calls_to_perform
+        > max_train_step_calls
     ):
       raise RuntimeError(
           'fit() cannot be performed because you will run out of privacy'
-          ' budget. Currently, you have already performed'
-          f' {performed_optimizer_steps} optimizer training steps and you are'
-          f' trying to perform {optimizer_steps_to_perform} more. However, you'
-          f' can perform in total only {self._dp_params.train_steps} training'  # pylint: disable=protected-access
-          ' steps (optimizer updates). If you fit() the model with current'
-          ' parameters, training steps will exceed the maximum number of'
-          f' training steps: {performed_optimizer_steps=} +'
-          f' {optimizer_steps_to_perform=} ='
-          f' {performed_optimizer_steps + optimizer_steps_to_perform} >'
-          f' total_train_steps={self._dp_params.train_steps}.'  # pylint: disable=protected-access
+          ' budget. One optimizer update consumes'
+          f' gradient_accumulation_steps={gradient_accumulation_steps}'
+          ' batches, so the budget of'
+          f' train_steps={self._dp_params.train_steps} optimizer updates'  # pylint: disable=protected-access
+          f' allows at most {max_train_step_calls} batches. Currently, you'
+          f' have already performed {performed_train_step_calls} batches and'
+          f' you are trying to perform {train_step_calls_to_perform} more:'
+          f' {performed_train_step_calls} + {train_step_calls_to_perform} ='
+          f' {performed_train_step_calls + train_step_calls_to_perform} >'
+          f' {max_train_step_calls}.'
       )
     if use_poisson_sampling_in_fit:
       poisson_dataset = _PoissonSampledTrainingDataset(
@@ -1086,14 +1097,19 @@ def _get_non_trainable_weight(
   return next(w for w in model.non_trainable_weights if w.name == weight_name)
 
 
-def _calculate_optimizer_steps_to_perform_in_fit(
+def _calculate_train_step_calls_in_fit(
     train_size: int,
     batch_size: int,
     epochs: int,
     initial_epoch: int,
     steps_per_epoch: int,
 ) -> int:
-  """Returns the number of optimizer steps that will be performed by fit."""
+  """Returns the number of train_step calls (batches) performed by fit.
+
+  Note this counts batches, not optimizer updates: with gradient accumulation
+  one optimizer update happens every `gradient_accumulation_steps` train_step
+  calls.
+  """
   epochs_to_perform = epochs - initial_epoch
   steps_per_epoch = steps_per_epoch or _get_default_steps_per_epoch(
       train_size, batch_size

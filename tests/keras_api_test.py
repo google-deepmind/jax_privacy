@@ -594,6 +594,45 @@ class KerasApiTest(parameterized.TestCase):
       # cannot be performed because 16 + 7 * 2 = 30 > 28
       model.fit(x, y, epochs=7, batch_size=batch_size)  # pylint: disable=not-callable
 
+  def test_privacy_budget_in_fit_counts_optimizer_updates_not_batches(self):
+    train_size = 200
+    batch_size = 100
+    gradient_accumulation_steps = 2
+    # One optimizer update consumes gradient_accumulation_steps (=2) batches,
+    # so one epoch of 200 / 100 = 2 batches is exactly 1 optimizer update and
+    # train_steps=2 allows exactly two epochs.
+    train_steps = 2
+    x, y = np.random.uniform(0, 1, (train_size, 4)), np.random.uniform(
+        0, 1, train_size
+    )
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        train_steps=train_steps,
+        train_size=train_size,
+        seed=0,
+    )
+    model = keras_api.make_private(model, dp_params)
+    model.compile(
+        loss="mse",
+        optimizer=keras.optimizers.Adam(
+            gradient_accumulation_steps=gradient_accumulation_steps
+        ),
+    )
+
+    # 2 epochs * 2 batches = 4 batches = 2 optimizer updates, within budget.
+    model.fit(x, y, epochs=2, batch_size=batch_size)  # pylint: disable=not-callable
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "you will run out of privacy budget",
+    ):
+      # 4 + 2 batches would be a third optimizer update > train_steps=2.
+      model.fit(x, y, epochs=1, batch_size=batch_size)  # pylint: disable=not-callable
+
   def test_fit_with_missing_args(self):
     # Arrange.
     train_size = 64
