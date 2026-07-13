@@ -141,6 +141,53 @@ class ClipPyTreeTest(parameterized.TestCase):
     self.assertTrue(jnp.isfinite(norm))
     chex.assert_tree_all_finite(clipped)
     self.assertLessEqual(optax.tree.norm(clipped), 1.0)
+    # The output must be `pytree * min(1, clip_norm / norm) / clip_norm` (in
+    # particular, it must not be silently zeroed out).
+    true_norm = optax.tree.norm(pytree.astype(jnp.float32))
+    expected_norm = jnp.minimum(true_norm / clip_norm, 1.0)
+    self.assertAlmostEqual(
+        optax.tree.norm(clipped.astype(jnp.float32)), expected_norm, delta=0.01
+    )
+
+  @parameterized.parameters(
+      *cartesian_product(
+          dtype=[jnp.float16, jnp.bfloat16],
+          rescale_to_unit_norm=[True, False],
+      )
+  )
+  def test_clip_pytree_low_precision_norm_no_underflow(
+      self, dtype, rescale_to_unit_norm
+  ):
+    """Norm accumulation must not underflow for low-precision leaves."""
+    # The elementwise squares (1e-8) underflow to 0 when computed in float16,
+    # in which case a leaf-dtype norm is reported as 0 and the tree is
+    # returned unclipped despite its norm exceeding clip_norm.
+    pytree = jnp.full((10_000,), 1e-4, dtype=dtype)
+    clip_norm = 1e-3
+    clipped, norm = clipping.clip_pytree(
+        pytree, clip_norm, rescale_to_unit_norm=rescale_to_unit_norm
+    )
+    true_norm = optax.tree.norm(pytree.astype(jnp.float32))
+    self.assertAlmostEqual(norm, true_norm, delta=1e-3 * true_norm)
+    bound = 1.0 if rescale_to_unit_norm else clip_norm
+    # Rounding the output to a low-precision (possibly subnormal) dtype can
+    # exceed the bound by a small relative error.
+    self.assertLessEqual(
+        optax.tree.norm(clipped.astype(jnp.float32)), bound * 1.01
+    )
+
+  def test_clip_pytree_float16_finite_input_norm_does_not_overflow(self):
+    """A finite float16 tree must not be zeroed due to norm overflow."""
+    # The squared norm (160_000) overflows float16's max value (65_504), so
+    # leaf-dtype accumulation reports an inf norm and the all-finite tree
+    # would be wrongly zeroed out by nan_safe handling downstream.
+    pytree = jnp.full((10_000,), 4.0, dtype=jnp.float16)
+    clipped, norm = clipping.clip_pytree(pytree, 1.0)
+    self.assertTrue(jnp.isfinite(norm))
+    self.assertAlmostEqual(norm, 400.0, delta=0.4)
+    self.assertAlmostEqual(
+        optax.tree.norm(clipped.astype(jnp.float32)), 1.0, delta=1e-3
+    )
 
   def test_clip_pytree_per_layer_full_clip_norm_tree(self):
     """Tests per-layer clipping with complete clip_norm tree."""

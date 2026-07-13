@@ -169,7 +169,19 @@ def clip_pytree(
     raise ValueError(f'clip_norm must be non-negative, got {clip_norm=}.')
 
   clip_norm = jnp.maximum(clip_norm, 0.0)
-  l2_norm = optax.tree.norm(pytree)
+  # Accumulate the squared norm in at least float32 precision: accumulating in
+  # the leaf dtype can underflow or overflow for low-precision leaves (e.g.
+  # float16), producing a norm (and scale) that silently violates the
+  # clip_norm bound. Upcasting one leaf at a time (fused under jit) avoids
+  # materializing a float32 copy of the whole pytree.
+  l2_norm = jnp.sqrt(
+      sum(
+          optax.tree.norm(
+              x.astype(jnp.promote_types(x.dtype, jnp.float32)), squared=True
+          )
+          for x in jax.tree.leaves(pytree)
+      )
+  )
   scale = jnp.minimum(1.0, clip_norm / l2_norm)
   if rescale_to_unit_norm:
     scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
