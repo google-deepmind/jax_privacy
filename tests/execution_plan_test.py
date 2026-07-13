@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
@@ -127,6 +129,62 @@ class ExecutionPlanTest(parameterized.TestCase):
     )
     plan = config.make(flags)
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+
+  @parameterized.parameters(
+      {"column_normalize": False},
+      {"column_normalize": True},
+  )
+  def test_noise_stddev_matches_dp_event_for_scaled_strategy(
+      self, column_normalize
+  ):
+    # With num_bands=1, the mechanism adds independent Gaussian noise to each
+    # iterate with stddev noise_multiplier * sensitivity (here 1.0), as claimed
+    # by the dp_event, regardless of the scale of the strategy.
+    config = BandMFConfig(
+        iterations=4,
+        expected_participations=4,
+        strategy=np.array([0.5]),
+        noise_multiplier=1.0,
+        column_normalize=column_normalize,
+    )
+    plan = config.make(execution_plan.PerformanceFlags(noise_seed=0))
+    grads = np.zeros(200_000, dtype=np.float32)
+    state = plan.noise_addition_transform.init(grads)
+    noise, _ = plan.noise_addition_transform.update(grads, state)
+    self.assertAlmostEqual(float(np.std(noise)), 1.0, delta=0.02)
+
+  @parameterized.parameters(
+      {"column_normalize": False},
+      {"column_normalize": True},
+  )
+  def test_rmse_invariant_to_strategy_scale(self, column_normalize):
+    # Scaling the strategy scales the noise stddev up and the noising matrix
+    # down, leaving the mechanism (and hence its rmse) unchanged.
+    config = BandMFConfig(
+        iterations=8,
+        expected_participations=2,
+        strategy=np.array([1.0, 0.5, 0.2]),
+        noise_multiplier=1.0,
+        column_normalize=column_normalize,
+    )
+    scaled = dataclasses.replace(
+        config, strategy=2 * np.asarray(config.strategy)
+    )
+    self.assertAlmostEqual(config.rmse, scaled.rmse, places=6)
+
+  def test_rmse_matches_independent_noise_for_one_band(self):
+    # With num_bands=1, the mechanism adds independent noise with stddev
+    # noise_multiplier to each iterate, so the error on prefix-sum query i is
+    # noise_multiplier * sqrt(i), regardless of the scale of the strategy.
+    iterations = 8
+    config = BandMFConfig(
+        iterations=iterations,
+        expected_participations=2,
+        strategy=np.array([0.5]),
+        noise_multiplier=3.0,
+    )
+    expected = 3.0 * np.sqrt(np.mean(np.arange(1, iterations + 1))) / 2
+    self.assertAlmostEqual(config.rmse, expected, places=5)
 
   def test_rmse_requires_calibration(self):
     config = BandMFConfig.default(
