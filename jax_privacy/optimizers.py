@@ -100,7 +100,7 @@ class AugmentedGradientTransformation(NamedTuple):
   pre_clipping_transform: Callable[[optax.OptState], PreClippingTransform]
 
 
-def _find_adaptive_state(state: optax.OptState) -> optax.Updates:
+def _find_adaptive_state_impl(state: optax.OptState) -> optax.Updates | None:
   """Recursively searches for a recognized adaptive optimizer state."""
   # These are all adaptive optimizers where the square root of the second
   # moments of gradients is the appropriate scaling.
@@ -116,18 +116,26 @@ def _find_adaptive_state(state: optax.OptState) -> optax.Updates:
   # If the state is a tuple/list (e.g., from optax.chain), search recursively.
   if isinstance(state, (tuple, list)):
     for sub_state in state:
-      result = _find_adaptive_state(sub_state)
+      result = _find_adaptive_state_impl(sub_state)
       if result is not None:
         return result
 
-  raise ValueError(
-      f'Could not find an adaptive optimizer state in {type(state)}.'
-      ' scale_then_privatize requires an adaptive optimizer (e.g.,'
-      ' optax.adam, optax.adamw, optax.rmsprop, optax.adagrad). If you are'
-      ' using a custom adaptive optimizer, pass a custom'
-      ' `extract_preconditioner_from_state_fn` function to'
-      ' scale_then_privatize.'
-  )
+  return None
+
+
+def _find_adaptive_state(state: optax.OptState) -> optax.Updates:
+  """Finds a recognized adaptive optimizer state, raising if there is none."""
+  result = _find_adaptive_state_impl(state)
+  if result is None:
+    raise ValueError(
+        f'Could not find an adaptive optimizer state in {type(state)}.'
+        ' scale_then_privatize requires an adaptive optimizer (e.g.,'
+        ' optax.adam, optax.adamw, optax.rmsprop, optax.adagrad). If you are'
+        ' using a custom adaptive optimizer, pass a custom'
+        ' `extract_preconditioner_from_state_fn` function to'
+        ' scale_then_privatize.'
+    )
+  return result
 
 
 def scale_then_privatize(
@@ -194,7 +202,7 @@ def scale_then_privatize(
         lambda u, s: jnp.astype(scale_fn(u, s), u.dtype), updates, scaling
     )
 
-  def update(updates, state, params, **extra_args):
+  def update(updates, state, params=None, **extra_args):
     """Applies the inverse scaling transform, then the base optimizer update."""
     unscaled_updates = pre_clipping_transform(state, inverse=True)(updates)
     return base_optimizer.update(unscaled_updates, state, params, **extra_args)
