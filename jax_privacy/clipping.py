@@ -479,10 +479,11 @@ def clipped_fun(
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
-      value = optax.tree.cast(value, dtype)
       if grid_scale is not None:
+        # dtype is intentionally ignored here; the output is always int64.
         clipped, norm = clip_and_round_to_grid(value, l2_clip_norm, grid_scale)
       else:
+        value = optax.tree.cast(value, dtype)
         clipped, norm = clip_pytree(value, l2_clip_norm, rescale_to_unit_norm)
       clipped = _maybe_zero(clipped, norm, is_padding_example, nan_safe)
       return clipped, aux, norm

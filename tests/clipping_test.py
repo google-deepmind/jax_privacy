@@ -394,6 +394,27 @@ class ClippedFunGridScaleTest(parameterized.TestCase):
         result = cf3(data)
         self.assertLessEqual(float(optax.tree.norm(result)), grid_scale)
 
+  @parameterized.named_parameters(
+      dict(testcase_name='int32', dtype=jnp.int32),
+      dict(testcase_name='float16', dtype=jnp.float16),
+  )
+  def test_clipped_fun_grid_scale_ignores_dtype(self, dtype):
+    """Tests that dtype does not affect the values rounded to the grid."""
+    # The second example overflows float16 and must still be clipped to the
+    # grid rather than zeroed; the first is truncated to zero by int32.
+    data = jnp.array([[0.3, 0.4], [1e5, 0.0]])
+    kwargs = dict(
+        fun=lambda x: x,
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=1.0,
+        grid_scale=1000,
+    )
+    with jax.enable_x64(True):
+      result = clipping.clipped_fun(dtype=dtype, **kwargs)(data)
+      expected = clipping.clipped_fun(dtype=None, **kwargs)(data)
+      chex.assert_trees_all_equal(result, expected)
+
   def test_clipped_grad_grid_scale(self):
     """Tests clipped_grad with grid_scale end-to-end."""
 
