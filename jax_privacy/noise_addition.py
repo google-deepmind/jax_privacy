@@ -215,7 +215,7 @@ def _gaussian_linear_combination(
     return partial + coef * noise
 
   lower_bound, upper_bound = _compute_loop_bounds(matrix_row)
-  loop_state = jnp.zeros(shape, dtype)
+  loop_state = jnp.zeros(shape, dtype, out_sharding=out_sharding)
   return jax.lax.fori_loop(lower_bound, upper_bound, loop_body, loop_state)
 
 
