@@ -47,6 +47,28 @@ class FindAdaptiveStateTest(parameterized.TestCase):
     result = optimizers._find_adaptive_state(state)
     chex.assert_trees_all_equal_shapes_and_dtypes(result, params)
 
+  @parameterized.parameters(
+      dict(
+          optimizer=optax.chain(
+              optax.clip_by_global_norm(1.0),
+              optax.scale_by_adam(),
+              optax.scale(-0.1),
+          )
+      ),
+      dict(
+          optimizer=optax.chain(
+              optax.clip_by_global_norm(1.0),
+              optax.chain(optax.scale_by_adam(), optax.scale(-0.1)),
+          )
+      ),
+  )
+  def test_finds_adaptive_state_not_first_in_chain(self, optimizer):
+    """Should search past non-adaptive states, including in nested chains."""
+    params = {'w': jnp.ones(3)}
+    state = optimizer.init(params)
+    result = optimizers._find_adaptive_state(state)
+    chex.assert_trees_all_equal_shapes_and_dtypes(result, params)
+
   def test_raises_on_sgd_state(self):
     """Should raise ValueError for non-adaptive optimizer (SGD)."""
     opt = optax.sgd(1e-3)
@@ -114,6 +136,22 @@ class ScaleThenPrivatizeTest(parameterized.TestCase):
     scaled_grad = pct(grad)
     aug_updates, _ = augmented.update(scaled_grad, state, params)
     base_updates, _ = base_opt.update(grad, state, params)
+    chex.assert_trees_all_close(aug_updates, base_updates, atol=1e-6)
+
+  def test_update_params_defaults_to_none(self):
+    """update is callable without params, per the documented signature."""
+    base_opt = optax.adam(1e-3)
+    augmented = optimizers.scale_then_privatize(base_opt)
+    params = _init_params()
+    state = augmented.init(params)
+
+    # Run a step with the base optimizer to populate nu.
+    grad = jnp.array([0.1, 0.2, 0.3])
+    _, state = base_opt.update(grad, state, params)
+
+    scaled_grad = augmented.pre_clipping_transform(state)(grad)
+    aug_updates, _ = augmented.update(scaled_grad, state)
+    base_updates, _ = base_opt.update(grad, state)
     chex.assert_trees_all_close(aug_updates, base_updates, atol=1e-6)
 
   def test_custom_preconditioner_fn(self):
