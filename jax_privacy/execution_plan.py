@@ -230,7 +230,9 @@ class BandMFConfig:
       rather than add-remove). If specified, the dataset will be partitioned
       using `batch_selection.PartitionType.EQUAL_SPLIT`, and otherwise it will
       be partitioned using `batch_selection.PartitionType.INDEPENDENT`.
-    column_normalize: Whether to column-normalize the strategy matrix.
+    column_normalize: Whether to column-normalize the strategy matrix. If True,
+      each column of the realized strategy matrix is rescaled to have L2 norm
+      1.0, which makes the mechanism invariant to the scale of `strategy`.
   """
 
   iterations: int
@@ -271,15 +273,22 @@ class BandMFConfig:
     return len(self.strategy)
 
   @property
+  def _max_column_norm(self) -> float:
+    """Maximum L2 column norm of the realized strategy matrix."""
+    if self.column_normalize:
+      return 1.0
+    return float(np.linalg.norm(self.strategy))
+
+  @property
   def rmse(self) -> float:
     """Root mean squared error of the mechanism on the prefix-sum workload.
 
     Requires the config to be calibrated (noise_multiplier must be set).
-    The strategy's column norm is already accounted for via noise_multiplier
-    (the actual noise stddev is noise_multiplier * column_norm), so we do not
-    normalize here. This method normalizes by ``expected_participations``
-    so that you can fairly compare RMSE across instances with different
-    expected participations.
+    The actual noise stddev is noise_multiplier * max_column_norm (see
+    `make`), so the error includes the same column norm factor and is
+    invariant to the scale of the strategy. This method normalizes by
+    ``expected_participations`` so that you can fairly compare RMSE across
+    instances with different expected participations.
 
     Returns:
       The RMSE per query, in units of the clipped gradient.
@@ -289,8 +298,16 @@ class BandMFConfig:
     """
     self._check_calibrated()
     strategy = np.asarray(self.strategy)
+    if self.column_normalize:
+      # Approximates the column-normalized strategy realized by `make`, which
+      # additionally rescales the last num_bands - 1 columns.
+      strategy = strategy / np.linalg.norm(strategy)
     errors = toeplitz.per_query_error(strategy_coef=strategy, n=self.iterations)
-    coefficient = self.noise_multiplier / self.expected_participations
+    coefficient = (
+        self.noise_multiplier
+        * self._max_column_norm
+        / self.expected_participations
+    )
     return float(coefficient * np.sqrt(np.mean(errors)))
 
   @property
@@ -452,7 +469,7 @@ class BandMFConfig:
         partition_type=self._partition_type,
     )
 
-    max_column_norm = np.linalg.norm(self.strategy)
+    max_column_norm = self._max_column_norm
     column_normalize_for_n = self.iterations if self.column_normalize else None
     noising_matrix = toeplitz.inverse_as_streaming_matrix(
         self.strategy, column_normalize_for_n
