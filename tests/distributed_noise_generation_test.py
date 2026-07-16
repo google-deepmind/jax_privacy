@@ -45,6 +45,10 @@ def buffered_toeplitz_noising_matrix_fn():
   return blt.inverse_as_streaming_matrix()
 
 
+def dense_noising_matrix_fn():
+  return jnp.eye(4) + jnp.tril(jnp.full((4, 4), 0.25))
+
+
 class ShardedNoiseGenerationTest(parameterized.TestCase):
 
   def setUp(self):
@@ -64,6 +68,7 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
   @parameterized.named_parameters(
       ('blt', buffered_toeplitz_noising_matrix_fn),
       ('bandmf', banded_toeplitz_noising_matrix_fn),
+      ('dense', dense_noising_matrix_fn),
       ('dpsgd', streaming_matrix.identity),
       ('prefix', streaming_matrix.prefix_sum),
       ('momentum', streaming_matrix.momentum_sgd_matrix),
