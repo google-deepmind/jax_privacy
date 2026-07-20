@@ -125,7 +125,8 @@ see the [LTI24].
 1.  **[Banded23]** *(Amplified) Banded Matrix Factorization: A unified approach
     to private training.* NeurIPS 2023.
 
-1.  **[FHU23]** *Constant matters: Fine-grained Complexity of Differentially Private Continual Observation*. ICML 2023.
+1.  **[FHU23]** *Constant matters: Fine-grained Complexity of Differentially
+    Private Continual Observation*. ICML 2023.
 
 1.  **[LTI24]** *Correlated Noise Provably Beats Independent Noise for
     Differentially Private Learning.*. ICLR 2024.
@@ -133,7 +134,8 @@ see the [LTI24].
 1.  **[BLT24]** *Efficient and Near-Optimal Noise Generation for Streaming
     Differential Privacy.* FOCS 2024.
 
-1.  **[BandedSqrt24]** *Banded Square Root Matrix Factorization for Differentially Private Model Training*. NeurIPS 2024.
+1.  **[BandedSqrt24]** *Banded Square Root Matrix Factorization for
+    Differentially Private Model Training*. NeurIPS 2024.
 
 1.  **[BandMF24]** *Scaling up the Banded Matrix Factorization Mechanism for
     Differentially Private ML.* Arxiv 2024, ICLR 2025.

@@ -54,6 +54,19 @@ jobs:
           else
             echo "Branch is up to date with main."
           fi
+  markdown-lint:
+    name: "Lint: Markdown"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: "actions/checkout@v6"
+      # Enforces the 80-column line limit (MD013) to match Google's internal
+      # Markdown linter; config lives in .markdownlint-cli2.jsonc.
+      - name: Lint Markdown line length
+        uses: "DavidAnson/markdownlint-cli2-action@v24"
+        with:
+          globs: "**/*.md"
+
   lint:
     name: "Lint: Python 3.11"
     runs-on: ubuntu-latest
