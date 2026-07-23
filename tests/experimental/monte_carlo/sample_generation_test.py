@@ -329,6 +329,63 @@ class SampleGenerationTest(parameterized.TestCase):
     stdev = np.sqrt(num_samples * rbs_distribution * (1 - rbs_distribution))
     assert np.all(differences <= 6 * stdev)
 
+  @parameterized.parameters(
+      (
+          True,
+          1 / 2,
+          np.array([1.0, 0.5]),
+          _BANDMF_MODES,
+          np.array([1 / 8, 1 / 8, 1 / 4, 1 / 8, 3 / 8]),
+      ),
+      (
+          True,
+          1 / 2,
+          np.array([1.0]),
+          _DP_SGD_MODES,
+          np.array([1 / 8, 1 / 8, 1 / 4, 1 / 8, 3 / 8]),
+      ),
+      (
+          False,
+          1 / 2,
+          np.array([1.0, 0.5]),
+          np.array([0.0, 0.0, 0.0]),
+          np.array([1.0]),
+      ),
+      (
+          True,
+          1 / 3,
+          np.array([1.0, 0.5]),
+          _BANDMF_MODES,
+          np.array([1 / 18, 1 / 9, 1 / 6, 1 / 9, 5 / 9]),
+      ),
+  )
+  def test_generate_cyclic_poisson_sample(
+      self, positive_sample, sampling_prob, c_col, modes, distribution
+  ):
+    sampling_scheme = batch_selection.CyclicPoissonSampling(
+        sampling_prob=sampling_prob,
+        cycle_length=2,
+        iterations=3,
+        partition_type=batch_selection.PartitionType.INDEPENDENT,
+    )
+    noise_multiplier = 1e-9
+    num_samples = 10000
+    samples = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier,
+        c_col,
+        positive_sample=positive_sample,
+        num_samples=num_samples,
+    )
+    mode_counts = np.zeros(len(modes))
+    for i, mode in enumerate(modes):
+      for j in range(num_samples):
+        if np.allclose(samples[:, j], mode, atol=1e-6):
+          mode_counts[i] += 1
+    differences = np.abs(mode_counts - num_samples * distribution)
+    stdev = np.sqrt(num_samples * distribution * (1 - distribution))
+    assert np.all(differences <= 6 * stdev)
+
   @parameterized.parameters([
       (
           np.array([[1.0], [0.0], [1.0], [0.0]]),
@@ -532,6 +589,114 @@ class SampleGenerationTest(parameterized.TestCase):
         1.0,
         c_col,
         aux=rest_batch_sizes,
+    )
+    np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
+
+  @parameterized.parameters([
+      (
+          np.array([[1.0], [0.0], [1.0]]),
+          1 / 2,
+          np.array([1.0]),
+          [0.24576433028848393],
+      ),
+      (
+          np.array([[1.0], [0.5], [1.0]]),
+          1 / 2,
+          np.array([1.0, 0.5]),
+          [0.4468602908276156],
+      ),
+      (
+          np.array([[1.0], [0.5], [1.0]]),
+          1 / 3,
+          np.array([1.0, 0.5]),
+          [0.30744897807389276],
+      ),
+  ])
+  def test_compute_privacy_loss_cyclic_poisson(
+      self,
+      sample,
+      sampling_prob,
+      c_col,
+      expected_privacy_loss,
+  ):
+    sampling_scheme = batch_selection.CyclicPoissonSampling(
+        sampling_prob=sampling_prob,
+        cycle_length=2,
+        iterations=3,
+        partition_type=batch_selection.PartitionType.INDEPENDENT,
+    )
+    privacy_loss = sample_generation.compute_privacy_loss(
+        sampling_scheme,
+        sample,
+        1.0,
+        c_col,
+    )
+    np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
+
+  def test_compute_privacy_loss_cyclic_poisson_matches_balls_in_bins(
+      self,
+  ):
+    for _ in range(1000):
+      cycle_length = np.random.randint(1, 5)
+      iterations = np.random.randint(cycle_length, 10)
+      c_col = np.random.uniform(size=cycle_length)
+      sample = np.random.uniform(size=(iterations, 1))
+      sampling_scheme = batch_selection.CyclicPoissonSampling(
+          sampling_prob=1.0,
+          cycle_length=cycle_length,
+          iterations=iterations,
+          partition_type=batch_selection.PartitionType.INDEPENDENT,
+      )
+      equivalent_sampling_scheme = batch_selection.BallsInBinsSampling(
+          cycle_length=cycle_length,
+          iterations=iterations,
+      )
+      privacy_loss_1 = sample_generation.compute_privacy_loss(
+          sampling_scheme,
+          sample,
+          1.0,
+          c_col,
+      )
+      privacy_loss_2 = sample_generation.compute_privacy_loss(
+          equivalent_sampling_scheme,
+          sample,
+          1.0,
+          c_col,
+      )
+      np.testing.assert_almost_equal(privacy_loss_1, privacy_loss_2)
+
+  @parameterized.parameters([
+      (
+          np.array([[1.0, 1.0], [0.5, 1.0], [1.0, 1.0]]),
+          1 / 2,
+          np.array([1.0, 0.5]),
+          [0.4468602908276156, 0.6805952255579165],
+      ),
+      (
+          np.array([[1.0, 1.0], [0.5, 1.0], [1.0, 1.0]]),
+          1 / 3,
+          np.array([1.0, 0.5]),
+          [0.30744897807389276, 0.485401681402855],
+      ),
+  ])
+  def test_compute_privacy_loss_cyclic_poisson_multiple_samples(
+      self,
+      sample,
+      sampling_prob,
+      c_col,
+      expected_privacy_loss,
+  ):
+    sampling_scheme = batch_selection.CyclicPoissonSampling(
+        sampling_prob=sampling_prob,
+        cycle_length=2,
+        iterations=3,
+        partition_type=batch_selection.PartitionType.INDEPENDENT,
+    )
+    privacy_loss = sample_generation.compute_privacy_loss(
+        sampling_scheme,
+        sample,
+        1.0,
+        c_col,
     )
     np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
 
