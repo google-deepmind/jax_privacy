@@ -16,7 +16,9 @@ import math
 
 from absl.testing import absltest
 from absl.testing import parameterized
+import dp_accounting
 from jax_privacy.experimental.monte_carlo import delta_calculation
+import numpy as np
 
 
 class DeltaCalculationTest(parameterized.TestCase):
@@ -134,6 +136,55 @@ class DeltaCalculationTest(parameterized.TestCase):
     )
     self.assertAlmostEqual(delta, expected_delta, places=5)
 
+  @parameterized.parameters(
+      ([1, 2, 3], None),
+      ([4, 5], None),
+      ([2, 3, 4], None),
+      ([2, 3, 4], [2, 1, 1]),
+      ([2, 3, 4], [1, 1, 2]),
+  )
+  def test_composition_with_no_op_event(self, samples, counts):
+    """No-op DP event should have same result as no event."""
+    delta_1 = delta_calculation.delta_from_epsilon_and_samples(
+        3, samples, counts, dp_accounting.NoOpDpEvent()
+    )
+    delta_2 = delta_calculation.delta_from_epsilon_and_samples(
+        3, samples, counts
+    )
+    self.assertBetween(delta_1, delta_2 * (1 - 1e-7), delta_2 * (1 + 1e-7))
+
+  @parameterized.parameters(
+      ([1, 2, 3], None),
+      ([4, 5], None),
+      ([2, 3, 4], None),
+      ([2, 3, 4], [2, 1, 1]),
+      ([2, 3, 4], [1, 1, 2]),
+  )
+  def test_composition_with_nonprivate_dp_event(self, samples, counts):
+    """Non-private DP event should force delta = 1 always."""
+    delta = delta_calculation.delta_from_epsilon_and_samples(
+        3, samples, counts, dp_accounting.NonPrivateDpEvent()
+    )
+    self.assertEqual(delta, 1.0)
+
+  def test_gaussian_mc_with_gaussian_pld(self):
+    """Test that composing MC and PLD matches PLD alone."""
+    rng = np.random.default_rng(0)
+    # Samples from PLD for Gaussian mechanism with noise multiplier 1.0.
+    samples = rng.normal(loc=0.5, size=100_000)
+    other_event = dp_accounting.pld.PLDAccountant(
+        value_discretization_interval=1e-2
+    ).compose(dp_accounting.GaussianDpEvent(1.0))
+    accountant = dp_accounting.pld.PLDAccountant(
+        value_discretization_interval=1e-2
+    )
+    accountant.compose(dp_accounting.GaussianDpEvent(1 / (2**0.5)))
+    delta_1 = delta_calculation.delta_from_epsilon_and_samples(
+        1.0, samples, other_event=other_event
+    )
+    delta_2 = accountant.get_delta(1.0)
+    self.assertAlmostEqual(delta_1, delta_2, places=3)
+
   _FAILURE_DELTA = delta_calculation.get_base_delta(1000, 0.1)
 
   @parameterized.named_parameters(
@@ -246,6 +297,87 @@ class DeltaCalculationTest(parameterized.TestCase):
     )
     self.assertEqual(result, expected_result)
     pass
+
+  @parameterized.named_parameters(
+      (
+          'no_op_dp_event_no_effect_first_passes',
+          [[1], [1000]],
+          dp_accounting.NoOpDpEvent(),
+          (True, 0),
+      ),
+      (
+          'empty_accountant_no_effect_first_passes',
+          [[1], [1000]],
+          dp_accounting.pld.PLDAccountant(),
+          (True, 0),
+      ),
+      (
+          'no_op_dp_event_no_effect_all_passes',
+          [[1], [1]],
+          dp_accounting.NoOpDpEvent(),
+          (True, 1),
+      ),
+      (
+          'no_op_dp_event_no_effect_fails',
+          [[1000], [1000]],
+          dp_accounting.NoOpDpEvent(),
+          (False, _FAILURE_DELTA),
+      ),
+      (
+          'non_private_event_fails',
+          [[1], [1]],
+          dp_accounting.NonPrivateDpEvent(),
+          (False, _FAILURE_DELTA),
+      ),
+      (
+          'non_private_event_in_accoutant_fails',
+          [[1], [1]],
+          dp_accounting.pld.PLDAccountant().compose(
+              dp_accounting.NonPrivateDpEvent()
+          ),
+          (False, _FAILURE_DELTA),
+      ),
+      (
+          'list_of_events_determines_output',
+          [[1], [1]],
+          [
+              dp_accounting.NoOpDpEvent(),
+              dp_accounting.NonPrivateDpEvent(),
+          ],
+          (True, 0),
+      ),
+      (
+          'list_of_accountants_determines_output',
+          [[1], [1]],
+          [
+              dp_accounting.pld.PLDAccountant(),
+              dp_accounting.pld.PLDAccountant().compose(
+                  dp_accounting.NonPrivateDpEvent()
+              ),
+          ],
+          (True, 0),
+      ),
+      (
+          'list_of_events_doesnt_determine_output',
+          [[1000], [1]],
+          [
+              dp_accounting.NoOpDpEvent(),
+              dp_accounting.NonPrivateDpEvent(),
+          ],
+          (False, _FAILURE_DELTA),
+      ),
+  )
+  def test_perform_calibration_from_samples_with_other_event(
+      self, positive_samples, other_event, expected_result
+  ):
+    result = delta_calculation.perform_calibration_from_samples(
+        1.0,
+        0.1,
+        positive_samples=positive_samples,
+        positive_counts=[[1000], [1000]],
+        other_event=other_event,
+    )
+    self.assertEqual(result, expected_result)
 
 
 if __name__ == '__main__':

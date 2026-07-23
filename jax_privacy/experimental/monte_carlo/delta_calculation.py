@@ -16,8 +16,25 @@
 
 from typing import Sequence
 
+import dp_accounting
 import numpy as np
 import scipy
+
+DpEventOrAccountant = (
+    dp_accounting.dp_event.DpEvent | dp_accounting.pld.PLDAccountant
+)
+
+
+def _convert_to_accountant(
+    dp_events: DpEventOrAccountant,
+) -> dp_accounting.pld.PLDAccountant:
+  """Converts DpEventOrAccountant to a PLDAccountant."""
+  if isinstance(dp_events, dp_accounting.dp_event.DpEvent):
+    return dp_accounting.pld.PLDAccountant().compose(dp_events)
+  elif isinstance(dp_events, dp_accounting.pld.PLDAccountant):
+    return dp_events
+  else:
+    raise ValueError('Unsupported DpEventOrAccountant type.')
 
 
 def _kl(q: float, p: float) -> float:
@@ -176,6 +193,7 @@ def delta_from_epsilon_and_samples(
     epsilon: float,
     samples: Sequence[float],
     counts: Sequence[float] | None = None,
+    other_event: DpEventOrAccountant | None = None,
 ):
   """Calculate the delta parameter for a given epsilon and list of samples.
 
@@ -189,6 +207,11 @@ def delta_from_epsilon_and_samples(
       samples is very large, in which case one can discretize the samples and
       pass the counts of each discretization. If passed, should be the same
       length as samples.
+    other_event: An optional DpEvent or PrivacyAccountant object. If None, we
+      are just computing the delta parameter for the event whose samples are
+      given by samples. If an accountant is given, the method returns the
+      estimate for Monte Carlo accounting of the composition of the event whose
+      samples are given by samples, and other_event.
 
   Returns:
     The delta parameter given by Monte Carlo estimation of the hockey-stick
@@ -206,7 +229,13 @@ def delta_from_epsilon_and_samples(
     if samples.size != counts.size:
       raise ValueError('samples and counts must have the same size.')
   np_min = np.minimum
-  return np.average(-np.expm1(np_min(epsilon - samples, 0.0)), weights=counts)
+  if other_event is None:
+    return np.average(-np.expm1(np_min(epsilon - samples, 0.0)), weights=counts)
+  else:
+    other_event = _convert_to_accountant(other_event)
+    # TODO: Cite an external derivation for this formula.
+    estimands = [other_event.get_delta(epsilon - s) for s in samples]
+    return np.average(estimands, weights=counts)
 
 
 def perform_calibration_from_samples(
@@ -217,6 +246,9 @@ def perform_calibration_from_samples(
     positive_counts: Sequence[Sequence[float]] | None = None,
     negative_samples: Sequence[Sequence[float]] | None = None,
     negative_counts: Sequence[Sequence[float]] | None = None,
+    other_event: (
+        DpEventOrAccountant | Sequence[DpEventOrAccountant] | None
+    ) = None,
 ) -> tuple[bool, int | float]:
   """Perform calibration to find highest-utility parameter for DP target.
 
@@ -273,6 +305,30 @@ def perform_calibration_from_samples(
       of the lists of negative samples. If None, we assume the samples are
       unweighted. If passed, each list should be the same length as the
       associated list of negative_samples. Ignored if negative_samples is None.
+    other_event: Optional DpEvent or PLDAccountant or sequence thereof. For
+    simplicity we don't accept Sequence[DpEvent], the ComposedDpEvent can be
+    used instead. For brevity, we below refer to other_event as if it is a
+    DpEvent, but if an accountant is passed the below logic is equivalent by
+    substituting in the event represented by the accountant.
+      - If other_event is None, we are just calibrating the single event
+        corresponding to the sequence of privacy loss samples.
+      - If other_event is a single DpEvent, we are calibrating the composition
+        of the mechanism whose privacy loss samples we computed and other_event,
+        and are assuming other_event is fixed with respect to the parameter we
+        are calibrating.
+      - If other_event is a list of other_event objects, it must have the same
+        length as positive_samples, i.e. one event for each hyperparameter
+        value. In this case, we are again calibrating the composition of the
+        mechanism whose privacy loss samples we computed, and other_event, but
+        now we are assuming other_event is defined as a function of the
+        parameter we are calibrating (and other_event[i] corresponds to the
+        i-th hyperparameter value).
+        For example, suppose we are calibrating sigma in {sigma_1, sigma_2} for
+        the composition of a mechanism M(sigma) with a Gaussian mechanism with 
+        noise multiplier sigma. Then we should have `positive_samples =
+        [samples_1, samples_2]`, where `samples_i` is the privacy loss samples
+        for M(sigma_i) (and `samples_1` is independent of `samples_2`), and
+        other_event is `[GaussianDpEvent(sigma_1), GaussianDpEvent(sigma_2)]`.
 
   Returns:
     Either (True, i), or (False, base_delta). If there is an associated set of
@@ -281,7 +337,7 @@ def perform_calibration_from_samples(
     (epsilon, delta)-DP guarantee. If (False, base_delta) is returned, we should
     fall back to a mechanism that is known to be (epsilon, base_delta)-DP (i.e.,
     one that can be calibrated without Monte Carlo verification)
-  """
+  """  # fmt: skip
   if not positive_samples:
     raise ValueError('positive_samples must be non-empty.')
   if positive_counts is not None and len(positive_samples) != len(
@@ -311,31 +367,54 @@ def perform_calibration_from_samples(
     negative_sample_counts = []
   else:
     negative_sample_counts = [sum(counts) for counts in negative_counts]
+
+  if other_event is None:
+    other_events = [None] * len(positive_samples)
+  else:
+    if isinstance(other_event, Sequence):
+      other_events = [_convert_to_accountant(e) for e in other_event]
+    else:
+      other_events = [_convert_to_accountant(other_event)] * len(
+          positive_samples
+      )
+
   min_sample_count = min(positive_sample_counts + negative_sample_counts)
 
   base_delta = get_base_delta(min_sample_count, delta)
 
   first_positive_delta = delta_from_epsilon_and_samples(
-      epsilon, positive_samples[0], positive_counts[0]
+      epsilon,
+      positive_samples[0],
+      positive_counts[0],
+      other_events[0],
   )
   if negative_samples is None:
     first_negative_delta = 0.0
   else:
     first_negative_delta = delta_from_epsilon_and_samples(
-        epsilon, negative_samples[0], negative_counts[0]
+        epsilon,
+        negative_samples[0],
+        negative_counts[0],
+        other_events[0],
     )
   if first_positive_delta > base_delta or first_negative_delta > base_delta:
     return False, base_delta
 
   for i in range(1, len(positive_samples)):
     positive_delta = delta_from_epsilon_and_samples(
-        epsilon, positive_samples[i], positive_counts[i]
+        epsilon,
+        positive_samples[i],
+        positive_counts[i],
+        other_events[i],
     )
     if negative_samples is None:
       negative_delta = 0.0
     else:
       negative_delta = delta_from_epsilon_and_samples(
-          epsilon, negative_samples[i], negative_counts[i]
+          epsilon,
+          negative_samples[i],
+          negative_counts[i],
+          other_events[i],
       )
     if positive_delta > base_delta or negative_delta > base_delta:
       # This hyperparameter does not pass verification, return the previous one.
