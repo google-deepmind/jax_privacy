@@ -21,8 +21,6 @@ JIT-compiled or ahead-of-time compiled.
 """
 
 from collections.abc import Callable
-import concurrent.futures
-import copy
 import dataclasses
 import functools
 from typing import Protocol, TypeAlias
@@ -30,6 +28,7 @@ from typing import Protocol, TypeAlias
 from absl import logging
 import jax
 import jax_privacy
+from jax_privacy import _compilation
 from jax_privacy import _validate
 from jax_privacy import batch_selection
 from jax_privacy import execution_plan
@@ -51,10 +50,8 @@ Dataset: TypeAlias = optax.ArrayTree
 Params: TypeAlias = optax.ArrayTree
 OptState: TypeAlias = optax.ArrayTree
 NoiseState: TypeAlias = optax.ArrayTree
-PrecompiledFuture: TypeAlias = concurrent.futures.Future[jax.stages.Compiled]
-
-# Shared thread pool for background ahead-of-time compilation.
-_COMPILE_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+# Re-exported so callers can keep using training.PrecompiledFuture.
+PrecompiledFuture: TypeAlias = _compilation.PrecompiledFuture
 
 
 class LossFn(Protocol):
@@ -259,36 +256,9 @@ class DPTrainer:
       rng_or_seed: np.random.Generator | int | None = None,
   ) -> dict[int, PrecompiledFuture]:
     """[ADVANCED] Warm up the JIT cache for ``train_step`` asynchronously."""
-    # With the same rng passed to _precompile and fit, the exact same
-    # batches will be sampled in this dry-run as in the actual training loop,
-    # guaranteeing JIT cache hits.
-    rng = copy.deepcopy(np.random.default_rng(rng_or_seed))
-    seed = rng.integers(2**63)
-    n = _validate.batch(dataset)
-
-    state = jax.eval_shape(self.init, params)
-    key = jax.eval_shape(lambda x: x, jax.random.key(seed))
-
-    futures: dict[int, PrecompiledFuture] = {}
-
-    def _resize(size, x):
-      return jax.ShapeDtypeStruct((size, *x.shape[1:]), x.dtype)
-
-    for idx in self.plan.batch_selection_strategy.batch_iterator(n, rng=rng):
-      padded = batch_selection.pad_to_multiple_of(idx, self.padding_multiple)
-      batch_size = padded.size
-      batch = jax.tree.map(functools.partial(_resize, batch_size), dataset)
-      padding = jax.ShapeDtypeStruct((batch_size,), np.bool_)
-
-      lowered = self.train_step.lower(self, state, batch, padding, key)
-      logging.info("AOT-compiling train_step for batch size %d", batch_size)
-      # We asyncronously ahead-of-time (AOT) compile the lowered function in a
-      # background thread to avoid blocking the training loop. Currently, the
-      # rest of this function (batch simulation + lowering) happens on the main
-      # thread. This could potentially be improved in the future.
-      futures[batch_size] = _COMPILE_POOL.submit(lowered.compile)
-
-    return futures
+    return _compilation.precompile(
+        self, dataset, params, rng_or_seed=rng_or_seed
+    )
 
   def fit(
       self,
