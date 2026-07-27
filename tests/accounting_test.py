@@ -122,7 +122,6 @@ class AccountingTest(parameterized.TestCase):
         event_fn,
         target_epsilon=1.0,
         target_delta=1e-6,
-        bracket_interval=dp_accounting.ExplicitBracketInterval(0.1, 20.0),
     )
     eps = accountant().compose(event_fn(nm)).get_epsilon(target_delta=1e-6)
     self.assertAlmostEqual(eps, 1.0, places=4)
