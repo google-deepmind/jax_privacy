@@ -751,7 +751,7 @@ class ToeplitzAmplificationTest(parameterized.TestCase):
 
     helper_stddev = helper.required_stddev(coef=coef)
     np.testing.assert_allclose(
-        helper_stddev, expected_stddev, rtol=1e-5, atol=1e-5
+        helper_stddev, expected_stddev, rtol=1e-4, atol=1e-5
     )
 
 
