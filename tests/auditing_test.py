@@ -607,6 +607,18 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     true_eps = dp_accounting.get_epsilon_gaussian(1 / mu, delta)
     np.testing.assert_allclose(eps, true_eps, rtol=0.05)
 
+  @parameterized.parameters(0.0, -1.0, -3.0)
+  def test_epsilon_from_gdp_non_positive_mu_is_zero(self, mu):
+    rng = np.random.default_rng(seed=0xBAD5EED)
+    significance = 0.05
+    delta = 1e-5
+    m = 5000
+    in_canary_scores = rng.normal(mu, 1, m)
+    out_canary_scores = rng.normal(0, 1, m)
+    auditor = auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+    eps = auditor.epsilon_from_gdp(significance, delta)
+    self.assertEqual(eps, 0)
+
   @parameterized.product(
       quantiles=(0.025, 0.975, (0.025, 0.975), (0.025, 0.5, 0.975)),
       bootstrap_type=('quantile', 'bias_correction', 'acceleration'),
