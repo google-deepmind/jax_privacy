@@ -342,12 +342,13 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     privatizer = noise_addition.discrete_gaussian_privatizer(
         stddev=5.0, rng=rng
     )
-    grads = {'w': jnp.zeros((32,), dtype=jnp.int64)}
+    grads = {'w': np.zeros((32,), dtype=np.int64)}
     state = privatizer.init(grads)
     noisy, state = privatizer.update(grads, state)
-    self.assertTrue(np.issubdtype(np.asarray(noisy['w']).dtype, np.integer))
+    noisy_w = np.asarray(noisy['w'])
+    self.assertTrue(np.issubdtype(noisy_w.dtype, np.integer))
     # Non-degenerate noise for stddev=5 over 32 dims.
-    self.assertGreater(float(jnp.std(noisy['w'].astype(jnp.float64))), 1.0)
+    self.assertGreater(float(np.std(noisy_w.astype(np.float64))), 1.0)
 
   def test_discrete_gaussian_privatizer_rejects_negative_stddev(self):
     with self.assertRaises(ValueError):
