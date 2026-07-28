@@ -78,8 +78,8 @@ def main(_):
 
   config = execution_plan.DpsgdConfig(
       iterations=ITERATIONS,
-      expected_batch_size=EXPECTED_BATCH_SIZE,
-      num_examples=USERS,
+      expected_participations=EXPECTED_BATCH_SIZE * ITERATIONS / USERS,
+      normalize_by=EXPECTED_BATCH_SIZE,
       l2_clip_norm=L2_CLIP_NORM,
       rescale_to_unit_norm=True,
   ).calibrate(epsilon=EPSILON, delta=DELTA)

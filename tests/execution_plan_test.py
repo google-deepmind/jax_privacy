@@ -180,37 +180,27 @@ class ExecutionPlanTest(parameterized.TestCase):
 
 
 class DpsgdConfigTest(parameterized.TestCase):
-  """Tests for Poisson and fixed-size DP-SGD execution plan configs."""
-
-  def test_dpsgd_validation(self):
-    with self.assertRaises(ValueError):
-      execution_plan.DpsgdConfig(
-          iterations=10,
-          expected_batch_size=100,
-          num_examples=50,
-          noise_multiplier=1.0,
-      )
+  """Tests for the unified DpsgdConfig (Poisson and fixed-size)."""
 
   def test_dpsgd_uncalibrated_make_raises(self):
     config = execution_plan.DpsgdConfig(
         iterations=20,
-        expected_batch_size=8,
-        num_examples=100,
+        expected_participations=2.0,
     )
     with self.assertRaises(ValueError):
       config.make()
 
-  def test_dpsgd_execution_plan_creation(self):
+  def test_poisson_execution_plan_creation(self):
     iterations = 20
+    expected_participations = 1.6
     expected_batch_size = 8
-    num_examples = 100
     config = execution_plan.DpsgdConfig(
         iterations=iterations,
-        expected_batch_size=expected_batch_size,
-        num_examples=num_examples,
+        expected_participations=expected_participations,
         noise_multiplier=1.0,
         l2_clip_norm=1.0,
         rescale_to_unit_norm=True,
+        normalize_by=expected_batch_size,
     )
     plan = config.make()
 
@@ -220,7 +210,7 @@ class DpsgdConfigTest(parameterized.TestCase):
     )
     self.assertAlmostEqual(
         plan.batch_selection_strategy.sampling_prob,
-        expected_batch_size / num_examples,
+        expected_participations / iterations,
     )
     self.assertEqual(plan.batch_selection_strategy.cycle_length, 1)
     self.assertEqual(
@@ -229,7 +219,7 @@ class DpsgdConfigTest(parameterized.TestCase):
     )
     self.assertIsInstance(plan.dp_event, dp_accounting.SelfComposedDpEvent)
     self.assertLen(
-        list(plan.batch_selection_strategy.batch_iterator(num_examples)),
+        list(plan.batch_selection_strategy.batch_iterator(100)),
         iterations,
     )
 
@@ -239,13 +229,13 @@ class DpsgdConfigTest(parameterized.TestCase):
         1.0 / expected_batch_size,
     )
 
-  def test_dpsgd_calibrate_meets_budget(self):
+  def test_poisson_calibrate_meets_budget(self):
     epsilon = 2.0
     delta = 1e-5
     config = execution_plan.DpsgdConfig(
         iterations=50,
-        expected_batch_size=16,
-        num_examples=500,
+        expected_participations=1.6,
+        normalize_by=16,
     ).calibrate(epsilon=epsilon, delta=delta)
 
     self.assertIsNotNone(config.noise_multiplier)
@@ -257,13 +247,12 @@ class DpsgdConfigTest(parameterized.TestCase):
     )
     self.assertLessEqual(realized_epsilon, epsilon + 1e-3)
 
-  def test_dpsgd_noise_matches_sensitivity_calibration(self):
+  def test_poisson_noise_matches_sensitivity_calibration(self):
     """Empirical noise stddev matches noise_multiplier * sensitivity."""
     expected_batch_size = 10
     config = execution_plan.DpsgdConfig(
         iterations=5,
-        expected_batch_size=expected_batch_size,
-        num_examples=100,
+        expected_participations=0.5,
         noise_multiplier=2.5,
         l2_clip_norm=1.0,
         rescale_to_unit_norm=True,
@@ -279,31 +268,55 @@ class DpsgdConfigTest(parameterized.TestCase):
     state = plan.noise_addition_transform.init(grads)
     noisy, _ = plan.noise_addition_transform.update(grads, state)
     empirical_std = float(jnp.std(noisy["w"]))
-    # Large vector: std estimate should be close to the calibrated stddev.
     self.assertAlmostEqual(empirical_std, expected_stddev, delta=0.15)
 
-  def test_dpsgd_truncated_plan(self):
+  def test_truncated_poisson_requires_num_examples(self):
+    with self.assertRaises(ValueError):
+      execution_plan.DpsgdConfig(
+          iterations=10,
+          expected_participations=1.0,
+          truncated_batch_size=12,
+          noise_multiplier=1.0,
+      )
+
+  def test_truncated_poisson_plan(self):
     config = execution_plan.DpsgdConfig(
         iterations=10,
-        expected_batch_size=8,
+        expected_participations=0.8,
         num_examples=100,
         truncated_batch_size=12,
         noise_multiplier=1.0,
+        normalize_by=8,
     )
     plan = config.make()
     self.assertEqual(plan.batch_selection_strategy.truncated_batch_size, 12)
+    self.assertEqual(
+        plan.neighboring_relation,
+        dp_accounting.NeighboringRelation.REPLACE_SPECIAL,
+    )
     for batch in plan.batch_selection_strategy.batch_iterator(100, rng=0):
       self.assertLessEqual(batch.size, 12)
 
-  def test_fixed_size_dpsgd_execution_plan(self):
+  def test_fixed_size_requires_num_examples(self):
+    with self.assertRaises(ValueError):
+      execution_plan.DpsgdConfig(
+          iterations=10,
+          expected_participations=2.0,
+          batch_size=8,
+          noise_multiplier=1.0,
+      )
+
+  def test_fixed_size_execution_plan(self):
     iterations = 15
     batch_size = 8
     num_examples = 64
-    config = execution_plan.FixedSizeDpsgdConfig(
+    config = execution_plan.DpsgdConfig(
         iterations=iterations,
+        expected_participations=iterations * batch_size / num_examples,
         batch_size=batch_size,
         num_examples=num_examples,
         noise_multiplier=1.5,
+        normalize_by=batch_size,
     )
     plan = config.make()
     self.assertIsInstance(
@@ -322,17 +335,18 @@ class DpsgdConfigTest(parameterized.TestCase):
       self.assertLen(batch, batch_size)
 
     grad_fn = plan.clipped_grad(lambda params, x: (params - x).mean())
-    # REPLACE_ONE doubles sensitivity vs add/remove.
     self.assertAlmostEqual(
         grad_fn.sensitivity(plan.neighboring_relation),
         2.0 / batch_size,
     )
 
-  def test_fixed_size_dpsgd_calibrate(self):
-    config = execution_plan.FixedSizeDpsgdConfig(
+  def test_fixed_size_calibrate(self):
+    config = execution_plan.DpsgdConfig(
         iterations=30,
+        expected_participations=2.4,
         batch_size=16,
         num_examples=200,
+        normalize_by=16,
     ).calibrate(epsilon=3.0, delta=1e-5)
     self.assertGreater(config.noise_multiplier, 0)
     plan = config.make()
@@ -340,8 +354,9 @@ class DpsgdConfigTest(parameterized.TestCase):
 
   def test_fixed_size_validation(self):
     with self.assertRaises(ValueError):
-      execution_plan.FixedSizeDpsgdConfig(
+      execution_plan.DpsgdConfig(
           iterations=10,
+          expected_participations=1.0,
           batch_size=100,
           num_examples=50,
           replace=False,

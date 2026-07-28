@@ -46,7 +46,7 @@ guarantee.
 Constructors for these plans are highly configurable, offering access to the
 full capabilities of the underlying components while also providing sensible
 defaults. Primary entry points include ``BandMFConfig`` for amplified BandMF
-and ``DpsgdConfig`` / ``FixedSizeDpsgdConfig`` for vanilla DP-SGD.
+and ``DpsgdConfig`` for vanilla DP-SGD (Poisson or fixed-size batches).
 """
 
 from __future__ import annotations
@@ -518,102 +518,136 @@ def _check_noise_multiplier_set(noise_multiplier: float | None) -> None:
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class DpsgdConfig:
-  """Configuration for Poisson-sampled DP-SGD via a DPExecutionPlan.
+  """Configuration for DP-SGD via a DPExecutionPlan.
 
-  Couples Poisson batch selection, clipped aggregation, i.i.d. Gaussian noise,
-  and ``accounting.dpsgd_event`` so the returned plan's components match the
-  stated privacy guarantee when used together.
+  Couples batch selection, clipped aggregation, i.i.d. Gaussian noise, and the
+  matching accounting event. By default uses Poisson sampling
+  (``accounting.dpsgd_event``). Set ``batch_size`` to switch to fixed-size
+  sampling (``accounting.fixed_dpsgd_event``).
 
-  Example Usage (Calibrate from epsilon/delta):
+  Example Usage (Poisson, calibrate from epsilon/delta):
     >>> config = DpsgdConfig(  # doctest: +SKIP
-    ...   iterations=1000, expected_batch_size=256, num_examples=50000,
+    ...   iterations=1000, expected_participations=100,
+    ...   normalize_by=256,
     ... ).calibrate(epsilon=1.0, delta=1e-5)
 
-  Example Usage (Direct noise_multiplier):
+  Example Usage (Fixed-size batches):
     >>> config = DpsgdConfig(
-    ...   iterations=1000, expected_batch_size=256, num_examples=50000,
-    ...   noise_multiplier=1.0,
+    ...   iterations=1000, expected_participations=100,
+    ...   batch_size=256, num_examples=50000, noise_multiplier=1.0,
+    ...   normalize_by=256,
     ... )
 
   References: https://arxiv.org/abs/1607.00133
 
   Attributes:
     iterations: Number of training iterations / batch draws.
-    expected_batch_size: Expected Poisson batch size. Sampling probability is
-      ``expected_batch_size / num_examples``. Prefer normalizing clipped
-      gradients by this expected size (not the realized batch size).
-    num_examples: Dataset size used to derive the Poisson sampling probability.
-      Treated as public information for accounting.
+    expected_participations: Expected number of times each example participates
+      across all iterations. For Poisson sampling, the sampling probability is
+      ``expected_participations / iterations`` (same convention as
+      ``BandMFConfig`` with ``num_bands=1``).
     noise_multiplier: Ratio of noise stddev to query sensitivity. If unset,
       call ``calibrate()``.
     l2_clip_norm: Maximum L2 norm of per-example gradients.
     rescale_to_unit_norm: Divide clipped gradients by ``l2_clip_norm``.
-    normalize_by: Divide the sum-of-clipped gradients by this value. Defaults to
-      ``expected_batch_size`` when ``None``.
-    truncated_batch_size: Optional truncation cap for Poisson sampling. When
-      set, accounting uses ``truncated_dpsgd_event``.
-    use_zcdp: If True, account with a ``ZCDpEvent`` (e.g. for discrete
-      Gaussian). Ignored when ``truncated_batch_size`` is set, because
-      truncated accounting uses a continuous Gaussian event.
+    normalize_by: Divide the sum-of-clipped gradients by this value. Prefer the
+      *expected* batch size under Poisson sampling.
+    batch_size: If set, use fixed-size batch sampling with this size instead of
+      Poisson. Requires ``num_examples``.
+    num_examples: Dataset size. Required when ``batch_size`` or
+      ``truncated_batch_size`` is set (dataset size is treated as public, which
+      rules out add/remove adjacency for those paths). Not needed for plain
+      Poisson sampling under add/remove adjacency.
+    truncated_batch_size: Optional truncation cap for Poisson sampling. Requires
+      ``num_examples``. Incompatible with ``batch_size``.
+    replace: Whether fixed-size batches sample with replacement. Ignored for
+      Poisson sampling.
   """
 
   iterations: int
-  expected_batch_size: int
-  num_examples: int
+  expected_participations: float
   noise_multiplier: float | None = None
   l2_clip_norm: float = 1.0
   rescale_to_unit_norm: bool = True
-  normalize_by: float | None = None
+  normalize_by: float = 1.0
+  batch_size: int | None = None
+  num_examples: int | None = None
   truncated_batch_size: int | None = None
-  use_zcdp: bool = False
+  replace: bool = False
 
   def __post_init__(self):
     _validate.positive(
         iterations=self.iterations,
-        expected_batch_size=self.expected_batch_size,
-        num_examples=self.num_examples,
         l2_clip_norm=self.l2_clip_norm,
+        normalize_by=self.normalize_by,
     )
-    if self.normalize_by is not None:
-      _validate.positive(normalize_by=self.normalize_by)
+    _validate.in_range(
+        0,
+        self.iterations,
+        expected_participations=self.expected_participations,
+    )
     if self.noise_multiplier is not None:
       _validate.non_negative(noise_multiplier=self.noise_multiplier)
+
+    if self.batch_size is not None and self.truncated_batch_size is not None:
+      raise ValueError('batch_size and truncated_batch_size are incompatible.')
+
+    if self.batch_size is not None:
+      _validate.positive(batch_size=self.batch_size)
+      if self.num_examples is None:
+        raise ValueError('batch_size requires num_examples to be set.')
+      _validate.positive(num_examples=self.num_examples)
+      if not self.replace and self.batch_size > self.num_examples:
+        raise ValueError(
+            f'batch_size={self.batch_size} must be <= num_examples='
+            f'{self.num_examples} when replace=False.'
+        )
+    elif self.num_examples is not None:
+      _validate.positive(num_examples=self.num_examples)
+
     if self.truncated_batch_size is not None:
       _validate.positive(truncated_batch_size=self.truncated_batch_size)
+      if self.num_examples is None:
+        raise ValueError(
+            'truncated_batch_size requires num_examples to be set.'
+        )
       if self.truncated_batch_size > self.num_examples:
         raise ValueError(
             f'truncated_batch_size={self.truncated_batch_size} must be <='
             f' num_examples={self.num_examples}.'
         )
-      if self.use_zcdp:
-        raise ValueError(
-            'use_zcdp=True is not supported with truncated_batch_size.'
-        )
-    if self.expected_batch_size > self.num_examples:
-      raise ValueError(
-          f'expected_batch_size={self.expected_batch_size} must be <='
-          f' num_examples={self.num_examples}.'
-      )
+
+  @property
+  def _uses_fixed_batch_size(self) -> bool:
+    """True when this config selects fixed-size batch sampling."""
+    return self.batch_size is not None
 
   @property
   def sampling_prob(self) -> float:
     """Poisson sampling probability implied by the config."""
-    return self.expected_batch_size / self.num_examples
-
-  @property
-  def _normalize_by(self) -> float:
-    """Effective normalization constant for clipped gradients."""
-    if self.normalize_by is None:
-      return float(self.expected_batch_size)
-    return float(self.normalize_by)
+    return self.expected_participations / self.iterations
 
   @property
   def _neighboring_relation(self) -> NeighboringRelation:
-    """Neighboring relation for Poisson DP-SGD (add/remove)."""
+    """Neighboring relation implied by the sampling / public-size settings."""
+    if self._uses_fixed_batch_size:
+      if self.replace:
+        return NeighboringRelation.ADD_OR_REMOVE_ONE
+      return NeighboringRelation.REPLACE_ONE
+    if self.num_examples is not None:
+      return NeighboringRelation.REPLACE_SPECIAL
     return NeighboringRelation.ADD_OR_REMOVE_ONE
 
   def _get_dp_event(self, sigma: float) -> dp_accounting.DpEvent:
-    """Returns a DpEvent for Poisson-sampled DP-SGD."""
+    """Returns a DpEvent for the configured DP-SGD variant."""
+    if self._uses_fixed_batch_size:
+      return accounting.fixed_dpsgd_event(
+          noise_multiplier=sigma,
+          iterations=self.iterations,
+          dataset_size=self.num_examples,
+          batch_size=self.batch_size,
+          replace=self.replace,
+      )
     if self.truncated_batch_size is not None:
       return accounting.truncated_dpsgd_event(
           noise_multiplier=sigma,
@@ -626,168 +660,6 @@ class DpsgdConfig:
         noise_multiplier=sigma,
         iterations=self.iterations,
         sampling_prob=self.sampling_prob,
-        use_zcdp=self.use_zcdp,
-    )
-
-  def calibrate(
-      self,
-      *,
-      epsilon: float,
-      delta: float,
-      tol: float | None = None,
-      accountant_fn: AccountantFn = dp_accounting.pld.PLDAccountant,
-  ) -> DpsgdConfig:
-    """Returns a new config with a calibrated noise_multiplier.
-
-    Args:
-      epsilon: Target privacy budget.
-      delta: Target privacy failure probability.
-      tol: Tolerance for the noise_multiplier binary search.
-      accountant_fn: Fresh-accountant factory given a neighboring relation.
-
-    Returns:
-      A new ``DpsgdConfig`` with calibrated ``noise_multiplier``.
-    """
-    noise_multiplier = dp_accounting.calibrate_dp_mechanism(
-        make_fresh_accountant=lambda: accountant_fn(self._neighboring_relation),
-        make_event_from_param=self._get_dp_event,
-        target_epsilon=epsilon,
-        target_delta=delta,
-        tol=tol,
-    )
-    return dataclasses.replace(self, noise_multiplier=noise_multiplier)
-
-  def make(
-      self,
-      performance_flags: PerformanceFlags | None = None,
-  ) -> DPExecutionPlan:
-    """Returns a DPExecutionPlan for Poisson-sampled DP-SGD.
-
-    Args:
-      performance_flags: Optional performance-only flags.
-
-    Returns:
-      A plan whose batch selection, clipping, noise, and ``dp_event`` are
-      consistent for Poisson DP-SGD.
-
-    Raises:
-      ValueError: If ``noise_multiplier`` has not been set.
-    """
-    _check_noise_multiplier_set(self.noise_multiplier)
-    if performance_flags is None:
-      performance_flags = PerformanceFlags()
-
-    clipped_grad_transform = _make_clipped_grad_transform(
-        l2_clip_norm=self.l2_clip_norm,
-        normalize_by=self._normalize_by,
-        rescale_to_unit_norm=self.rescale_to_unit_norm,
-        performance_flags=performance_flags,
-    )
-    batch_selection_strategy = batch_selection.CyclicPoissonSampling(
-        sampling_prob=self.sampling_prob,
-        iterations=self.iterations,
-        cycle_length=1,
-        truncated_batch_size=self.truncated_batch_size,
-        partition_type=batch_selection.PartitionType.INDEPENDENT,
-    )
-    query_sensitivity = clipped_grad_transform(lambda: None).sensitivity(
-        self._neighboring_relation
-    )
-    privatizer = noise_addition.gaussian_privatizer(
-        stddev=float(self.noise_multiplier * query_sensitivity),
-        prng_key=performance_flags.noise_seed,
-        dtype=performance_flags.dtype,
-    )
-    return DPExecutionPlan(
-        clipped_grad=clipped_grad_transform,
-        batch_selection_strategy=batch_selection_strategy,
-        noise_addition_transform=privatizer,
-        dp_event=self._get_dp_event(self.noise_multiplier),
-        neighboring_relation=self._neighboring_relation,
-    )
-
-
-@dataclasses.dataclass(frozen=True, kw_only=True)
-class FixedSizeDpsgdConfig:
-  """Configuration for fixed-size-batch DP-SGD via a DPExecutionPlan.
-
-  Couples ``FixedBatchSampling``, clipped aggregation, i.i.d. Gaussian noise,
-  and ``accounting.fixed_dpsgd_event``. Prefer ``DpsgdConfig`` when Poisson
-  sampling is available; use this when the training pipeline requires a fixed
-  batch size and the dataset size is treated as public.
-
-  Example Usage:
-    >>> config = FixedSizeDpsgdConfig(
-    ...   iterations=1000, batch_size=256, num_examples=50000,
-    ...   noise_multiplier=1.0,
-    ... )
-
-  Attributes:
-    iterations: Number of training iterations / batch draws.
-    batch_size: Fixed number of examples per batch.
-    num_examples: Dataset size (public for accounting).
-    noise_multiplier: Ratio of noise stddev to query sensitivity. If unset,
-      call ``calibrate()``.
-    l2_clip_norm: Maximum L2 norm of per-example gradients.
-    rescale_to_unit_norm: Divide clipped gradients by ``l2_clip_norm``.
-    normalize_by: Divide the sum-of-clipped gradients by this value. Defaults to
-      ``batch_size`` when ``None``.
-    replace: Whether to sample with replacement within each batch.
-    use_zcdp: If True, account with a ``ZCDpEvent``.
-  """
-
-  iterations: int
-  batch_size: int
-  num_examples: int
-  noise_multiplier: float | None = None
-  l2_clip_norm: float = 1.0
-  rescale_to_unit_norm: bool = True
-  normalize_by: float | None = None
-  replace: bool = False
-  use_zcdp: bool = False
-
-  def __post_init__(self):
-    _validate.positive(
-        iterations=self.iterations,
-        batch_size=self.batch_size,
-        num_examples=self.num_examples,
-        l2_clip_norm=self.l2_clip_norm,
-    )
-    if self.normalize_by is not None:
-      _validate.positive(normalize_by=self.normalize_by)
-    if self.noise_multiplier is not None:
-      _validate.non_negative(noise_multiplier=self.noise_multiplier)
-    if not self.replace and self.batch_size > self.num_examples:
-      raise ValueError(
-          f'batch_size={self.batch_size} must be <= num_examples='
-          f'{self.num_examples} when replace=False.'
-      )
-
-  @property
-  def _normalize_by(self) -> float:
-    """Effective normalization constant for clipped gradients."""
-    if self.normalize_by is None:
-      return float(self.batch_size)
-    return float(self.normalize_by)
-
-  @property
-  def _neighboring_relation(self) -> NeighboringRelation:
-    """Neighboring relation for fixed-size sampling without replacement."""
-    if self.replace:
-      # Sampled-with-replacement events are typically analyzed under add/remove
-      # or accountant-specific conventions; default to add/remove for safety.
-      return NeighboringRelation.ADD_OR_REMOVE_ONE
-    return NeighboringRelation.REPLACE_ONE
-
-  def _get_dp_event(self, sigma: float) -> dp_accounting.DpEvent:
-    """Returns a DpEvent for fixed-size DP-SGD."""
-    return accounting.fixed_dpsgd_event(
-        noise_multiplier=sigma,
-        iterations=self.iterations,
-        dataset_size=self.num_examples,
-        batch_size=self.batch_size,
-        replace=self.replace,
-        use_zcdp=self.use_zcdp,
     )
 
   def calibrate(
@@ -797,7 +669,7 @@ class FixedSizeDpsgdConfig:
       delta: float,
       tol: float | None = None,
       accountant_fn: AccountantFn | None = None,
-  ) -> FixedSizeDpsgdConfig:
+  ) -> DpsgdConfig:
     """Returns a new config with a calibrated noise_multiplier.
 
     Args:
@@ -805,20 +677,26 @@ class FixedSizeDpsgdConfig:
       delta: Target privacy failure probability.
       tol: Tolerance for the noise_multiplier binary search.
       accountant_fn: Fresh-accountant factory given a neighboring relation.
-        Defaults to an RDP accountant, because PLD does not currently support
-        ``SampledWithoutReplacementDpEvent``.
+        Defaults to PLD for Poisson sampling, and RDP for fixed-size sampling
+        (PLD does not currently support
+        ``SampledWithoutReplacementDpEvent``).
 
     Returns:
-      A new ``FixedSizeDpsgdConfig`` with calibrated ``noise_multiplier``.
+      A new ``DpsgdConfig`` with calibrated ``noise_multiplier``.
     """
     if accountant_fn is None:
+      if self._uses_fixed_batch_size:
 
-      def accountant_fn(
-          neighboring_relation: NeighboringRelation,
-      ) -> dp_accounting.PrivacyAccountant:
-        return dp_accounting.rdp.RdpAccountant(
-            neighboring_relation=neighboring_relation
-        )
+        def _rdp_accountant(
+            neighboring_relation: NeighboringRelation,
+        ) -> dp_accounting.PrivacyAccountant:
+          return dp_accounting.rdp.RdpAccountant(
+              neighboring_relation=neighboring_relation
+          )
+
+        accountant_fn = _rdp_accountant
+      else:
+        accountant_fn = dp_accounting.pld.PLDAccountant
 
     noise_multiplier = dp_accounting.calibrate_dp_mechanism(
         make_fresh_accountant=lambda: accountant_fn(self._neighboring_relation),
@@ -833,14 +711,14 @@ class FixedSizeDpsgdConfig:
       self,
       performance_flags: PerformanceFlags | None = None,
   ) -> DPExecutionPlan:
-    """Returns a DPExecutionPlan for fixed-size-batch DP-SGD.
+    """Returns a DPExecutionPlan for the configured DP-SGD variant.
 
     Args:
       performance_flags: Optional performance-only flags.
 
     Returns:
       A plan whose batch selection, clipping, noise, and ``dp_event`` are
-      consistent for fixed-size DP-SGD.
+      consistent for the selected DP-SGD variant.
 
     Raises:
       ValueError: If ``noise_multiplier`` has not been set.
@@ -851,15 +729,28 @@ class FixedSizeDpsgdConfig:
 
     clipped_grad_transform = _make_clipped_grad_transform(
         l2_clip_norm=self.l2_clip_norm,
-        normalize_by=self._normalize_by,
+        normalize_by=self.normalize_by,
         rescale_to_unit_norm=self.rescale_to_unit_norm,
         performance_flags=performance_flags,
     )
-    batch_selection_strategy = batch_selection.FixedBatchSampling(
-        batch_size=self.batch_size,
-        iterations=self.iterations,
-        replace=self.replace,
-    )
+    if self._uses_fixed_batch_size:
+      batch_selection_strategy = batch_selection.FixedBatchSampling(
+          batch_size=self.batch_size,
+          iterations=self.iterations,
+          replace=self.replace,
+      )
+    else:
+      batch_selection_strategy = batch_selection.CyclicPoissonSampling(
+          sampling_prob=self.sampling_prob,
+          iterations=self.iterations,
+          cycle_length=1,
+          truncated_batch_size=self.truncated_batch_size,
+          partition_type=(
+              batch_selection.PartitionType.EQUAL_SPLIT
+              if self.num_examples is not None
+              else batch_selection.PartitionType.INDEPENDENT
+          ),
+      )
     query_sensitivity = clipped_grad_transform(lambda: None).sensitivity(
         self._neighboring_relation
     )
