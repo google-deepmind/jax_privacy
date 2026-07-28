@@ -54,6 +54,7 @@ import numpy as np
 import optax
 
 from . import sharding_utils
+from .experimental import discrete_gaussian
 from .matrix_factorization import streaming_matrix
 
 
@@ -356,8 +357,6 @@ def discrete_gaussian_privatizer(
   """
   if stddev < 0:
     raise ValueError(f'stddev must be non-negative, got {stddev}.')
-  # Local import avoids a hard dependency cycle with experimental.__init__.
-  from .experimental import discrete_gaussian as _discrete_gaussian  # pylint: disable=g-import-not-at-top
 
   host_rng = rng if rng is not None else np.random.default_rng()
 
@@ -369,7 +368,7 @@ def discrete_gaussian_privatizer(
 
   def update(sum_of_clipped_grads, noise_state, params=None):
     del params, noise_state
-    noise = _discrete_gaussian.sample_discrete_gaussian_pytree(
+    noise = discrete_gaussian.sample_discrete_gaussian_pytree(
         host_rng,
         sigma=float(stddev),
         pytree=sum_of_clipped_grads,
