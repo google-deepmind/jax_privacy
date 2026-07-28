@@ -54,7 +54,6 @@ import numpy as np
 import optax
 
 from . import sharding_utils
-from .experimental import discrete_gaussian
 from .matrix_factorization import streaming_matrix
 
 
@@ -158,16 +157,7 @@ def matrix_factorization_privatizer(
     by `noising_matrix` (i.e., samples from a Gaussian with covariance
     `noising_matrix @ noising_matrix.T`), keyed by `noise_key`, to its stream
     of gradients.
-
-  Raises:
-    ValueError: If ``stddev`` is negative, or if a dense ``noising_matrix`` is
-      not 2-D.
-    IndexError: If a dense ``noising_matrix`` privatizer is updated more times
-      than it has rows. Streaming-matrix privatizers are unbounded; dense ones
-      are not.
   """
-  if stddev < 0:
-    raise ValueError(f'stddev must be non-negative, got {stddev}.')
   if prng_key is None:
     prng_key = jax.random.key(np.random.randint(0, 2**31))
   elif isinstance(prng_key, int):
@@ -244,24 +234,9 @@ def _dense_matrix_factorization_privatizer(
   if noising_matrix.ndim != 2:
     raise ValueError(f'Expected 2D matrix, found {noising_matrix.shape=}.')
 
-  num_rows = int(noising_matrix.shape[0])
-
-  def _check_index_in_bounds(index):
-    index_int = int(np.asarray(index))
-    if index_int < 0 or index_int >= num_rows:
-      raise IndexError(
-          'Dense matrix factorization privatizer called for iteration'
-          f' {index_int}, but noising_matrix only has {num_rows} rows'
-          f' (shape={tuple(noising_matrix.shape)}). Provide a taller matrix,'
-          ' or stop after at most num_rows updates.'
-      )
-
   def update(sum_of_clipped_grads, noise_state, params=None):
     del params  # Unused, but expected by optax.GradientTransformation API.
     index = noise_state
-    # Fail clearly once the finite dense matrix is exhausted. Streaming /
-    # BandMF privatizers are unbounded by design; dense matrices are not.
-    jax.debug.callback(_check_index_in_bounds, index)
     matrix_row = noising_matrix[index] * stddev
 
     target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
@@ -314,70 +289,5 @@ def _streaming_matrix_factorization_privatizer(
 
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, corr_noise)
     return noisy_grads, (new_key, new_state)
-
-  return optax.GradientTransformation(init, update)
-
-
-def discrete_gaussian_privatizer(
-    *,
-    stddev: float,
-    rng: np.random.Generator | None = None,
-    dtype: np.typing.DTypeLike = np.int64,
-) -> optax.GradientTransformation:
-  """Adds host-side discrete Gaussian noise to integer clipped gradients.
-
-  Designed for the hardened DP-SGD path with ``clipped_grad(..., grid_scale=)``
-  (integer-grid rounding). Noise is sampled on the host via
-  ``experimental.discrete_gaussian`` and therefore **must not** be wrapped in
-  ``jax.jit``; generate noise / call ``update`` from the Python training loop
-  (see ``examples/secure_noise_example.py``).
-
-  Example Usage:
-    >>> import numpy as np
-    >>> privatizer = discrete_gaussian_privatizer(
-    ...     stddev=10.0, rng=np.random.default_rng(0)
-    ... )
-    >>> grads = {'w': np.zeros((4,), dtype=np.int64)}
-    >>> state = privatizer.init(grads)
-    >>> noisy, state = privatizer.update(grads, state)
-
-  Args:
-    stddev: Discrete-Gaussian scale parameter (``sigma`` in Canonne et al.).
-    rng: NumPy Generator used for sampling. If None, a fresh non-secure
-      Generator is created. Pass a cryptographically secure Generator (e.g.
-      from ``randomgen.RDRAND``) for hardened deployments.
-    dtype: Integer dtype of the sampled noise. Defaults to ``int64``.
-
-  Returns:
-    An ``optax.GradientTransformation`` whose ``update`` adds a discrete
-    Gaussian sample matching the gradient PyTree structure.
-
-  Raises:
-    ValueError: If ``stddev`` is negative.
-  """
-  if stddev < 0:
-    raise ValueError(f'stddev must be non-negative, got {stddev}.')
-
-  host_rng = rng if rng is not None else np.random.default_rng()
-
-  def init(model):
-    del model
-    # State is unused; the NumPy Generator is mutated in place. Returning a
-    # scalar keeps the optax GradientTransformation API shape-compatible.
-    return jnp.array(0, dtype=jnp.int32)
-
-  def update(sum_of_clipped_grads, noise_state, params=None):
-    del params, noise_state
-    noise = discrete_gaussian.sample_discrete_gaussian_pytree(
-        host_rng,
-        sigma=float(stddev),
-        pytree=sum_of_clipped_grads,
-        dtype=dtype,
-    )
-    # Convert NumPy leaves to JAX arrays so tree_map addition works under both
-    # NumPy and JAX gradient containers.
-    noise = jax.tree.map(jnp.asarray, noise)
-    noisy_grads = jax.tree.map(jnp.add, sum_of_clipped_grads, noise)
-    return noisy_grads, jnp.array(0, dtype=jnp.int32)
 
   return optax.GradientTransformation(init, update)
