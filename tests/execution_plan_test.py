@@ -15,7 +15,6 @@
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
-import jax
 import jax.numpy as jnp
 from jax_privacy import batch_selection
 from jax_privacy import execution_plan
@@ -270,9 +269,7 @@ class DpsgdConfigTest(parameterized.TestCase):
         rescale_to_unit_norm=True,
         normalize_by=expected_batch_size,
     )
-    plan = config.make(
-        execution_plan.PerformanceFlags(noise_seed=0)
-    )
+    plan = config.make(execution_plan.PerformanceFlags(noise_seed=0))
     sensitivity = plan.clipped_grad(lambda: None).sensitivity(
         plan.neighboring_relation
     )
@@ -294,9 +291,7 @@ class DpsgdConfigTest(parameterized.TestCase):
         noise_multiplier=1.0,
     )
     plan = config.make()
-    self.assertEqual(
-        plan.batch_selection_strategy.truncated_batch_size, 12
-    )
+    self.assertEqual(plan.batch_selection_strategy.truncated_batch_size, 12)
     for batch in plan.batch_selection_strategy.batch_iterator(100, rng=0):
       self.assertLessEqual(batch.size, 12)
 
