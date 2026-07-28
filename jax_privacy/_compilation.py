@@ -26,6 +26,7 @@ is guarded by ``TYPE_CHECKING`` to avoid an import cycle.
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import copy
 import functools
 from typing import TYPE_CHECKING, TypeAlias
@@ -43,6 +44,30 @@ PrecompiledFuture: TypeAlias = concurrent.futures.Future[jax.stages.Compiled]
 
 # Shared thread pool for background ahead-of-time compilation.
 _COMPILE_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+# JAX config flag that lowers large closed-over constants as arguments to the
+# compiled executable instead of baking them into the HLO as literals.
+_SIMPLIFIED_JAXPR_CONSTANTS_FLAG = "jax_use_simplified_jaxpr_constants"
+
+
+@contextlib.contextmanager
+def hoist_closed_over_constants():
+  """Lowers large closed-over constants as arguments rather than HLO literals.
+
+  DP fine-tuning loss functions typically close over a large frozen base model
+  (this is the documented :class:`~jax_privacy.training.LossFn` contract). By
+  default JAX materializes such closed-over arrays into the compiled HLO as
+  constants, which inflates compilation time and peak memory, discards input
+  sharding, and can OOM for large models. Enabling
+  ``jax_use_simplified_jaxpr_constants`` instead hoists them into the compiled
+  executable's signature as regular arguments.
+  """
+  previous = getattr(jax.config, _SIMPLIFIED_JAXPR_CONSTANTS_FLAG)
+  jax.config.update(_SIMPLIFIED_JAXPR_CONSTANTS_FLAG, True)
+  try:
+    yield
+  finally:
+    jax.config.update(_SIMPLIFIED_JAXPR_CONSTANTS_FLAG, previous)
 
 
 def precompile(
@@ -68,18 +93,19 @@ def precompile(
   def _resize(size, x):
     return jax.ShapeDtypeStruct((size, *x.shape[1:]), x.dtype)
 
-  for idx in trainer.plan.batch_selection_strategy.batch_iterator(n, rng=rng):
-    padded = batch_selection.pad_to_multiple_of(idx, trainer.padding_multiple)
-    batch_size = padded.size
-    batch = jax.tree.map(functools.partial(_resize, batch_size), dataset)
-    padding = jax.ShapeDtypeStruct((batch_size,), np.bool_)
+  with hoist_closed_over_constants():
+    for idx in trainer.plan.batch_selection_strategy.batch_iterator(n, rng=rng):
+      padded = batch_selection.pad_to_multiple_of(idx, trainer.padding_multiple)
+      batch_size = padded.size
+      batch = jax.tree.map(functools.partial(_resize, batch_size), dataset)
+      padding = jax.ShapeDtypeStruct((batch_size,), np.bool_)
 
-    lowered = trainer.train_step.lower(trainer, state, batch, padding, key)
-    logging.info("AOT-compiling train_step for batch size %d", batch_size)
-    # We asyncronously ahead-of-time (AOT) compile the lowered function in a
-    # background thread to avoid blocking the training loop. Currently, the
-    # rest of this function (batch simulation + lowering) happens on the main
-    # thread. This could potentially be improved in the future.
-    futures[batch_size] = _COMPILE_POOL.submit(lowered.compile)
+      lowered = trainer.train_step.lower(trainer, state, batch, padding, key)
+      logging.info("AOT-compiling train_step for batch size %d", batch_size)
+      # We asyncronously ahead-of-time (AOT) compile the lowered function in a
+      # background thread to avoid blocking the training loop. Currently, the
+      # rest of this function (batch simulation + lowering) happens on the main
+      # thread. This could potentially be improved in the future.
+      futures[batch_size] = _COMPILE_POOL.submit(lowered.compile)
 
   return futures
