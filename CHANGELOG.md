@@ -18,6 +18,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on https://keepachangelog.com/en/1.1.0/
 
+## [Unreleased]
+
+### Added
+
+-   **`DpsgdConfig` and `FixedSizeDpsgdConfig`**: Tier-2 execution-plan configs
+    for vanilla Poisson-sampled and fixed-size-batch DP-SGD. Each config couples
+    batch selection, clipped aggregation, Gaussian noise, and the matching
+    accounting event, with `calibrate()` / `make()` APIs mirroring
+    `BandMFConfig`. Includes privacy-correctness tests and a reference example
+    (`examples/dp_sgd_execution_plan.py`).
+
 ## [2.2.0] - 2026-06-15
 
 ### Added
