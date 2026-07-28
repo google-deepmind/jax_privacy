@@ -302,6 +302,57 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     chex.assert_trees_all_equal_shapes_and_dtypes(state0, state1)
     chex.assert_trees_all_equal_shapes_and_dtypes(update, params)
 
+  def test_negative_stddev_raises(self):
+    with self.assertRaises(ValueError):
+      noise_addition.matrix_factorization_privatizer(
+          noising_matrix=np.eye(_ITERATIONS),
+          prng_key=jax.random.key(_SEED),
+          stddev=-1.0,
+      )
+
+  def test_dense_privatizer_raises_after_matrix_exhausted(self):
+    """Dense MF privatizers are finite; exceeding rows must fail clearly."""
+    key = jax.random.key(_SEED)
+    matrix = np.eye(2)
+    privatizer = noise_addition.matrix_factorization_privatizer(
+        noising_matrix=matrix, prng_key=key, stddev=_STDDEV
+    )
+    grads = jnp.zeros(4)
+    state = privatizer.init(grads)
+    # Two valid updates for a 2x2 matrix.
+    for _ in range(2):
+      _, state = privatizer.update(grads, state)
+    with self.assertRaisesRegex(IndexError, 'only has 2 rows'):
+      privatizer.update(grads, state)
+
+  def test_streaming_privatizer_allows_more_steps_than_bands(self):
+    """Streaming / BandMF path remains unbounded unlike dense matrices."""
+    key = jax.random.key(_SEED)
+    matrix = streaming_matrix.identity()
+    privatizer = noise_addition.matrix_factorization_privatizer(
+        noising_matrix=matrix, prng_key=key, stddev=_STDDEV
+    )
+    grads = jnp.zeros(4)
+    state = privatizer.init(grads)
+    for _ in range(10):
+      _, state = privatizer.update(grads, state)
+
+  def test_discrete_gaussian_privatizer_adds_integer_noise(self):
+    rng = np.random.default_rng(0)
+    privatizer = noise_addition.discrete_gaussian_privatizer(
+        stddev=5.0, rng=rng
+    )
+    grads = {'w': jnp.zeros((32,), dtype=jnp.int64)}
+    state = privatizer.init(grads)
+    noisy, state = privatizer.update(grads, state)
+    self.assertTrue(np.issubdtype(np.asarray(noisy['w']).dtype, np.integer))
+    # Non-degenerate noise for stddev=5 over 32 dims.
+    self.assertGreater(float(jnp.std(noisy['w'].astype(jnp.float64))), 1.0)
+
+  def test_discrete_gaussian_privatizer_rejects_negative_stddev(self):
+    with self.assertRaises(ValueError):
+      noise_addition.discrete_gaussian_privatizer(stddev=-0.1)
+
 
 if __name__ == '__main__':
   jax.config.update('jax_enable_x64', True)

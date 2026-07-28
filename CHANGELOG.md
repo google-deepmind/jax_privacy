@@ -18,6 +18,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on https://keepachangelog.com/en/1.1.0/
 
+## [Unreleased]
+
+### Added
+
+-   **`noise_addition.discrete_gaussian_privatizer`**: Host-side discrete
+    Gaussian privatizer for the integer-grid / hardened DP-SGD path, wrapping
+    ``experimental.discrete_gaussian``. Also export ``clipped_fun`` from the
+    top-level ``jax_privacy`` package and surface ``experimental.discrete_gaussian``
+    from ``experimental.__init__``.
+
+### Fixed
+
+-   **`clipped_fun` Formal Guarantees**: Replaced the incorrect claim that
+    sensitivity is always `1.0` / `l2_clip_norm` with guidance to use
+    ``.sensitivity()`` / ``.l2_norm_bound``, matching `clipped_grad`. The old
+    text ignored ``normalize_by`` and per-layer clipping. Added contract tests.
+-   **Dense matrix-factorization privatizer**: Raise a clear ``IndexError`` once
+    updates exceed the finite noising matrix's row count, instead of silently
+    indexing out of range. Streaming privatizers remain unbounded. Also reject
+    negative ``stddev`` at construction.
+
 ## [2.2.0] - 2026-06-15
 
 ### Added

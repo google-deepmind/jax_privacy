@@ -388,14 +388,17 @@ def clipped_fun(
 
   Formal Guarantees:
     For the first function output:
-      The L2 sensitivity of the returned function with respect to the batch
-      arguments (specified by `batch_argnums`) under add/remove or zero-out
-      differential privacy definitions is guaranteed to be 1.0 if
-      `rescale_to_unit_norm` is True. Otherwise, the sensitivity is
-      `l2_clip_norm`. Under replace-one DP, the sensitivity is doubled
-      (2.0 or 2 * `l2_clip_norm`).
+      The L2 sensitivity of the returned callable is a complex function of
+      the input parameters (``l2_clip_norm``, ``rescale_to_unit_norm``,
+      ``normalize_by``, ``grid_scale``, per-layer clipping settings, etc.)
+      and may change as new features are added. Rather than reasoning about
+      the sensitivity from the parameters, callers should query the returned
+      callable's ``.sensitivity()`` method (or equivalently its
+      ``.l2_norm_bound`` attribute for add-or-remove-one / zero-out DP)
+      directly. Under replace-one DP, ``.sensitivity()`` doubles the
+      add/remove bound.
     Extra auxiliary outputs (aux, norms) are per-example. This function
-      guarantees that per-example outputs only depend the data for the same
+      guarantees that per-example outputs only depend on the data for the same
       example. This allows maximum flexibility for the caller to aggregate
       these as desired (possibly with a DP mean, median, quantile, or histogram
       mechanism).

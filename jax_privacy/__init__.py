@@ -26,6 +26,7 @@ from . import training
 
 # pylint: disable=g-importing-member
 # Carefully selected member imports for the top-level public API.
+from .clipping import clipped_fun
 from .clipping import clipped_grad
 
 __version__ = '2.3.0.dev0'
