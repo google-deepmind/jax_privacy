@@ -52,6 +52,7 @@ and ``DpsgdConfig`` for vanilla DP-SGD (Poisson or fixed-size batches).
 from __future__ import annotations
 
 import dataclasses
+import enum
 import functools
 from typing import Callable, Protocol
 
@@ -516,14 +517,26 @@ def _check_noise_multiplier_set(noise_multiplier: float | None) -> None:
     )
 
 
+class DpsgdBatchSelection(enum.Enum):
+  """Batch selection strategy for :class:`DpsgdConfig`.
+
+  Additional strategies (for example random allocation) may be added as
+  corresponding support lands in ``dp_accounting`` and
+  :mod:`jax_privacy.batch_selection`.
+  """
+
+  POISSON = enum.auto()
+  FIXED = enum.auto()
+
+
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class DpsgdConfig:
   """Configuration for DP-SGD via a DPExecutionPlan.
 
   Couples batch selection, clipped aggregation, i.i.d. Gaussian noise, and the
-  matching accounting event. By default uses Poisson sampling
-  (``accounting.dpsgd_event``). Set ``batch_size`` to switch to fixed-size
-  sampling (``accounting.fixed_dpsgd_event``).
+  matching accounting event. The sampling mechanism is selected via
+  ``batch_selection`` (Poisson by default; fixed-size when set to
+  ``DpsgdBatchSelection.FIXED``).
 
   Example Usage (Poisson, calibrate from epsilon/delta):
     >>> config = DpsgdConfig(  # doctest: +SKIP
@@ -533,9 +546,9 @@ class DpsgdConfig:
 
   Example Usage (Fixed-size batches):
     >>> config = DpsgdConfig(
-    ...   iterations=1000, expected_participations=100,
-    ...   batch_size=256, num_examples=50000, noise_multiplier=1.0,
-    ...   normalize_by=256,
+    ...   iterations=1000, expected_participations=5.12,
+    ...   batch_selection=DpsgdBatchSelection.FIXED,
+    ...   num_examples=50000, noise_multiplier=1.0, normalize_by=256,
     ... )
 
   References: https://arxiv.org/abs/1607.00133
@@ -545,23 +558,24 @@ class DpsgdConfig:
     expected_participations: Expected number of times each example participates
       across all iterations. For Poisson sampling, the sampling probability is
       ``expected_participations / iterations`` (same convention as
-      ``BandMFConfig`` with ``num_bands=1``).
+      ``BandMFConfig`` with ``num_bands=1``). For fixed-size sampling, the
+      batch size is inferred as
+      ``expected_participations * num_examples / iterations``.
     noise_multiplier: Ratio of noise stddev to query sensitivity. If unset,
       call ``calibrate()``.
     l2_clip_norm: Maximum L2 norm of per-example gradients.
     rescale_to_unit_norm: Divide clipped gradients by ``l2_clip_norm``.
     normalize_by: Divide the sum-of-clipped gradients by this value. Prefer the
       *expected* batch size under Poisson sampling.
-    batch_size: If set, use fixed-size batch sampling with this size instead of
-      Poisson. Requires ``num_examples``.
-    num_examples: Dataset size. Required when ``batch_size`` or
+    batch_selection: Which batch selection / accounting path to use. Defaults
+      to Poisson. Designed so additional strategies (e.g. random allocation)
+      can be added without splitting this config into multiple classes.
+    num_examples: Dataset size. Required for ``FIXED`` sampling and when
       ``truncated_batch_size`` is set (dataset size is treated as public, which
       rules out add/remove adjacency for those paths). Not needed for plain
       Poisson sampling under add/remove adjacency.
     truncated_batch_size: Optional truncation cap for Poisson sampling. Requires
-      ``num_examples``. Incompatible with ``batch_size``.
-    replace: Whether fixed-size batches sample with replacement. Ignored for
-      Poisson sampling.
+      ``num_examples``. Incompatible with ``FIXED`` sampling.
   """
 
   iterations: int
@@ -570,10 +584,9 @@ class DpsgdConfig:
   l2_clip_norm: float = 1.0
   rescale_to_unit_norm: bool = True
   normalize_by: float = 1.0
-  batch_size: int | None = None
+  batch_selection: DpsgdBatchSelection = DpsgdBatchSelection.POISSON
   num_examples: int | None = None
   truncated_batch_size: int | None = None
-  replace: bool = False
 
   def __post_init__(self):
     _validate.positive(
@@ -589,23 +602,42 @@ class DpsgdConfig:
     if self.noise_multiplier is not None:
       _validate.non_negative(noise_multiplier=self.noise_multiplier)
 
-    if self.batch_size is not None and self.truncated_batch_size is not None:
-      raise ValueError('batch_size and truncated_batch_size are incompatible.')
+    if not isinstance(self.batch_selection, DpsgdBatchSelection):
+      raise TypeError(
+          'batch_selection must be a DpsgdBatchSelection, got'
+          f' {type(self.batch_selection)!r}.'
+      )
 
-    if self.batch_size is not None:
-      _validate.positive(batch_size=self.batch_size)
+    if (
+        self.batch_selection is DpsgdBatchSelection.FIXED
+        and self.truncated_batch_size is not None
+    ):
+      raise ValueError(
+          'truncated_batch_size is incompatible with'
+          ' DpsgdBatchSelection.FIXED.'
+      )
+
+    if self.batch_selection is DpsgdBatchSelection.FIXED:
       if self.num_examples is None:
-        raise ValueError('batch_size requires num_examples to be set.')
-      _validate.positive(num_examples=self.num_examples)
-      if not self.replace and self.batch_size > self.num_examples:
         raise ValueError(
-            f'batch_size={self.batch_size} must be <= num_examples='
-            f'{self.num_examples} when replace=False.'
+            'DpsgdBatchSelection.FIXED requires num_examples to be set.'
+        )
+      _validate.positive(num_examples=self.num_examples)
+      batch_size = self.batch_size
+      if batch_size > self.num_examples:
+        raise ValueError(
+            f'Inferred batch_size={batch_size} must be <='
+            f' num_examples={self.num_examples}.'
         )
     elif self.num_examples is not None:
       _validate.positive(num_examples=self.num_examples)
 
     if self.truncated_batch_size is not None:
+      if self.batch_selection is not DpsgdBatchSelection.POISSON:
+        raise ValueError(
+            'truncated_batch_size is only supported with'
+            ' DpsgdBatchSelection.POISSON.'
+        )
       _validate.positive(truncated_batch_size=self.truncated_batch_size)
       if self.num_examples is None:
         raise ValueError(
@@ -618,9 +650,26 @@ class DpsgdConfig:
         )
 
   @property
-  def _uses_fixed_batch_size(self) -> bool:
-    """True when this config selects fixed-size batch sampling."""
-    return self.batch_size is not None
+  def batch_size(self) -> int:
+    """Fixed batch size inferred from participations and dataset size.
+
+    Equals ``round(expected_participations * num_examples / iterations)``.
+    Only valid when ``num_examples`` is set (required for ``FIXED`` sampling).
+
+    Raises:
+      ValueError: If ``num_examples`` is unset, or the inferred size is not a
+        positive integer within tolerance.
+    """
+    if self.num_examples is None:
+      raise ValueError('batch_size requires num_examples to be set.')
+    raw = self.expected_participations * self.num_examples / self.iterations
+    batch_size = int(round(raw))
+    if batch_size <= 0 or abs(raw - batch_size) > 1e-6:
+      raise ValueError(
+          'expected_participations * num_examples / iterations must be a'
+          f' positive integer for fixed-size sampling, got {raw}.'
+      )
+    return batch_size
 
   @property
   def sampling_prob(self) -> float:
@@ -630,9 +679,7 @@ class DpsgdConfig:
   @property
   def _neighboring_relation(self) -> NeighboringRelation:
     """Neighboring relation implied by the sampling / public-size settings."""
-    if self._uses_fixed_batch_size:
-      if self.replace:
-        return NeighboringRelation.ADD_OR_REMOVE_ONE
+    if self.batch_selection is DpsgdBatchSelection.FIXED:
       return NeighboringRelation.REPLACE_ONE
     if self.num_examples is not None:
       return NeighboringRelation.REPLACE_SPECIAL
@@ -640,13 +687,18 @@ class DpsgdConfig:
 
   def _get_dp_event(self, sigma: float) -> dp_accounting.DpEvent:
     """Returns a DpEvent for the configured DP-SGD variant."""
-    if self._uses_fixed_batch_size:
+    if self.batch_selection is DpsgdBatchSelection.FIXED:
       return accounting.fixed_dpsgd_event(
           noise_multiplier=sigma,
           iterations=self.iterations,
           dataset_size=self.num_examples,
           batch_size=self.batch_size,
-          replace=self.replace,
+          replace=False,
+      )
+    if self.batch_selection is not DpsgdBatchSelection.POISSON:
+      raise NotImplementedError(
+          f'Unsupported batch_selection={self.batch_selection!r}. Additional'
+          ' strategies will be wired as dp-accounting support lands.'
       )
     if self.truncated_batch_size is not None:
       return accounting.truncated_dpsgd_event(
@@ -685,7 +737,7 @@ class DpsgdConfig:
       A new ``DpsgdConfig`` with calibrated ``noise_multiplier``.
     """
     if accountant_fn is None:
-      if self._uses_fixed_batch_size:
+      if self.batch_selection is DpsgdBatchSelection.FIXED:
 
         def _rdp_accountant(
             neighboring_relation: NeighboringRelation,
@@ -733,13 +785,13 @@ class DpsgdConfig:
         rescale_to_unit_norm=self.rescale_to_unit_norm,
         performance_flags=performance_flags,
     )
-    if self._uses_fixed_batch_size:
+    if self.batch_selection is DpsgdBatchSelection.FIXED:
       batch_selection_strategy = batch_selection.FixedBatchSampling(
           batch_size=self.batch_size,
           iterations=self.iterations,
-          replace=self.replace,
+          replace=False,
       )
-    else:
+    elif self.batch_selection is DpsgdBatchSelection.POISSON:
       batch_selection_strategy = batch_selection.CyclicPoissonSampling(
           sampling_prob=self.sampling_prob,
           iterations=self.iterations,
@@ -750,6 +802,11 @@ class DpsgdConfig:
               if self.num_examples is not None
               else batch_selection.PartitionType.INDEPENDENT
           ),
+      )
+    else:
+      raise NotImplementedError(
+          f'Unsupported batch_selection={self.batch_selection!r}. Additional'
+          ' strategies will be wired as dp-accounting support lands.'
       )
     query_sensitivity = clipped_grad_transform(lambda: None).sensitivity(
         self._neighboring_relation

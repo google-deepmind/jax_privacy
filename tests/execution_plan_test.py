@@ -302,7 +302,7 @@ class DpsgdConfigTest(parameterized.TestCase):
       execution_plan.DpsgdConfig(
           iterations=10,
           expected_participations=2.0,
-          batch_size=8,
+          batch_selection=execution_plan.DpsgdBatchSelection.FIXED,
           noise_multiplier=1.0,
       )
 
@@ -313,11 +313,12 @@ class DpsgdConfigTest(parameterized.TestCase):
     config = execution_plan.DpsgdConfig(
         iterations=iterations,
         expected_participations=iterations * batch_size / num_examples,
-        batch_size=batch_size,
+        batch_selection=execution_plan.DpsgdBatchSelection.FIXED,
         num_examples=num_examples,
         noise_multiplier=1.5,
         normalize_by=batch_size,
     )
+    self.assertEqual(config.batch_size, batch_size)
     plan = config.make()
     self.assertIsInstance(
         plan.batch_selection_strategy, batch_selection.FixedBatchSampling
@@ -344,22 +345,22 @@ class DpsgdConfigTest(parameterized.TestCase):
     config = execution_plan.DpsgdConfig(
         iterations=30,
         expected_participations=2.4,
-        batch_size=16,
+        batch_selection=execution_plan.DpsgdBatchSelection.FIXED,
         num_examples=200,
         normalize_by=16,
     ).calibrate(epsilon=3.0, delta=1e-5)
+    self.assertEqual(config.batch_size, 16)
     self.assertGreater(config.noise_multiplier, 0)
     plan = config.make()
     self.assertIsInstance(plan.dp_event, dp_accounting.DpEvent)
 
-  def test_fixed_size_validation(self):
+  def test_fixed_size_requires_integer_inferred_batch_size(self):
     with self.assertRaises(ValueError):
       execution_plan.DpsgdConfig(
           iterations=10,
-          expected_participations=1.0,
-          batch_size=100,
+          expected_participations=1.5,
+          batch_selection=execution_plan.DpsgdBatchSelection.FIXED,
           num_examples=50,
-          replace=False,
           noise_multiplier=1.0,
       )
 
