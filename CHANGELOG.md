@@ -31,6 +31,13 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     Includes privacy-correctness tests and a reference example
     (`examples/dp_sgd_execution_plan.py`).
 
+### Fixed
+
+-   **`clipped_fun` Formal Guarantees**: Replaced the incorrect claim that
+    sensitivity is always `1.0` / `l2_clip_norm` with guidance to use
+    ``.sensitivity()`` / ``.l2_norm_bound``, matching `clipped_grad`. The old
+    text ignored ``normalize_by`` and per-layer clipping. Added contract tests.
+
 ## [2.2.0] - 2026-06-15
 
 ### Added

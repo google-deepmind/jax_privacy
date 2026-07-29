@@ -629,5 +629,77 @@ class ClippedFunPerLayerTest(parameterized.TestCase):
     chex.assert_trees_all_close(cf_norms, expected_norms)
 
 
+class ClippedFunSensitivityContractTest(parameterized.TestCase):
+  """Regression tests for clipped_fun sensitivity accounting.
+
+  The Formal Guarantees section points callers at ``.sensitivity()`` rather
+  than deriving bounds from kwargs. These tests lock the contract that
+  ``normalize_by`` and per-layer clipping change ``l2_norm_bound``.
+  """
+
+  def test_normalize_by_scales_sensitivity(self):
+    cf = clipping.clipped_fun(
+        jnp.square,
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=2.0,
+        rescale_to_unit_norm=False,
+        normalize_by=4.0,
+    )
+    self.assertAlmostEqual(cf.l2_norm_bound, 2.0 / 4.0)
+    self.assertAlmostEqual(
+        cf.sensitivity(dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE),
+        0.5,
+    )
+    self.assertAlmostEqual(
+        cf.sensitivity(dp_accounting.NeighboringRelation.REPLACE_ONE),
+        1.0,
+    )
+
+  def test_rescale_to_unit_norm_ignores_clip_magnitude(self):
+    cf_small = clipping.clipped_fun(
+        jnp.square,
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=0.25,
+        rescale_to_unit_norm=True,
+        normalize_by=1.0,
+    )
+    cf_large = clipping.clipped_fun(
+        jnp.square,
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=100.0,
+        rescale_to_unit_norm=True,
+        normalize_by=1.0,
+    )
+    self.assertAlmostEqual(cf_small.l2_norm_bound, 1.0)
+    self.assertAlmostEqual(cf_large.l2_norm_bound, 1.0)
+
+  def test_per_layer_rescale_uses_sqrt_num_leaves(self):
+    clip_norm = {'a': 1.0, 'b': 2.0, 'c': 3.0}
+    cf = clipping.clipped_fun(
+        lambda x: {'a': x, 'b': x, 'c': x},
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=clip_norm,
+        rescale_to_unit_norm=True,
+        normalize_by=5.0,
+    )
+    self.assertAlmostEqual(cf.l2_norm_bound, np.sqrt(3.0) / 5.0)
+
+  def test_per_layer_without_rescale_uses_leaf_norm(self):
+    clip_norm = {'a': 3.0, 'b': 4.0}
+    cf = clipping.clipped_fun(
+        lambda x: {'a': x, 'b': x},
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=clip_norm,
+        rescale_to_unit_norm=False,
+        normalize_by=2.0,
+    )
+    self.assertAlmostEqual(cf.l2_norm_bound, 5.0 / 2.0)
+
+
 if __name__ == '__main__':
   absltest.main()

@@ -305,24 +305,28 @@ class DPTrainer:
     )
 
     step = 0
-    for indices in batch_iterator:
-      indices = batch_selection.pad_to_multiple_of(
-          indices, self.padding_multiple
-      )
-      batch, is_padding_example = _get_batch(dataset, indices)
-      step_fn = self.train_step
-      if indices.size in futures:
-        step_fn = futures[indices.size].result()
-      elif precompile:
-        logging.info("JIT-compiling train_step for batch size %d", indices.size)
-        logging.warning("Cache Miss! Precompile is not working as intended.")
 
-      state, aux = step_fn(state, batch, is_padding_example, prng_key)
-      step += 1
+    with _compilation.hoist_closed_over_constants():
+      for indices in batch_iterator:
+        indices = batch_selection.pad_to_multiple_of(
+            indices, self.padding_multiple
+        )
+        batch, is_padding_example = _get_batch(dataset, indices)
+        step_fn = self.train_step
+        if indices.size in futures:
+          step_fn = futures[indices.size].result()
+        elif precompile:
+          logging.info(
+              "JIT-compiling train_step for batch size %d", indices.size
+          )
+          logging.warning("Cache Miss! Precompile is not working as intended.")
 
-      del indices, batch, is_padding_example
+        state, aux = step_fn(state, batch, is_padding_example, prng_key)
+        step += 1
 
-      if callback is not None:
-        callback(step, state, aux)
+        del indices, batch, is_padding_example
+
+        if callback is not None:
+          callback(step, state, aux)
 
     return state
