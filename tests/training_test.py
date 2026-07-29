@@ -14,10 +14,12 @@
 
 
 import dataclasses
+from unittest import mock
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
 import jax.numpy as jnp
+from jax_privacy import _compilation
 from jax_privacy import batch_selection
 from jax_privacy import execution_plan
 from jax_privacy import training
@@ -167,7 +169,7 @@ class DPTrainerTest(parameterized.TestCase):
         config=config,
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
-        padding_multiple=4,
+        compilation_strategy=training.PadToMultiple(multiple=4),
     )
     state = trainer.fit(dataset, params, rng_or_seed=0)
 
@@ -412,7 +414,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    futures = trainer._precompile(dataset, params, rng_or_seed=42)
+    _, futures = trainer._precompile(dataset, params, rng_or_seed=42)
 
     self.assertIsInstance(futures, dict)
     self.assertNotEmpty(futures)
@@ -434,9 +436,9 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         config=config,
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
-        padding_multiple=padding_multiple,
+        compilation_strategy=training.PadToMultiple(multiple=padding_multiple),
     )
-    futures = trainer._precompile(dataset, params, rng_or_seed=0)
+    _, futures = trainer._precompile(dataset, params, rng_or_seed=0)
 
     for size in futures:
       self.assertEqual(size % padding_multiple, 0)
@@ -460,7 +462,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
 
     rng = np.random.default_rng(42)
     state_before = rng.__getstate__()
-    futures = trainer._precompile(dataset, params, rng_or_seed=rng)
+    _, futures = trainer._precompile(dataset, params, rng_or_seed=rng)
     state_after = rng.__getstate__()
 
     # RNG should not have been consumed.
@@ -481,7 +483,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    futures = trainer._precompile(dataset, params, rng_or_seed=0)
+    _, futures = trainer._precompile(dataset, params, rng_or_seed=0)
 
     self.assertNotEmpty(futures)
     for future in futures.values():
@@ -508,7 +510,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         config=_FixedPlanConfig(plan),
         loss_fn=loss_fn,
         optimizer=optax.sgd(1),
-        padding_multiple=1,
+        compilation_strategy=training.PadToMultiple(multiple=1),
     )
 
     with self.assertLogs(level='INFO') as logs:
@@ -538,6 +540,110 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
     # AOT precompilation should be effective (no JIT cache misses).
     for log in logs.output:
       self.assertNotIn('Cache Miss', log)
+
+
+class DPTrainerAutotuneTest(parameterized.TestCase):
+  """CPU smoke test for microbatch_size autotuning."""
+
+  def test_autotune_fit_runs_on_cpu(self):
+    """fit() with autotuning selects a microbatch size and completes."""
+    # On CPU ``memory_stats`` is unavailable, so autotuning falls back to
+    # compile-success and picks the largest candidate that compiles.
+    params = jnp.array([1.0, 2.0])
+    dataset = np.array([[0.0, 0.0]] * 10)  # 10 examples.
+    trainer = training.DPTrainer(
+        config=_make_config(iterations=3),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+        compilation_strategy=training.AutotuneMicrobatch(),
+    )
+
+    with self.assertLogs(level='INFO') as logs:
+      state = trainer.fit(dataset, params, rng_or_seed=0)
+
+    self.assertEqual(int(state.step), 3)
+    self.assertTrue(any('fits; pad=' in log for log in logs.output))
+    # Autotuning compiles the one fixed padded size ahead of time; the training
+    # loop must reuse that step for every batch (no recompilation).
+    for log in logs.output:
+      self.assertNotIn('Cache Miss', log)
+
+
+class ExtrapolateSeedTest(parameterized.TestCase):
+  """Unit tests for the affine microbatch seed used by autotuning."""
+
+  @parameterized.named_parameters(
+      ('affine_exact', 1000.0, 2000.0, 8000.0, 8),
+      ('zero_slope_all_fit', 0.0, 0.0, 5.0, 1024),
+      ('seed_one_when_min_over_budget', 10.0, 20.0, 5.0, 1),
+      ('decreasing_all_fit', 200.0, 100.0, 500.0, 1024),
+  )
+  def test_extrapolate_seed_cases(self, peak1, peak2, budget, expected):
+    powers = [2**i for i in range(11)]
+    seed = _compilation._extrapolate_seed(peak1, peak2, budget, powers)
+    self.assertEqual(seed, expected)
+
+  def test_extrapolate_seed_matches_brute_force(self):
+    """Seed equals the brute-force largest power of two under the affine fit."""
+    rng = np.random.default_rng(0)
+    powers = [2**i for i in range(14)]
+    for _ in range(1000):
+      c0, c1 = rng.uniform(0, 1e6), rng.uniform(1, 1e4)
+      budget = rng.uniform(0, c0 + c1 * powers[-1])
+      expected = powers[0]
+      for b in powers:
+        if c0 + c1 * b <= budget:
+          expected = b
+      seed = _compilation._extrapolate_seed(
+          c0 + c1, c0 + 2 * c1, budget, powers
+      )
+      self.assertEqual(seed, expected)
+
+
+class _FakeDevice:
+  """Stand-in JAX device with configurable memory_stats and topology attr."""
+
+  def __init__(self, *, stats=None, stats_error=None, total=None):
+    self._stats = stats
+    self._stats_error = stats_error
+    if total is not None:
+      self.device_memory_bytes_limit = total
+
+  def memory_stats(self):
+    if self._stats_error is not None:
+      raise self._stats_error
+    return self._stats
+
+
+class DeviceHbmLimitTest(parameterized.TestCase):
+  """Unit tests for sourcing the per-chip HBM budget."""
+
+  def _patch_devices(self, devices):
+    self.enterContext(
+        mock.patch.object(jax, 'local_devices', return_value=devices)
+    )
+
+  def test_prefers_bytes_limit_over_attribute(self):
+    self._patch_devices([_FakeDevice(stats={'bytes_limit': 100}, total=999)])
+    self.assertEqual(_compilation._device_hbm_limit(), 100)
+
+  def test_falls_back_to_attribute_when_memory_stats_raises(self):
+    self._patch_devices(
+        [_FakeDevice(stats_error=RuntimeError('unsupported'), total=42)]
+    )
+    self.assertEqual(_compilation._device_hbm_limit(), 42)
+
+  def test_falls_back_to_attribute_when_bytes_limit_missing(self):
+    self._patch_devices([_FakeDevice(stats={}, total=42)])
+    self.assertEqual(_compilation._device_hbm_limit(), 42)
+
+  def test_none_when_neither_available(self):
+    self._patch_devices([_FakeDevice(stats_error=RuntimeError('x'))])
+    self.assertIsNone(_compilation._device_hbm_limit())
+
+  def test_none_when_no_local_devices(self):
+    self._patch_devices([])
+    self.assertIsNone(_compilation._device_hbm_limit())
 
 
 if __name__ == '__main__':

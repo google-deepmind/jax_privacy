@@ -52,6 +52,10 @@ OptState: TypeAlias = optax.ArrayTree
 NoiseState: TypeAlias = optax.ArrayTree
 # Re-exported so callers can keep using training.PrecompiledFuture.
 PrecompiledFuture: TypeAlias = _compilation.PrecompiledFuture
+# Compilation strategies, re-exported for the public API.
+CompilationStrategy = _compilation.CompilationStrategy
+PadToMultiple = _compilation.PadToMultiple
+AutotuneMicrobatch = _compilation.AutotuneMicrobatch
 
 
 class LossFn(Protocol):
@@ -156,8 +160,11 @@ class DPTrainer:
     loss_fn: The per-example loss function.  See :class:`LossFn`.
     optimizer: An ``AugmentedGradientTransformation`` or a plain
       ``optax.GradientTransformation``.
-    padding_multiple: If set, batch sizes are padded to a multiple of this value
-      to limit JIT recompilations from varying Poisson batch sizes.
+    compilation_strategy: Selects which ``train_step`` programs are compiled for
+      training. ``PadToMultiple(multiple)`` (default) pads batches to a multiple
+      to bound recompilations; ``AutotuneMicrobatch`` picks the largest
+      microbatch size that fits device memory and compiles once. See
+      :class:`CompilationStrategy`.
   """
 
   config: execution_plan.ExecutionPlanConfig
@@ -169,7 +176,9 @@ class DPTrainer:
       aug_optimizers.AugmentedGradientTransformation
       | optax.GradientTransformation
   )
-  padding_multiple: int = 32
+  compilation_strategy: _compilation.CompilationStrategy = dataclasses.field(
+      default_factory=_compilation.PadToMultiple
+  )
 
   def __post_init__(self):
     _ = self.plan  # Build untraced so cached PRNG key isn't a leaked tracer.
@@ -254,8 +263,8 @@ class DPTrainer:
       params: Params,
       *,
       rng_or_seed: np.random.Generator | int | None = None,
-  ) -> dict[int, PrecompiledFuture]:
-    """[ADVANCED] Warm up the JIT cache for ``train_step`` asynchronously."""
+  ) -> tuple["DPTrainer", dict[int, PrecompiledFuture]]:
+    """[ADVANCED] Resolve config and AOT-compile the steps ``fit`` runs."""
     return _compilation.precompile(
         self, dataset, params, rng_or_seed=rng_or_seed
     )
@@ -284,13 +293,24 @@ class DPTrainer:
       precompile: A boolean indicating whether to asyncronously precompile
         ``train_step`` for the batch sizes encountered, instead of just-in-time
         compiling on the fly, which can idle accelerators during training.
+        Strategies that resolve before training (e.g. ``AutotuneMicrobatch``)
+        run even when this is False.
 
     Returns:
       Final ``TrainingState``.
     """
+    # Precompilation resolves the trainer and compiles the required train_steps.
+    # It may return a *different* trainer (e.g. AutotuneMicrobatch picks a
+    # concrete microbatch size), so the loop below runs on ``trainer`` rather
+    # than ``self``.
+    trainer: DPTrainer = self
     futures: dict[int, PrecompiledFuture] = {}
-    if precompile:
-      futures = self._precompile(dataset, params, rng_or_seed=rng_or_seed)
+    if precompile or isinstance(self.compilation_strategy, AutotuneMicrobatch):
+      trainer, futures = self._precompile(
+          dataset, params, rng_or_seed=rng_or_seed
+      )
+    assert isinstance(trainer.compilation_strategy, PadToMultiple)
+    warn_on_cache_miss = bool(futures)
 
     # We need tight alignement between how rng is used here and in precompile().
     rng = np.random.default_rng(rng_or_seed)
@@ -298,24 +318,22 @@ class DPTrainer:
 
     num_examples = _validate.batch(dataset)
     # Copy here due to the donate_argnames on the jit decorated train_step.
-    state = self.init(jax.tree.map(jax.numpy.copy, params))
-
-    batch_iterator = self.plan.batch_selection_strategy.batch_iterator(
-        num_examples, rng=rng
-    )
+    state = trainer.init(jax.tree.map(jax.numpy.copy, params))
 
     step = 0
-
     with _compilation.hoist_closed_over_constants():
-      for indices in batch_iterator:
+      bss = trainer.plan.batch_selection_strategy
+      for indices in bss.batch_iterator(num_examples, rng=rng):
         indices = batch_selection.pad_to_multiple_of(
-            indices, self.padding_multiple
+            indices,
+            trainer.compilation_strategy.multiple,
+            microbatch_size=trainer.performance_flags.microbatch_size,
         )
         batch, is_padding_example = _get_batch(dataset, indices)
-        step_fn = self.train_step
+        step_fn = trainer.train_step
         if indices.size in futures:
           step_fn = futures[indices.size].result()
-        elif precompile:
+        elif warn_on_cache_miss:
           logging.info(
               "JIT-compiling train_step for batch size %d", indices.size
           )
