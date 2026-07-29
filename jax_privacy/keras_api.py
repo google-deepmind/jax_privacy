@@ -379,6 +379,35 @@ def _add_dp_sgd_attributes(model: keras.Model, params: DPKerasConfig) -> None:
       dtype='uint32',
       trainable=False,
   )
+  # Record indices once. Non-trainable order is not stable across models (e.g.
+  # prior add_weight / BatchNorm stats), so train_step must not hard-code [0]/1].
+  model._dp_rng_index = _non_trainable_index(model, '_rng')  # pylint: disable=protected-access
+  model._dp_optimizer_steps_index = _non_trainable_index(  # pylint: disable=protected-access
+      model, '_optimizer_steps'
+  )
+
+
+def _non_trainable_index(model: keras.Model, weight_name: str) -> int:
+  """Returns the index of ``weight_name`` in ``model.non_trainable_weights``."""
+  for index, weight in enumerate(model.non_trainable_weights):
+    if weight.name == weight_name:
+      return index
+  raise ValueError(
+      f'Expected non-trainable weight named {weight_name!r} on model'
+      f' {model.name!r}, but it was not found. Available:'
+      f' {[w.name for w in model.non_trainable_weights]}.'
+  )
+
+
+def _replace_non_trainable(
+    non_trainable_variables: list[jax.Array],
+    index: int,
+    value: jax.Array,
+) -> list[jax.Array]:
+  """Returns a copy of ``non_trainable_variables`` with ``index`` replaced."""
+  updated = list(non_trainable_variables)
+  updated[index] = value
+  return updated
 
 
 _FitFnReturnType = keras.callbacks.History
@@ -869,8 +898,12 @@ def _dp_train_step(
   ) = self.optimizer.stateless_apply(
       optimizer_variables, grads, trainable_variables
   )
-  # TODO: b/415360727 - access it and update it by name.
-  non_trainable_variables[1] = non_trainable_variables[1] + 1
+  steps_index = self._dp_optimizer_steps_index  # pylint: disable=protected-access
+  non_trainable_variables = _replace_non_trainable(
+      non_trainable_variables,
+      steps_index,
+      non_trainable_variables[steps_index] + 1,
+  )
 
   logs, metrics_variables = self._update_metrics_variables(  # pylint: disable=protected-access
       metrics_variables, unscaled_loss, x, y, y_pred, sample_weight
@@ -956,8 +989,14 @@ def _noised_clipped_grads(
       optimizer_variables,
       metrics_variables,
   ) = state
-  # TODO: b/415360727 - access it and update it by name.
-  noise_state = non_trainable_variables[0], ()
+  # Prefer indices recorded by make_private(); fall back to 0 for unit tests
+  # that call this helper with a synthetic state whose only non-trainable is
+  # the noise RNG.
+  if model is not None and hasattr(model, '_dp_rng_index'):
+    rng_index = model._dp_rng_index  # pylint: disable=protected-access
+  else:
+    rng_index = 0
+  noise_state = non_trainable_variables[rng_index], ()
   x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(data)
   if is_padding_example is None:
     if dp_params.poisson_sampling_in_fit and sample_weight is not None:
@@ -1001,7 +1040,9 @@ def _noised_clipped_grads(
   loss = _masked_mean(per_example_aux.values, is_padding_example)
   unscaled_loss = _masked_mean(per_example_aux.aux[0], is_padding_example)
   y_pred = per_example_aux.aux[1]
-  non_trainable_variables = [new_noise_state[0]] + non_trainable_variables[1:]
+  non_trainable_variables = _replace_non_trainable(
+      non_trainable_variables, rng_index, new_noise_state[0]
+  )
   # Metrics follow the same masked-mean reduction as the loss values above.
   new_metrics = jax.tree.map(
       lambda x: _masked_mean(x, is_padding_example),
