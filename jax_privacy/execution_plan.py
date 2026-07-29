@@ -613,8 +613,7 @@ class DpsgdConfig:
         and self.truncated_batch_size is not None
     ):
       raise ValueError(
-          'truncated_batch_size is incompatible with'
-          ' DpsgdBatchSelection.FIXED.'
+          'truncated_batch_size is incompatible with DpsgdBatchSelection.FIXED.'
       )
 
     if self.batch_selection is DpsgdBatchSelection.FIXED:
