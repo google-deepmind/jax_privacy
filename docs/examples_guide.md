@@ -111,15 +111,33 @@ Shows both DP and non-DP training paths for comparison.
 with fixed-size batches (`drop_remainder=True`) rather than Poisson sampling,
 and divides gradients by the fixed batch size.
 
-### `dp_sgd_flax_linen_mnist.ipynb` (notebook)
+### `dp_sgd_flax_linen_mnist.py`
+
+End-to-end DP-SGD training of a Flax Linen CNN on MNIST using the current
+2.x API: PLD noise calibration, Poisson batch selection
+(`CyclicPoissonSampling`), `clipped_grad`, and `gaussian_privatizer`.
+
+```bash
+# Smoke run (few steps):
+python examples/dp_sgd_flax_linen_mnist.py --smoke
+
+# Full run (~ε=1, δ=1e-5; expects ~92% test accuracy):
+python examples/dp_sgd_flax_linen_mnist.py
+```
+
+Requires the `examples` optional extras (including `flax`).
+
+**Correctness status:** ✅ Privacy-correct. Uses Poisson sampling with
+matching `dpsgd_event` accounting and expected-batch-size normalization.
+
+### `dp_sgd_flax_linen_mnist.ipynb` (notebook, legacy)
 
 Step-by-step Colab tutorial that trains a Flax Linen CNN on MNIST with
-DP-SGD. Walks through hyper-parameter setup, PLD-based noise calibration,
-per-example gradient clipping via `dp_sgd.grad_clipping`, and comparing DP
-vs. non-DP accuracy.
+DP-SGD. **Deprecated:** only works with `jax-privacy==1.0` and the removed
+`jax_privacy.dp_sgd` API. Prefer `dp_sgd_flax_linen_mnist.py` above.
 
-**Correctness status:** Research / demonstration. Uses `tf.data` shuffling
-with fixed-size batches rather than Poisson sampling.
+**Correctness status:** Research / demonstration (legacy). Uses `tf.data`
+shuffling with fixed-size batches rather than Poisson sampling.
 
 ### `dp_sgd_keras_gemma3_lora_finetuning_samsum.ipynb` (notebook)
 
