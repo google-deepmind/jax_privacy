@@ -380,7 +380,8 @@ def _add_dp_sgd_attributes(model: keras.Model, params: DPKerasConfig) -> None:
       trainable=False,
   )
   # Record indices once. Non-trainable order is not stable across models (e.g.
-  # prior add_weight / BatchNorm stats), so train_step must not hard-code [0]/1].
+  # prior add_weight / BatchNorm stats), so train_step must not hard-code
+  # indices 0 and 1.
   model._dp_rng_index = _non_trainable_index(model, '_rng')  # pylint: disable=protected-access
   model._dp_optimizer_steps_index = _non_trainable_index(  # pylint: disable=protected-access
       model, '_optimizer_steps'
