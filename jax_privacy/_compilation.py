@@ -151,6 +151,8 @@ def precompile(
     for idx in batch_strategy.batch_iterator(n, rng=rng):
       padded = batch_selection.pad_to_multiple_of(idx, strategy.multiple)
       batch_size = padded.size
+      if batch_size in futures:
+        continue
       batch, padding = _abstract_batch_and_padding(dataset, batch_size)
 
       # The compilation cache leaks the compiled batch size(s), which depend on

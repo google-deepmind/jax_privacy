@@ -521,6 +521,38 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
       self.assertEqual(trace_count[0], 5)
       self.assertLen(logs.output, 5)
 
+  def test_precompile_dedupes_shared_padded_sizes(self):
+    """Steps sharing a padded size are lowered and compiled only once."""
+    trace_count = [0]
+
+    def loss_fn(params, batch, _):
+      trace_count[0] += 1
+      return jnp.mean((params - batch) ** 2), {}
+
+    params = jnp.array([1.0])
+    dataset = np.array([[i] for i in range(50)])
+
+    # A padding multiple larger than any possible batch collapses every step to
+    # the same padded size, so precompile must lower/compile exactly once even
+    # though the run takes several (differently sized) steps.
+    plan = dataclasses.replace(
+        _make_config(iterations=5).make(),
+        batch_selection_strategy=batch_selection.CyclicPoissonSampling(0.5, 5),
+    )
+    trainer = training.DPTrainer(
+        config=_FixedPlanConfig(plan),
+        loss_fn=loss_fn,
+        optimizer=optax.sgd(1),
+        compilation_strategy=training.PadToMultiple(multiple=64),
+    )
+
+    with self.assertLogs(level='INFO') as logs:
+      trainer.fit(dataset, params, rng_or_seed=0, precompile=True)
+
+    aot = [l for l in logs.output if 'AOT-compiling train_step' in l]
+    self.assertLen(aot, 1)
+    self.assertEqual(trace_count[0], 1)
+
   @parameterized.parameters(jnp.bfloat16, jnp.float16, jnp.float32)
   def test_fit_precompile_low_precision_params(self, param_dtype):
     """precompile=True works when optax promotes low-precision moments."""
