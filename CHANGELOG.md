@@ -27,9 +27,8 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     accounting event. Poisson sampling is the default (parameterized by
     ``expected_participations``, like ``BandMFConfig``); set
     ``batch_selection=DpsgdBatchSelection.FIXED`` (with ``num_examples``) to
-    use fixed-size batches, with batch size inferred from participations.
-    Includes privacy-correctness tests and a reference example
-    (`examples/dp_sgd_execution_plan.py`).
+    use fixed-size batches, with expected batch size inferred from
+    participations. Includes privacy-correctness tests.
 
 ### Fixed
 

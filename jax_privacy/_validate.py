@@ -53,6 +53,30 @@ def equal(expected, **kwargs):
       )
 
 
+def not_none(**kwargs):
+  """Validates that all values are not ``None``."""
+  for name, value in kwargs.items():
+    if value is None:
+      raise ValueError(f'Expected {name} to be set, got None.')
+
+
+def instance_of(cls, **kwargs):
+  """Validates that all values are instances of ``cls``."""
+  for name, value in kwargs.items():
+    if not isinstance(value, cls):
+      raise TypeError(
+          f'Expected {name} to be an instance of {cls.__name__}, got'
+          f' {type(value)!r}.'
+      )
+
+
+def at_most(hi, **kwargs):
+  """Validates that all values are ``<= hi``."""
+  for name, value in kwargs.items():
+    if value > hi:
+      raise ValueError(f'Expected {name}={value} <= {hi}.')
+
+
 def batch(pytree) -> int:
   """Validates a batch pytree and returns the batch size.
 

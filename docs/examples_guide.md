@@ -74,15 +74,6 @@ post-training privacy auditing with canary scores.
 
 **Correctness status:** Aims to be a correct reference implementation.
 
-### `dp_sgd_execution_plan.py` ✅
-
-Trains logistic regression on synthetic data using vanilla Poisson DP-SGD via
-`DpsgdConfig`. Demonstrates calibration with `expected_participations`,
-Poisson batch selection, clipped gradients normalized by expected batch size,
-and i.i.d. Gaussian noise whose scale matches the plan's `dp_event`.
-
-**Correctness status:** Aims to be a correct reference implementation.
-
 ### `secure_noise_example.py` ✅
 
 Trains a logistic regression model using DP-SGD with the discrete Gaussian

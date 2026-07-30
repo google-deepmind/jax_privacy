@@ -333,11 +333,7 @@ class BandMFConfig:
 
   def _check_calibrated(self) -> None:
     """Raises ValueError if noise_multiplier has not been set."""
-    if self.noise_multiplier is None:
-      raise ValueError(
-          'noise_multiplier is not set. Call calibrate() or provide'
-          ' noise_multiplier directly.'
-      )
+    _validate.not_none(noise_multiplier=self.noise_multiplier)
 
   def calibrate(
       self,
@@ -508,15 +504,6 @@ def _make_clipped_grad_transform(
   return clipped_grad_transform
 
 
-def _check_noise_multiplier_set(noise_multiplier: float | None) -> None:
-  """Raises ValueError if noise_multiplier has not been set."""
-  if noise_multiplier is None:
-    raise ValueError(
-        'noise_multiplier is not set. Call calibrate() or provide'
-        ' noise_multiplier directly.'
-    )
-
-
 class DpsgdBatchSelection(enum.Enum):
   """Batch selection strategy for :class:`DpsgdConfig`.
 
@@ -601,33 +588,21 @@ class DpsgdConfig:
     )
     if self.noise_multiplier is not None:
       _validate.non_negative(noise_multiplier=self.noise_multiplier)
-
-    if not isinstance(self.batch_selection, DpsgdBatchSelection):
-      raise TypeError(
-          'batch_selection must be a DpsgdBatchSelection, got'
-          f' {type(self.batch_selection)!r}.'
-      )
-
-    if (
-        self.batch_selection is DpsgdBatchSelection.FIXED
-        and self.truncated_batch_size is not None
-    ):
-      raise ValueError(
-          'truncated_batch_size is incompatible with DpsgdBatchSelection.FIXED.'
-      )
+    _validate.instance_of(
+        DpsgdBatchSelection, batch_selection=self.batch_selection
+    )
 
     if self.batch_selection is DpsgdBatchSelection.FIXED:
-      if self.num_examples is None:
-        raise ValueError(
-            'DpsgdBatchSelection.FIXED requires num_examples to be set.'
-        )
+      _validate.not_none(num_examples=self.num_examples)
       _validate.positive(num_examples=self.num_examples)
-      batch_size = self.batch_size
-      if batch_size > self.num_examples:
+      if self.truncated_batch_size is not None:
         raise ValueError(
-            f'Inferred batch_size={batch_size} must be <='
-            f' num_examples={self.num_examples}.'
+            'truncated_batch_size is incompatible with'
+            ' DpsgdBatchSelection.FIXED.'
         )
+      _validate.at_most(
+          self.num_examples, expected_batch_size=self._fixed_batch_size()
+      )
     elif self.num_examples is not None:
       _validate.positive(num_examples=self.num_examples)
 
@@ -638,30 +613,28 @@ class DpsgdConfig:
             ' DpsgdBatchSelection.POISSON.'
         )
       _validate.positive(truncated_batch_size=self.truncated_batch_size)
-      if self.num_examples is None:
-        raise ValueError(
-            'truncated_batch_size requires num_examples to be set.'
-        )
-      if self.truncated_batch_size > self.num_examples:
-        raise ValueError(
-            f'truncated_batch_size={self.truncated_batch_size} must be <='
-            f' num_examples={self.num_examples}.'
-        )
+      _validate.not_none(num_examples=self.num_examples)
+      _validate.at_most(
+          self.num_examples, truncated_batch_size=self.truncated_batch_size
+      )
 
   @property
-  def batch_size(self) -> int:
-    """Fixed batch size inferred from participations and dataset size.
+  def expected_batch_size(self) -> float:
+    """Expected batch size from participations and dataset size.
 
-    Equals ``round(expected_participations * num_examples / iterations)``.
-    Only valid when ``num_examples`` is set (required for ``FIXED`` sampling).
+    Equals ``expected_participations * num_examples / iterations``. Under
+    Poisson sampling this is the *expected* (variable) batch size; under
+    ``FIXED`` sampling it must be an integer and equals the fixed batch size.
 
     Raises:
-      ValueError: If ``num_examples`` is unset, or the inferred size is not a
-        positive integer within tolerance.
+      ValueError: If ``num_examples`` is unset.
     """
-    if self.num_examples is None:
-      raise ValueError('batch_size requires num_examples to be set.')
-    raw = self.expected_participations * self.num_examples / self.iterations
+    _validate.not_none(num_examples=self.num_examples)
+    return self.expected_participations * self.num_examples / self.iterations
+
+  def _fixed_batch_size(self) -> int:
+    """Integer batch size required by ``DpsgdBatchSelection.FIXED``."""
+    raw = self.expected_batch_size
     batch_size = int(round(raw))
     if batch_size <= 0 or abs(raw - batch_size) > 1e-6:
       raise ValueError(
@@ -691,7 +664,7 @@ class DpsgdConfig:
           noise_multiplier=sigma,
           iterations=self.iterations,
           dataset_size=self.num_examples,
-          batch_size=self.batch_size,
+          batch_size=self._fixed_batch_size(),
           replace=False,
       )
     if self.batch_selection is not DpsgdBatchSelection.POISSON:
@@ -774,7 +747,7 @@ class DpsgdConfig:
     Raises:
       ValueError: If ``noise_multiplier`` has not been set.
     """
-    _check_noise_multiplier_set(self.noise_multiplier)
+    _validate.not_none(noise_multiplier=self.noise_multiplier)
     if performance_flags is None:
       performance_flags = PerformanceFlags()
 
@@ -786,7 +759,7 @@ class DpsgdConfig:
     )
     if self.batch_selection is DpsgdBatchSelection.FIXED:
       batch_selection_strategy = batch_selection.FixedBatchSampling(
-          batch_size=self.batch_size,
+          batch_size=self._fixed_batch_size(),
           iterations=self.iterations,
           replace=False,
       )

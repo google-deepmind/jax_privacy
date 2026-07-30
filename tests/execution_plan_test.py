@@ -318,7 +318,7 @@ class DpsgdConfigTest(parameterized.TestCase):
         noise_multiplier=1.5,
         normalize_by=batch_size,
     )
-    self.assertEqual(config.batch_size, batch_size)
+    self.assertEqual(config.expected_batch_size, batch_size)
     plan = config.make()
     self.assertIsInstance(
         plan.batch_selection_strategy, batch_selection.FixedBatchSampling
@@ -349,7 +349,7 @@ class DpsgdConfigTest(parameterized.TestCase):
         num_examples=200,
         normalize_by=16,
     ).calibrate(epsilon=3.0, delta=1e-5)
-    self.assertEqual(config.batch_size, 16)
+    self.assertEqual(config.expected_batch_size, 16)
     self.assertGreater(config.noise_multiplier, 0)
     plan = config.make()
     self.assertIsInstance(plan.dp_event, dp_accounting.DpEvent)
