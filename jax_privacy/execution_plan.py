@@ -548,8 +548,8 @@ class DpsgdConfig:
       ``BandMFConfig`` with ``num_bands=1``). For fixed-size sampling, the
       batch size is inferred as
       ``expected_participations * num_examples / iterations``.
-    noise_multiplier: Ratio of noise stddev to query sensitivity. If unset,
-      call ``calibrate()``.
+    noise_multiplier: Ratio of noise stddev to the clipped query's
+      ``l2_norm_bound`` (not ``sensitivity()``). If unset, call ``calibrate()``.
     l2_clip_norm: Maximum L2 norm of per-example gradients.
     rescale_to_unit_norm: Divide clipped gradients by ``l2_clip_norm``.
     normalize_by: Divide the sum-of-clipped gradients by this value. Prefer the
@@ -588,9 +588,6 @@ class DpsgdConfig:
     )
     if self.noise_multiplier is not None:
       _validate.non_negative(noise_multiplier=self.noise_multiplier)
-    _validate.instance_of(
-        DpsgdBatchSelection, batch_selection=self.batch_selection
-    )
 
     if self.batch_selection is DpsgdBatchSelection.FIXED:
       _validate.not_none(num_examples=self.num_examples)
@@ -622,9 +619,10 @@ class DpsgdConfig:
   def expected_batch_size(self) -> float:
     """Expected batch size from participations and dataset size.
 
-    Equals ``expected_participations * num_examples / iterations``. Under
-    Poisson sampling this is the *expected* (variable) batch size; under
-    ``FIXED`` sampling it must be an integer and equals the fixed batch size.
+    Equals ``expected_participations * num_examples / iterations``. This is a
+    float and need not be integral (including under ``FIXED`` sampling). For
+    ``FIXED``, the integer batch size passed to
+    ``FixedBatchSampling`` is derived separately via ``_fixed_batch_size``.
 
     Raises:
       ValueError: If ``num_examples`` is unset.
@@ -633,7 +631,11 @@ class DpsgdConfig:
     return self.expected_participations * self.num_examples / self.iterations
 
   def _fixed_batch_size(self) -> int:
-    """Integer batch size required by ``DpsgdBatchSelection.FIXED``."""
+    """Integer batch size required by ``DpsgdBatchSelection.FIXED``.
+
+    ``expected_batch_size`` may be non-integral; fixed-size sampling still
+    needs an integer batch size, so we require an exact positive integer here.
+    """
     raw = self.expected_batch_size
     batch_size = int(round(raw))
     if batch_size <= 0 or abs(raw - batch_size) > 1e-6:
@@ -780,11 +782,12 @@ class DpsgdConfig:
           f'Unsupported batch_selection={self.batch_selection!r}. Additional'
           ' strategies will be wired as dp-accounting support lands.'
       )
-    query_sensitivity = clipped_grad_transform(lambda: None).sensitivity(
-        self._neighboring_relation
-    )
+    # dp_accounting defines noise_multiplier relative to the clipped query's
+    # l2_norm_bound. Under REPLACE_ONE, sensitivity() == 2 * l2_norm_bound, so
+    # scaling noise by sensitivity() would over-noise by 2x vs the accountant.
+    l2_norm_bound = clipped_grad_transform(lambda: None).l2_norm_bound
     privatizer = noise_addition.gaussian_privatizer(
-        stddev=float(self.noise_multiplier * query_sensitivity),
+        stddev=float(self.noise_multiplier * l2_norm_bound),
         prng_key=performance_flags.noise_seed,
         dtype=performance_flags.dtype,
     )

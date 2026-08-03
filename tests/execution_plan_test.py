@@ -247,8 +247,8 @@ class DpsgdConfigTest(parameterized.TestCase):
     )
     self.assertLessEqual(realized_epsilon, epsilon + 1e-3)
 
-  def test_poisson_noise_matches_sensitivity_calibration(self):
-    """Empirical noise stddev matches noise_multiplier * sensitivity."""
+  def test_poisson_noise_matches_l2_norm_bound_calibration(self):
+    """Empirical noise stddev matches noise_multiplier * l2_norm_bound."""
     expected_batch_size = 10
     config = execution_plan.DpsgdConfig(
         iterations=5,
@@ -259,10 +259,8 @@ class DpsgdConfigTest(parameterized.TestCase):
         normalize_by=expected_batch_size,
     )
     plan = config.make(execution_plan.PerformanceFlags(noise_seed=0))
-    sensitivity = plan.clipped_grad(lambda: None).sensitivity(
-        plan.neighboring_relation
-    )
-    expected_stddev = config.noise_multiplier * sensitivity
+    l2_norm_bound = plan.clipped_grad(lambda: None).l2_norm_bound
+    expected_stddev = config.noise_multiplier * l2_norm_bound
 
     grads = {"w": jnp.zeros((2048,))}
     state = plan.noise_addition_transform.init(grads)
@@ -353,6 +351,47 @@ class DpsgdConfigTest(parameterized.TestCase):
     self.assertGreater(config.noise_multiplier, 0)
     plan = config.make()
     self.assertIsInstance(plan.dp_event, dp_accounting.DpEvent)
+
+  def test_fixed_size_noise_matches_l2_norm_bound_not_sensitivity(self):
+    """Under REPLACE_ONE, noise scales by l2_norm_bound, not sensitivity().
+
+    dp_accounting's noise_multiplier is relative to l2_norm_bound. Using
+    sensitivity() (== 2 * l2_norm_bound under REPLACE_ONE) would over-noise.
+    """
+    batch_size = 8
+    num_examples = 64
+    noise_multiplier = 3.0
+    config = execution_plan.DpsgdConfig(
+        iterations=10,
+        expected_participations=10 * batch_size / num_examples,
+        batch_selection=execution_plan.DpsgdBatchSelection.FIXED,
+        num_examples=num_examples,
+        noise_multiplier=noise_multiplier,
+        l2_clip_norm=1.0,
+        rescale_to_unit_norm=True,
+        normalize_by=batch_size,
+    )
+    plan = config.make(execution_plan.PerformanceFlags(noise_seed=1))
+    self.assertEqual(
+        plan.neighboring_relation,
+        dp_accounting.NeighboringRelation.REPLACE_ONE,
+    )
+    grad_fn = plan.clipped_grad(lambda: None)
+    l2_norm_bound = grad_fn.l2_norm_bound
+    sensitivity = grad_fn.sensitivity(plan.neighboring_relation)
+    self.assertAlmostEqual(sensitivity, 2.0 * l2_norm_bound)
+    expected_stddev = noise_multiplier * l2_norm_bound
+    wrong_stddev = noise_multiplier * sensitivity
+
+    grads = {"w": jnp.zeros((4096,))}
+    state = plan.noise_addition_transform.init(grads)
+    noisy, _ = plan.noise_addition_transform.update(grads, state)
+    empirical_std = float(jnp.std(noisy["w"]))
+    self.assertAlmostEqual(empirical_std, expected_stddev, delta=0.12)
+    # Must not match the 2x-inflated REPLACE_ONE sensitivity scale.
+    self.assertGreater(
+        abs(empirical_std - wrong_stddev), abs(empirical_std - expected_stddev)
+    )
 
   def test_fixed_size_requires_integer_inferred_batch_size(self):
     with self.assertRaises(ValueError):

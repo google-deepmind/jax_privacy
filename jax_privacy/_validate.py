@@ -60,16 +60,6 @@ def not_none(**kwargs):
       raise ValueError(f'Expected {name} to be set, got None.')
 
 
-def instance_of(cls, **kwargs):
-  """Validates that all values are instances of ``cls``."""
-  for name, value in kwargs.items():
-    if not isinstance(value, cls):
-      raise TypeError(
-          f'Expected {name} to be an instance of {cls.__name__}, got'
-          f' {type(value)!r}.'
-      )
-
-
 def at_most(hi, **kwargs):
   """Validates that all values are ``<= hi``."""
   for name, value in kwargs.items():
