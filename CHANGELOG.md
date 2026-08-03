@@ -20,6 +20,16 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+### Added
+
+-   **`DpsgdConfig`**: Tier-2 execution-plan config for vanilla DP-SGD. Couples
+    batch selection, clipped aggregation, Gaussian noise, and the matching
+    accounting event. Poisson sampling is the default (parameterized by
+    ``expected_participations``, like ``BandMFConfig``); set
+    ``batch_selection=DpsgdBatchSelection.FIXED`` (with ``num_examples``) to
+    use fixed-size batches, with expected batch size inferred from
+    participations. Includes privacy-correctness tests.
+
 ### Fixed
 
 -   **`clipped_fun` Formal Guarantees**: Replaced the incorrect claim that
