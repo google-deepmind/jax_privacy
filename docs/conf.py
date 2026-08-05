@@ -59,7 +59,7 @@ extensions = [
     'sphinx.ext.napoleon',
     'sphinx.ext.intersphinx',
     'sphinx.ext.viewcode',
-    'sphinx_rtd_theme',
+    'sphinx_book_theme',
     'myst_nb',
     'sphinx_collections',
     'sphinx.ext.doctest',
@@ -85,10 +85,15 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'sphinx_rtd_theme'
+html_theme = 'sphinx_book_theme'
+html_theme_options = {
+    'show_toc_level': 2,
+    'repository_url': 'https://github.com/google-deepmind/jax_privacy',
+    'use_repository_button': True,
+}
 
 nb_execution_mode = 'off'
-suppress_warnings = ['misc.highlighting_failure']
+suppress_warnings = ['misc.highlighting_failure', 'toc.not_included']
 
 # We have to copy examples to include them in the docs. Without it won't work.
 collections = {
