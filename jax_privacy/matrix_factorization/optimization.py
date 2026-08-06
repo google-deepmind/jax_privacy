@@ -97,7 +97,7 @@ def optimize(
       optimizer.
 
   Returns:
-    The parameters that approximately locally minimize the given loss_fun,
+    The parameters that approximately locally minimize the given loss_fn,
     casted back to the same types as the original `params`.
   """
   loss_and_grad = loss_fn if grad else jax.value_and_grad(loss_fn)

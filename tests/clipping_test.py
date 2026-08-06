@@ -415,19 +415,19 @@ class ClippedFunGridScaleTest(parameterized.TestCase):
       self.assertEqual(gf.l2_norm_bound, 1000.0)
 
 
-def single_example_fun(data):
+def single_example_fn(data):
   assert data.ndim == 1
   return data + 2
 
 
-def batched_fun(data):
+def batched_fn(data):
   assert data.ndim == 2
   return data.mean(axis=0)
 
 
 CLIP_SUM_INPUTS = [
-    {'fun': single_example_fun, 'batch_argnums': 0, 'keep_batch_dim': False},
-    {'fun': batched_fun, 'batch_argnums': 0},
+    {'fun': single_example_fn, 'batch_argnums': 0, 'keep_batch_dim': False},
+    {'fun': batched_fn, 'batch_argnums': 0},
 ]
 
 
@@ -536,7 +536,7 @@ class ClipTransformTest(parameterized.TestCase):
     data_with_bad = data.at[3].set(bad_value)
 
     cf = clipping.clipped_fun(
-        single_example_fun,
+        single_example_fn,
         batch_argnums=0,
         keep_batch_dim=False,
         l2_clip_norm=clip_norm,

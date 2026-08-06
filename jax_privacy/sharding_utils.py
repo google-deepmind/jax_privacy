@@ -271,12 +271,12 @@ def _parallel_sample(
   # is not an issue.
   rngs = rng.spawn(num_devices)
 
-  def local_fun(s):
+  def local_fn(s):
     i = s[0].start // (s[0].stop - s[0].start)
     return sampler(rngs[i], size=per_device_size, dtype=dtype)
 
   fully_sharded_result = jax.make_array_from_callback(
-      (size,), full_sharding, local_fun
+      (size,), full_sharding, local_fn
   )
   # TODO: b/415360727 - Materialization of this array of zeros is suboptimal.
   result = jax.numpy.zeros(shape, dtype=dtype, out_sharding=sharding)

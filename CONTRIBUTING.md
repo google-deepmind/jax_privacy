@@ -97,6 +97,27 @@ conventions depending on what is being contributed.
     minimal on these (no docstrings + type annotations), inline comments can be
     used, but should be used sparingly.
 
+1.  **Function Naming Conventions (`fn` vs. `fun`)**: When adding or refactoring
+    code in `jax_privacy`, adhere to the following function abbreviation
+    guidelines:
+
+    -   **Higher-Order Transformation Inputs (`fun`):** Use `fun` as the
+        positional parameter name for functions passed into top-level JAX-style
+        function transformations (e.g., `clipped_grad(fun, ...)`,
+        `clipped_fun(fun, ...)`). *Rationale:* Aligns directly with core
+        upstream JAX primitive signatures (`jax.grad(fun)`, `jax.vmap(fun)`,
+        `jax.jit(fun)`).
+
+    -   **Compound Identifiers, Protocols, Types, and Arguments (`fn`):** Use
+        `fn` as the suffix or abbreviation for all compound function names, type
+        names, and domain-specific arguments.
+        -   **Protocols & Types:** `LossFn`, `CallbackFn`, `AccountantFn`,
+            `_NoiseStructureFn`.
+        -   **Arguments & Attributes:** `loss_fn`, `accountant_fn`,
+            `reduction_fn`, `extract_preconditioner_from_state_fn`.
+        -   **Internal Callables:** `grad_fn`, `update_fn`, `scan_fn`, `map_fn`,
+            `partition_fn`.
+
 ## Linting and testing
 
 We use `flake8`, `pylint`, `pytype` and `pyrefly` for linting and type
