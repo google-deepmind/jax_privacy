@@ -225,6 +225,9 @@ def truncated_dpsgd_event(
     A DpEvent object.
   """
   _validate_poisson_args(noise_multiplier, iterations, sampling_prob)
+  _validate.non_negative(
+      num_examples=num_examples, truncated_batch_size=truncated_batch_size
+  )
   sampled_gaussian = dp_accounting.TruncatedSubsampledGaussianDpEvent(
       dataset_size=num_examples,
       sampling_probability=sampling_prob,
@@ -264,6 +267,7 @@ def amplified_bandmf_event(
     A DpEvent object.
   """
   _validate_poisson_args(noise_multiplier, iterations, sampling_prob)
+  _validate.positive(num_bands=num_bands)
   rounds = math.ceil(iterations / num_bands)
   return dpsgd_event(
       noise_multiplier=noise_multiplier,
@@ -307,6 +311,7 @@ def truncated_amplified_bandmf_event(
     A DpEvent object.
   """
   _validate_poisson_args(noise_multiplier, iterations, sampling_prob)
+  _validate.positive(num_bands=num_bands)
   return truncated_dpsgd_event(
       noise_multiplier=noise_multiplier,
       sampling_prob=sampling_prob,
