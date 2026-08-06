@@ -60,6 +60,7 @@ test = [
 examples = [
     "dinosaur",
     "equinox",
+    "flax",
     # orbax pulls orbax-checkpoint → uvloop (not supported on Windows)
     "orbax; sys_platform != 'win32'",
     "scikit-learn==1.5.0",
