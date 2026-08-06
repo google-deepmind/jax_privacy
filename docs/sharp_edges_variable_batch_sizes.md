@@ -107,3 +107,88 @@ greatly reduces the amount of padding batch elements we have to process,
 this can be a worthwhile trade-off. Choosing the value of K and the
 minibatch/microbatch sizes needed to minimize this cost is the main
 challenge to solve here.
+
+(using-is-padding-example)=
+## Using `is_padding_example`
+
+The approaches above that involve padding (Approaches 2–5) all require a
+mechanism to tell the clipping function which batch elements are real and
+which are synthetic padding. This is accomplished via the
+`is_padding_example` keyword argument, which is accepted by the
+[`BoundedSensitivityCallable`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.clipping.BoundedSensitivityCallable.html#jax_privacy.clipping.BoundedSensitivityCallable)
+returned by `clipped_grad` and `clipped_fun`.
+
+### What it is
+
+`is_padding_example` is a 1D boolean `jax.Array` of shape
+`(batch_size,)`, where `True` marks a padding example and `False` marks a
+real example. Examples marked as padding are zeroed out after clipping
+but before summation, so they contribute exactly zero to the aggregated
+output. This preserves the formal DP sensitivity guarantee: the L2
+sensitivity remains the same regardless of how many padding examples are in
+the batch.
+
+When `is_padding_example` is omitted (the default), all examples are
+treated as real.
+
+### The `index == -1` convention
+
+The standard convention in JAX Privacy is that an index of `-1` in a
+batch of indices denotes a padding position. The `is_padding_example`
+mask is then derived as:
+
+```python
+is_padding_example = (indices == -1)
+```
+
+This convention is used consistently by
+[`batch_selection.pad_to_multiple_of`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.batch_selection.pad_to_multiple_of.html),
+`training._get_batch`, and all reference examples.
+
+When using the indices returned by `pad_to_multiple_of` to form a batch,
+padding with `-1` generally means the *last* example in the training dataset
+will be used many times as a padding example (if your dataset doesn't support
+negative indexing, you will need to rewrite the -1 indices returned by
+`pad_to_multiple_of` to point to a valid padding example). In either case, this
+padding example should ideally be set to a predefined public example, both for
+clarity and as a defense-in-depth measure; however, the formal guarantees are
+intended to hold even if this is not the case.
+
+### API tiers
+
+The different API tiers handle `is_padding_example` differently:
+
+**Core API** (`clipped_grad` / `clipped_fun`): Users must construct and
+pass `is_padding_example` explicitly as a keyword argument. This is the
+most flexible tier and is used by all the non-Keras example scripts.
+
+```python
+grad_fn = jax_privacy.clipped_grad(loss_fn, l2_clip_norm=1.0,
+                                   batch_argnums=(1, 2))
+
+idx = batch_selection.pad_to_multiple_of(batch_idx, PADDING_MULTIPLE)
+is_padding_example = idx == -1
+batch = features[idx], labels[idx]
+
+clipped_grads = grad_fn(params, *batch,
+                        is_padding_example=is_padding_example)
+```
+
+**`DPTrainer`** (`training.py`): Most users should be able to use
+`DPTrainer.fit`, in which case padding is handled automatically. If the
+`train_step` method is used directly, it accepts `is_padding_example` and
+passes it through to `clipped_grad` internally.
+
+**Keras API** (`keras_api.py`): Padding is handled entirely
+automatically. When `poisson_sampling_in_fit=True`, the Keras integration
+derives `is_padding_example` from the `sample_weight` array (positions
+with weight 0 are treated as padding). Users do not need to interact
+with `is_padding_example` directly.
+
+### Interaction with microbatching
+
+When `microbatch_size` is set, the batch is split into microbatches that
+are processed sequentially. If a microbatch consists entirely of padding
+examples, the library detects this via `_num_real_microbatches` and
+skips it, avoiding unnecessary compute. This corresponds to Approach 3
+above.

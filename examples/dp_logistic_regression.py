@@ -153,6 +153,10 @@ def main(_):
 
     # Padding reduces the required number of compilations of update_fn.
     idx = batch_selection.pad_to_multiple_of(batch_idx, PADDING_MULTIPLE)
+    # Mark padding positions so clipped_grad zeros them out before
+    # aggregation, preserving the DP sensitivity guarantee. See
+    # "Using is_padding_example" in the Variable Batch Sizes documentation.
+    # TODO: b/543134538 - Add public padding example as last dataset entry.
     is_padding_example = idx == -1
     batch = train_features[idx], train_labels[idx]
 

@@ -188,6 +188,12 @@ def pad_to_multiple_of(
 ) -> np.ndarray:
   """Pads the last dimension of indices to a multiple of multiple.
 
+  Creates a new 1D array of indices whose length is a multiple of `multiple`.
+  Padding positions are filled with `-1`; callers should derive
+  `is_padding_example = (indices == -1)` and pass it to
+  `clipped_grad` or `clipped_fun`. See `Using is_padding_example
+  <https://jax-privacy.readthedocs.io/en/latest/sharp_edges_variable_batch_sizes.html#using-is-padding-example>`_.
+
   Example Usage:
     >>> indices = np.arange(10)
     >>> pad_to_multiple_of(indices, multiple=4)
@@ -202,7 +208,7 @@ def pad_to_multiple_of(
       See `sharding_utils.compute_early_stopping_order`.
 
   Returns:
-    A new 1D array of indices padded with -1.
+    The padded array of indices.
   """
   if indices.ndim > 1:
     raise ValueError('pad_to_multiple_of currently expects 1D indices.')

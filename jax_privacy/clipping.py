@@ -49,12 +49,39 @@ class BoundedSensitivityCallable:
   handle the aux output with care w.r.t. DP guarantees, should they be needed.
   """
 
-  fun: Callable[..., Any]
+  bounded_sensitivity_fun: Callable[..., Any]
   l2_norm_bound: float
   has_aux: bool
 
-  def __call__(self, *args, **kwargs):
-    return self.fun(*args, **kwargs)
+  def __call__(
+      self,
+      *args,
+      is_padding_example: jax.Array | None = None,
+      **kwargs,
+  ):
+    """Calls the underlying clipped function.
+
+    Args:
+      *args: The same positional arguments as the original ``fun`` passed to
+        ``clipped_fun`` or ``clipped_grad``.
+      is_padding_example: An optional 1-D boolean ``jax.Array`` of shape
+        ``(batch_size,)`` indicating which examples in the batch are synthetic
+        padding (``True``) vs. real data (``False``).  Padding examples are
+        zeroed out after clipping but before summation, so they contribute
+        exactly zero to the aggregated output and do not affect the formal
+        sensitivity guarantee.  When omitted, all examples are treated as real.
+        For a full guide, see `Using is_padding_example
+        <https://jax-privacy.readthedocs.io/en/latest/sharp_edges_variable_batch_sizes.html#using-is-padding-example>`_.
+      **kwargs: Forwards all keyword arguments to the underlying function.
+
+    Returns:
+      The clipped and aggregated output.  See the docstring of the
+      factory function (``clipped_fun`` or ``clipped_grad``) that created
+      this instance for the exact return signature.
+    """
+    return self.bounded_sensitivity_fun(
+        *args, is_padding_example=is_padding_example, **kwargs
+    )
 
   def sensitivity(
       self,
@@ -361,6 +388,26 @@ def _maybe_squeeze_axis_1(x: jax.Array) -> jax.Array:
   return x
 
 
+def _validate_is_padding_example(is_padding_example, batch_size: int):
+  """Validates the is_padding_example array."""
+  if is_padding_example.ndim != 1:
+    raise ValueError(
+        'is_padding_example must be a 1-D array, got'
+        f' ndim={is_padding_example.ndim}.'
+    )
+  if is_padding_example.shape[0] != batch_size:
+    raise ValueError(
+        f'is_padding_example has shape {is_padding_example.shape} but'
+        f' batch has size {batch_size}. The leading dimensions must'
+        ' match.'
+    )
+  if is_padding_example.dtype != jnp.bool_:
+    raise ValueError(
+        'is_padding_example must have dtype bool, got'
+        f' {is_padding_example.dtype}.'
+    )
+
+
 def clipped_fun(
     fun: Callable,
     has_aux: bool = False,
@@ -385,6 +432,9 @@ def clipped_fun(
     >>> clipped_mean = clipped_fun(jnp.mean, l2_clip_norm=1.0)
     >>> clipped_mean(data)
     Array(5., dtype=float32)
+    >>> is_padding_example = jnp.array([False, False, False, False, True, True])
+    >>> clipped_mean(data, is_padding_example=is_padding_example)
+    Array(3., dtype=float32)
 
   Formal Guarantees:
     For the first function output:
@@ -397,11 +447,12 @@ def clipped_fun(
       ``.l2_norm_bound`` attribute for add-or-remove-one / zero-out DP)
       directly. Under replace-one DP, ``.sensitivity()`` doubles the
       add/remove bound.
-    Extra auxiliary outputs (aux, norms) are per-example. This function
-      guarantees that per-example outputs only depend on the data for the same
-      example. This allows maximum flexibility for the caller to aggregate
-      these as desired (possibly with a DP mean, median, quantile, or histogram
-      mechanism).
+
+    Extra auxiliary outputs (aux, norms) are per-example.
+      This function guarantees that per-example outputs only depend on the data
+      for the same example. This allows maximum flexibility for the caller
+      to aggregate these as desired (possibly with a DP mean, median, quantile,
+      or histogram mechanism).
 
   Args:
     fun: The function to be clipped.
@@ -449,16 +500,31 @@ def clipped_fun(
       ``jnp.int64``).
 
   Returns:
-    A new function `clip_fn` that clips the output of `fun` and sums across
-    the batch. `clip_fn` takes the same arguments as `fun`. The exact output
+    A `BoundedSensitivityCallable` wrapping a new function `clip_fn` that
+    clips the output of `fun` and sums across the batch. `clip_fn` takes
+    the same positional arguments as `fun`, and additionally accepts an
+    optional keyword argument ``is_padding_example`` (see
+    `BoundedSensitivityCallable.__call__` for details). The exact output
     signature depends on `has_aux` and `return_norms`:
 
-    | `has_aux` | `return_norms` | `clipped_fn` returns  |
-    | :-------- | :--------------| :-------------------- |
-    | `False`   | `False`        | `value`               |
-    | `True`    | `False`        | `value, aux`          |
-    | `False`   | `True`         | `value, norms`        |
-    | `True`    | `True`         | `value, (aux, norms)` |
+    .. list-table::
+       :header-rows: 1
+
+       * - ``has_aux``
+         - ``return_norms``
+         - ``clipped_fn`` returns
+       * - ``False``
+         - ``False``
+         - ``value``
+       * - ``True``
+         - ``False``
+         - ``value, aux``
+       * - ``False``
+         - ``True``
+         - ``value, norms``
+       * - ``True``
+         - ``True``
+         - ``value, (aux, norms)``
   """
   if isinstance(batch_argnums, int):
     batch_argnums = (batch_argnums,)
@@ -472,13 +538,12 @@ def clipped_fun(
 
   fun = _normalize_fun_to_return_aux(fun, has_aux)
 
-  def clipped_fn(*args, **kwargs):
-    _validate.batch([args[i] for i in batch_argnums])
-    is_padding_example = kwargs.get('is_padding_example', None)
-    batch_size = jax.tree.leaves(args[batch_argnums[0]])[0].shape[0]
+  def clipped_fn(*args, is_padding_example=None, **kwargs):
+    batch_size = _validate.batch([args[i] for i in batch_argnums])
     if is_padding_example is None:
       is_padding_example = jnp.zeros(batch_size, dtype=jnp.bool_)
-      kwargs['is_padding_example'] = is_padding_example
+    else:
+      _validate_is_padding_example(is_padding_example, batch_size)
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
@@ -510,7 +575,9 @@ def clipped_fun(
         vmap_fn=functools.partial(jax.vmap, spmd_axis_name=spmd_axis_name),
     )
 
-    clipped_values, aux, norms = microbatched_vmap_fun(*args, **kwargs)
+    clipped_values, aux, norms = microbatched_vmap_fun(
+        *args, is_padding_example=is_padding_example, **kwargs
+    )
     if keep_batch_dim:
       # If keep_batch_dim is True, we artificially added a dimension of size 1
       # to the batch arguments before passing them to the vmap'ed function.
@@ -734,12 +801,22 @@ def clipped_grad(
       ``jnp.int64``).
 
   Returns:
-    A new function `values_and_clipped_grad_fn` that computes the sum of clipped
-    per-group gradients of `fun`. The returned function returns `grad`
-    if return_values = return_grad_norms = has_aux = False.  Otherwise, it
-    returns a tuple of grad, AuxiliaryOutput, where AuxiliaryOutput is a
-    namedtuple with optional fields (values, grad_norms, aux) containing the
-    per-example values, gradient norms, and auxiliary data, respectively.
+    A `BoundedSensitivityCallable` wrapping a new function
+    `values_and_clipped_grad_fn` that computes the sum of clipped per-group
+    gradients of `fun`. The returned callable accepts the same positional
+    arguments as `fun`, plus an optional ``is_padding_example`` keyword
+    argument (see `BoundedSensitivityCallable.__call__` for details).
+
+    The returned function returns `grad` if `return_values`,
+    `return_grad_norms`, and `has_aux` are all `False`.  Otherwise,
+    it returns a tuple `(grad, AuxiliaryOutput)`, where
+    `AuxiliaryOutput` is a namedtuple with fields `(values,
+    grad_norms, aux)`.  Each field is set to `None` when its
+    corresponding flag is `False`: `values` is `None` unless
+    `return_values=True`, `grad_norms` is `None` unless
+    `return_grad_norms=True`, and `aux` is `None` unless
+    `has_aux=True`.  When present, these outputs are per-example
+    (i.e., they retain a batch axis).
   """
   _validate_static_args(argnums, batch_argnums, normalize_by)
   fun = _normalize_fun_to_return_aux(fun, has_aux)
