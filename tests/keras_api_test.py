@@ -181,6 +181,95 @@ class KerasApiTest(parameterized.TestCase):
     self.assertTrue(hasattr(model, "_dp_params"))
     self.assertEqual(model._dp_params, params)
     self.assertEqual(model._dp_noise_multiplier, params.noise_multiplier)
+    self.assertEqual(
+        model.non_trainable_weights[model._dp_rng_index].name, "_rng"
+    )
+    self.assertEqual(
+        model.non_trainable_weights[model._dp_optimizer_steps_index].name,
+        "_optimizer_steps",
+    )
+
+  def test_dp_state_indices_skip_prior_non_trainables(self):
+    """DP RNG/step slots must not assume they occupy indices 0 and 1."""
+    inputs = keras.Input(shape=(4,))
+    outputs = keras.layers.Dense(1)(inputs)
+    model = keras.Model(inputs, outputs)
+    model.add_weight(
+        name="prior_state",
+        shape=(3,),
+        initializer="ones",
+        trainable=False,
+    )
+    _ = model(np.ones((2, 4), dtype=np.float32))
+    params = keras_api.DPKerasConfig(
+        epsilon=8.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=4,
+        gradient_accumulation_steps=1,
+        train_steps=8,
+        train_size=16,
+        noise_multiplier=1.0,
+        seed=7,
+    )
+    keras_api.make_private(model, params)
+
+    names = [w.name for w in model.non_trainable_weights]
+    self.assertIn("prior_state", names)
+    self.assertGreater(model._dp_rng_index, 0)
+    self.assertGreater(model._dp_optimizer_steps_index, 0)
+    self.assertEqual(names[model._dp_rng_index], "_rng")
+    self.assertEqual(names[model._dp_optimizer_steps_index], "_optimizer_steps")
+
+  def test_fit_preserves_prior_non_trainable_and_advances_dp_state(self):
+    """Regression: prior non-trainables used to be treated as the DP RNG."""
+    inputs = keras.Input(shape=(4,))
+    outputs = keras.layers.Dense(1)(inputs)
+    model = keras.Model(inputs, outputs)
+    model.add_weight(
+        name="prior_state",
+        shape=(3,),
+        initializer="ones",
+        trainable=False,
+    )
+    model.compile(optimizer=keras.optimizers.SGD(0.1), loss="mse")
+    _ = model(np.ones((2, 4), dtype=np.float32))
+    params = keras_api.DPKerasConfig(
+        epsilon=8.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=4,
+        gradient_accumulation_steps=1,
+        train_steps=8,
+        train_size=16,
+        noise_multiplier=1.0,
+        seed=11,
+    )
+    keras_api.make_private(model, params)
+
+    prior_before = np.array(
+        keras_api._get_non_trainable_weight("prior_state", model)
+    )
+    rng_before = np.array(keras_api._get_non_trainable_weight("_rng", model))
+    steps_before = np.array(
+        keras_api._get_non_trainable_weight("_optimizer_steps", model)
+    )
+
+    x = np.random.randn(16, 4).astype(np.float32)
+    y = np.random.randn(16, 1).astype(np.float32)
+    model.fit(x, y, batch_size=4, epochs=1, verbose=0)
+
+    prior_after = np.array(
+        keras_api._get_non_trainable_weight("prior_state", model)
+    )
+    rng_after = np.array(keras_api._get_non_trainable_weight("_rng", model))
+    steps_after = np.array(
+        keras_api._get_non_trainable_weight("_optimizer_steps", model)
+    )
+
+    np.testing.assert_array_equal(prior_before, prior_after)
+    self.assertFalse(np.array_equal(rng_before, rng_after))
+    self.assertGreater(int(steps_after.item()), int(steps_before.item()))
 
   def test_get_noise_multiplier_uses_config_value(self):
     model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
