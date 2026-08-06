@@ -18,6 +18,7 @@ import chex
 import jax
 import jax.numpy as jnp
 from jax_privacy import clipping as gradient_clipping
+import optax
 
 
 def mean_quadratic_loss(params: jax.Array, x: jax.Array) -> jax.Array:
@@ -369,6 +370,195 @@ class GradientClippingTest(parameterized.TestCase):
     )
     sum_grads = clipped_grad_fn(params, data, key)
     chex.assert_trees_all_equal_structs(sum_grads, params)
+
+
+class SlackClippingTest(parameterized.TestCase):
+
+  @staticmethod
+  def _linear_loss(params, example):
+    return jnp.sum(params * example)
+
+  @staticmethod
+  def _pytree_linear_loss(params, example):
+    return sum(jnp.sum(params[key] * example[key]) for key in params)
+
+  @parameterized.parameters(
+      (0.0, 2.0, 4, False, [1.0, 1.0, 1.0, 1.0]),
+      (0.75, 1.0, 10, False, [1.0, 1.0, 0.5] + [0.0] * 7),
+      (1.5, 2.0, 4, True, [1.0, 0.0, 0.0, 0.0]),
+      (3.0, 2.0, 4, False, [0.0, 0.0, 0.0, 0.0]),
+  )
+  def test_slack_from_norm(
+      self, norm, clip_norm, slack_k, rescale, expected_fill
+  ):
+    output_bound = 1.0 if rescale else clip_norm
+    slack = gradient_clipping._slack_from_norm(
+        jnp.asarray(norm), clip_norm, slack_k, output_bound
+    )
+    expected = (
+        jnp.asarray(expected_fill) * output_bound / jnp.sqrt(float(slack_k))
+    )
+
+    chex.assert_trees_all_close(slack, expected, atol=1e-6)
+
+  @parameterized.product(
+      norm_ratio=(0.0, 0.25, 1.0, 2.0),
+      slack_k=(1, 10),
+      rescale=(False, True),
+  )
+  def test_joint_output_respects_clip_bound(self, norm_ratio, slack_k, rescale):
+    clip_norm = 2.0
+    kwargs = dict(
+        l2_clip_norm=clip_norm,
+        keep_batch_dim=False,
+        rescale_to_unit_norm=rescale,
+    )
+    baseline = gradient_clipping.clipped_grad(
+        self._pytree_linear_loss, **kwargs
+    )
+    with_slack = gradient_clipping.clipped_grad(
+        self._pytree_linear_loss, slack_k=slack_k, **kwargs
+    )
+    params = {'a': jnp.zeros(1), 'b': jnp.zeros(1)}
+    leaf_value = norm_ratio * clip_norm / jnp.sqrt(2.0)
+    data = {key: jnp.array([[leaf_value]]) for key in params}
+
+    output = with_slack(params, data)
+    bound = 1.0 if rescale else clip_norm
+    tolerance = 4 * jnp.finfo(jnp.float32).eps * bound
+
+    chex.assert_trees_all_equal(output.gradient, baseline(params, data))
+    self.assertLessEqual(float(optax.tree.norm(output)), bound + tolerance)
+    self.assertEqual(with_slack.sensitivity(), baseline.sensitivity())
+    self.assertEqual(with_slack.l2_norm_bound, bound)
+
+  def test_slack_uses_post_transform_norm_but_aux_keeps_raw_norm(self):
+    output, aux = gradient_clipping.clipped_grad(
+        self._linear_loss,
+        l2_clip_norm=1.0,
+        keep_batch_dim=False,
+        pre_clipping_transform=lambda grad: 2.0 * grad,
+        return_grad_norms=True,
+        slack_k=4,
+    )(jnp.zeros(1), jnp.array([[0.25]]))
+
+    chex.assert_trees_all_close(output.gradient, jnp.array([0.5]))
+    chex.assert_trees_all_close(output.slack, jnp.array([0.5, 0.5, 0.0, 0.0]))
+    chex.assert_trees_all_close(aux.grad_norms, jnp.array([0.25]))
+
+  def test_microbatching_and_normalization(self):
+    query = gradient_clipping.clipped_grad(
+        self._linear_loss,
+        l2_clip_norm=1.0,
+        keep_batch_dim=False,
+        normalize_by=4.0,
+        microbatch_size=2,
+        slack_k=4,
+    )
+    output = query(
+        jnp.zeros(1),
+        jnp.array([[0.0], [0.5], [2.0], [2.0]]),
+    )
+
+    chex.assert_trees_all_close(output.gradient, jnp.array([0.625]))
+    chex.assert_trees_all_close(
+        output.slack, jnp.array([0.25, 0.25, 0.125, 0.125])
+    )
+    self.assertEqual(query.sensitivity(), 0.25)
+
+  @parameterized.parameters(jnp.nan, jnp.inf)
+  def test_padding_and_nonfinite_zero_full_output(self, nonfinite):
+    query = jax.jit(
+        gradient_clipping.clipped_grad(
+            self._linear_loss,
+            l2_clip_norm=1.0,
+            keep_batch_dim=False,
+            microbatch_size=2,
+            slack_k=4,
+        )
+    )
+    output = query(
+        jnp.zeros(1),
+        jnp.array([[0.0], [0.5], [nonfinite], [0.0]]),
+        is_padding_example=jnp.array([False, False, False, True]),
+    )
+
+    chex.assert_trees_all_close(output.gradient, jnp.array([0.5]))
+    chex.assert_trees_all_close(output.slack, jnp.array([1.0, 1.0, 0.5, 0.5]))
+
+  def test_none_preserves_legacy_output(self):
+    kwargs = dict(l2_clip_norm=0.5, keep_batch_dim=False)
+    legacy = gradient_clipping.clipped_grad(self._linear_loss, **kwargs)
+    explicit_none = gradient_clipping.clipped_grad(
+        self._linear_loss, slack_k=None, **kwargs
+    )
+    params = jnp.zeros(2)
+    data = jnp.array([[0.3, 0.4], [3.0, 4.0]])
+
+    chex.assert_trees_all_equal(
+        jax.jit(legacy)(params, data), jax.jit(explicit_none)(params, data)
+    )
+    self.assertEqual(legacy.sensitivity(), explicit_none.sensitivity())
+
+  @parameterized.parameters(
+      (0, ValueError),
+      (-1, ValueError),
+      (True, TypeError),
+      (1.5, TypeError),
+  )
+  def test_rejects_invalid_slack_k(self, slack_k, error_type):
+    with self.assertRaises(error_type):
+      gradient_clipping.clipped_grad(
+          self._linear_loss,
+          l2_clip_norm=1.0,
+          slack_k=slack_k,
+      )
+
+  def test_rejects_unsupported_clipping_configurations(self):
+    with self.assertRaisesRegex(ValueError, 'scalar global clipping'):
+      gradient_clipping.clipped_grad(
+          self._linear_loss,
+          l2_clip_norm={'layer': 1.0},
+          slack_k=4,
+      )
+    with self.assertRaisesRegex(ValueError, 'discrete grid clipping'):
+      gradient_clipping.clipped_grad(
+          self._linear_loss,
+          l2_clip_norm=1.0,
+          grid_scale=10,
+          slack_k=4,
+      )
+
+  @parameterized.parameters(
+      -1.0, 0.0, 1e-50, 1e-30, 1e30, 1e100, jnp.inf, jnp.nan
+  )
+  def test_rejects_unsupported_clip_norm(self, clip_norm):
+    with self.assertRaises(ValueError):
+      gradient_clipping.clipped_grad(
+          self._linear_loss,
+          l2_clip_norm=clip_norm,
+          slack_k=4,
+      )
+
+  @parameterized.parameters(jnp.float16, jnp.bfloat16)
+  def test_low_precision_output_requires_cast(self, dtype):
+    kwargs = dict(
+        fun=self._linear_loss,
+        l2_clip_norm=1.0,
+        keep_batch_dim=False,
+        slack_k=1,
+    )
+    params = jnp.zeros(1, dtype=dtype)
+    data = jnp.array([[0.5]], dtype=dtype)
+
+    with self.assertRaisesRegex(TypeError, 'float32 or wider primary outputs'):
+      gradient_clipping.clipped_grad(**kwargs)(params, data)
+
+    output = gradient_clipping.clipped_grad(dtype=jnp.float32, **kwargs)(
+        params, data
+    )
+    self.assertEqual(output.gradient.dtype, jnp.float32)
+    self.assertEqual(output.slack.dtype, jnp.float32)
 
 
 if __name__ == '__main__':
