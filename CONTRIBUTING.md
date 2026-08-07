@@ -74,6 +74,14 @@ conventions depending on what is being contributed.
     provides useful documentation that stays up-to-date with code changes, and
     is a useful litmus test on the simplicity and usability of the API surface.
 
+    Python docstrings are rendered on ReadTheDocs using Sphinx and
+    Napoleon, which parse docstrings as **reStructuredText (rST)** rather than
+    Markdown. Do not use Markdown syntax (e.g. pipe tables or Markdown code
+    blocks) inside Python docstrings. See the
+    [Sphinx rST Primer](https://www.sphinx-doc.org/en/master/usage/restructuredtext/basics.html),
+    the [Docutils rST Quick Reference](https://docutils.sourceforge.io/docs/user/rst/quickref.html),
+    and the [Sphinx Napoleon Example Google-Style Docstrings](https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html).
+
 1.  **Internal functions used across files**: For maintainability of the core
     library, it is sometimes beneficial to define a function in one file and
     have it be used by another file within the jax_privacy package. These
