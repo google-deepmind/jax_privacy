@@ -81,6 +81,34 @@ class DPTrainerTest(parameterized.TestCase):
     self.assertIsInstance(state, training.TrainingState)
     self.assertEqual(int(state.step), 3)
 
+  def test_resume_from_state_yields_identical_results(self):
+    """Test that resuming from intermediate steps works as intended."""
+    params = jnp.array([5.0, 5.0])
+    dataset = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])
+
+    trainer = training.DPTrainer(
+        config=_make_config(5, noise_multiplier=0.1, expected_participations=1),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+    )
+
+    intermediate_states = []
+
+    def callback(step, state, _):
+      del step
+      intermediate_states.append(jax.tree.map(jax.numpy.copy, state))
+
+    expected_final_state = trainer.fit(
+        dataset, params, rng_or_seed=42, callback=callback
+    )
+
+    for state in intermediate_states:
+      final_state_resumed = trainer.fit(dataset, state, rng_or_seed=42)
+      np.testing.assert_allclose(
+          final_state_resumed.params, expected_final_state.params
+      )
+      self.assertEqual(final_state_resumed.step, expected_final_state.step)
+
   def test_params_change_after_training(self):
     """Parameters should change from initial values after training."""
     params = jnp.array([10.0, 10.0])
