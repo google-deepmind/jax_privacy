@@ -133,7 +133,7 @@ class DPKerasConfig:
         jax.vmap. By setting microbatch_size=1, the forward/backward pass is
         performed on each batch element individually, with the gradients
         accumulated sequentially using jax.lax.scan. Setting to batch_size gives
-        the largest degree of parllelism, while setting to 1 gives the least
+        the largest degree of parallelism, while setting to 1 gives the least
         memory consumption. Any value in between can be used to trade-off memory
         consumption vs. parallel computation. This parameter is similar to
         `gradient_accumulation_steps`, but it works fully inside of device

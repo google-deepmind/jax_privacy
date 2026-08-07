@@ -66,6 +66,14 @@ extensions = [
     'sphinx_autodoc_typehints',
 ]
 
+# Enable MyST-Parser extensions for math rendering ($...$ and AMS environments).
+# https://myst-parser.readthedocs.io/en/latest/syntax/optional.html#dollar-delimited-math  # pylint: disable=line-too-long
+# https://myst-parser.readthedocs.io/en/latest/syntax/optional.html#math-jax-amsmath-environments  # pylint: disable=line-too-long
+myst_enable_extensions = [
+    'dollarmath',
+    'amsmath',
+]
+
 autodoc_type_aliases = {
     'ArrayLike': 'jax.typing.ArrayLike',
     'ArrayTree': 'optax.ArrayTree',

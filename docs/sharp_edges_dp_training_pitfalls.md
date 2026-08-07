@@ -1093,7 +1093,7 @@ DP practitioner literature. In particular:
 
 If you find this guide useful, you can cite it as:
 
-```
+```text
 @misc{mckenna2026pitfalls,
   title        = {Common Pitfalls in DP Training},
   author       = {McKenna, Ryan and McMahan, H. Brendan},

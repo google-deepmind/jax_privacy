@@ -24,7 +24,7 @@ We **highly recommend** installing JAX Privacy directly from GitHub head.
 The repository is under active development, and installing from head ensures
 you get the most recent features and the best version of the library.
 
-```
+```bash
 pip install git+https://github.com/google-deepmind/jax_privacy
 ```
 
@@ -45,7 +45,7 @@ pip install git+https://github.com/google-deepmind/jax_privacy
 You can also install JAX Privacy from PyPI (version 1.0 or 2.0), but note
 that these releases will not have all the features available on GitHub head.
 
-```
+```bash
 pip install jax-privacy
 ```
 
@@ -56,14 +56,14 @@ contribute to the library.
 
 *   The first step is to clone the repository:
 
-```
+```bash
 git clone https://github.com/google-deepmind/jax_privacy
 ```
 
 *   Then the code can be installed. We recommend local installation so
     modifications to the code are reflected in imports of the package:
 
-```
+```bash
 cd jax_privacy
 pip install -e .
 ```

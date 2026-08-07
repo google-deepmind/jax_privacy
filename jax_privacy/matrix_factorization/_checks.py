@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utilities for confirming various sybmols are used correctly."""
+"""Utilities for confirming various symbols are used correctly."""
 
 import numpy as np
 

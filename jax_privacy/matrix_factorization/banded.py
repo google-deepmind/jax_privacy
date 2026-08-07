@@ -299,7 +299,7 @@ def optimize(
   banded Toeplitz strategy instead (see toeplitz.optimize_banded_toeplitz),
   which are <0.5% suboptimal in the regimes of most interest (n>=1000, b<=32).
 
-  The strategies produces by this procedure can be used in both single- and
+  The strategies produced by this procedure can be used in both single- and
   multi-participation settings -- both (k, b)-min-sep and (k, b)-fixed epoch
   order, as described in https://arxiv.org/abs/2306.08153, as long as the
   number of bands in C is less than or equal to the (minimum) separation

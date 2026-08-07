@@ -98,10 +98,10 @@ def inverse_as_streaming_matrix(
     coef: The Toeplitz coefficients of the strategy.
     column_normalize_for_n: If given, the returned object represents the inverse
       of a *column-normalized* banded Toeplitz matrix of the given size.
-      Otherwise, it reprsents the inverse of an ordinary banded Toeplitz matrix.
-      If not None, the supplied `coef` must have an L2 norm of 1.0 (otherwise,
-      column normalization could change the sensitivity of the implied $C$
-      matrix).
+      Otherwise, it represents the inverse of an ordinary banded Toeplitz
+      matrix. If not None, the supplied `coef` must have an L2 norm of 1.0
+      (otherwise, column normalization could change the sensitivity of the
+      implied $C$ matrix).
 
   Returns:
     A StreamingMatrix object representing $C^{-1}$.
@@ -272,7 +272,7 @@ def multiply(
 
 
 def inverse_coef(coef: jax.Array, n: int | None = None) -> jax.Array:
-  """Finds the inverse coefficients of a lower-triangularToeplitz matrix.
+  """Finds the inverse coefficients of a lower-triangular Toeplitz matrix.
 
   If C is a lower-triangular Toeplitz matrix, then so is C^{-1}; this function
   returns the Toeplitz coefficients of this inverse.
@@ -487,7 +487,7 @@ def optimize_banded_toeplitz(
       Defaults to jnp.mean.
 
   Returns:
-    The coefficeints of the optimal banded Toeplitz strategy, guaranteed to
+    The coefficients of the optimal banded Toeplitz strategy, guaranteed to
     have L2 norm 1.
   """
   loss_fn = functools.partial(loss, n=n, reduction_fn=reduction_fn)
@@ -514,7 +514,7 @@ def _factors(n):
 
 @dataclasses.dataclass(frozen=True)
 class _AmplifiedBandMFHelper:
-  """A convienence class for building an amplified BandMF mechanism.
+  """A convenience class for building an amplified BandMF mechanism.
 
   This class is primarily used to implement
   `optimize_banded_toeplitz_for_amplifications` below.
@@ -703,7 +703,7 @@ def optimize_coefs_for_amplifications(
 
   Returns:
     A tuple `(coefs, stddev)` where:
-      - `coefs` are the coefficeints of a banded Toeplitz strategy; the number
+      - `coefs` are the coefficients of a banded Toeplitz strategy; the number
          of bands chosen is simply the length of the returned coefficients.
       - `stddev` is the stddev of the uncorrelated noise Z required to achieve
         the privacy target (that, is, passing this stddev to

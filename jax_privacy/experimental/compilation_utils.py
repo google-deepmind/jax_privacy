@@ -22,19 +22,23 @@ import numpy as np
 def optimal_physical_batch_sizes(
     batch_sizes: list[int], num_compilations: int
 ) -> set[int]:
-  r"""Find a set of of compiled batch sizes that minimizes wasted compute.
+  r"""Find a set of compiled batch sizes that minimizes wasted compute.
 
-  Given a list of batch sizes $B_1, ..., B_n$ and and a compilation budget,
-  $C$, this function finds compiled batch sizes $M_1, ..., M_C$ that minimizes
-  the following objective:
+  Given a list of batch sizes :math:`B_1, \dots, B_n` and a compilation budget,
+  :math:`C`, this function finds compiled batch sizes :math:`M_1, \dots, M_C`
+  that minimize the following objective:
 
-  $ L_(M_1, ..., M_C) = sum_{i=1}^n min_{j : M_j \geq B_i} (M_j - B_i) $
+  .. math::
 
-  The term M_j - B_i in this objective represents the wasted compute for
-  evaluating gradients for a batch of size M_j when the true batch size is B_i.
+    L(M_1, \dots, M_C) = \sum_{i=1}^n \min_{j : M_j \geq B_i} (M_j - B_i)
 
-  The time complexity of this function is $O(C * b^2)$ where $b$ is the number
-  of unique batch sizes in the list. It is currently not highly optimized.
+  The term :math:`M_j - B_i` in this objective represents the wasted compute for
+  evaluating gradients for a batch of size :math:`M_j` when the true batch size
+  is :math:`B_i`.
+
+  The time complexity of this function is :math:`O(C \cdot b^2)` where
+  :math:`b` is the number of unique batch sizes in the list. It is currently
+  not highly optimized.
 
   Args:
     batch_sizes: A list of non-negative integers B_1, ..., B_n.

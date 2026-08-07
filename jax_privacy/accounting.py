@@ -127,7 +127,7 @@ def dpsgd_event(
     sampling_prob: The Poisson sampling probability of the mechanism, i.e., the
       probability an example will be included in each batch.
     use_zcdp: Whether to use generic dp_event.ZCDpEvent instead of specific
-      dp_event.GaussianDpEvent. For example, set this to True if using discrtete
+      dp_event.GaussianDpEvent. For example, set this to True if using discrete
       Gaussian noise instead of continuous Gaussian noise.
 
   Returns:
@@ -165,7 +165,7 @@ def fixed_dpsgd_event(
     batch_size: The fixed batch size per iteration.
     replace: Whether to sample with replacement.
     use_zcdp: Whether to use generic dp_event.ZCDpEvent instead of specific
-      dp_event.GaussianDpEvent. For example, set this to True if using discrtete
+      dp_event.GaussianDpEvent. For example, set this to True if using discrete
       Gaussian noise instead of continuous Gaussian noise.
 
   Returns:

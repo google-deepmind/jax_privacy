@@ -88,7 +88,7 @@ def per_query_error(
 
 
 def get_orthogonal_mask(n: int, epochs: int = 1) -> jax.Array:
-  """Computes a mask that imposes orthognality constraints on the optimization.
+  """Computes a mask that imposes orthogonality constraints on the optimization.
 
   This is specific to the fixed-epoch-order (k, b)-participation schema of
   https://arxiv.org/pdf/2211.06530.pdf, where participations are separated by

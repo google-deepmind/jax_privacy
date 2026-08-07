@@ -75,12 +75,12 @@ the most expensive part of the training step, and hence the performance cost of
 using float32 in these places should generally be small.
 
 As a simple example, consider a standard transformer model. The number of FLOPs
-required to do a forward/backward pass is typically approximated as $$6 \cdot N
-\cdot D$$ where $$N$$ is the number of tokens, and $$D$$ is the total number of
+required to do a forward/backward pass is typically approximated as $6 \cdot N
+\cdot D$ where $N$ is the number of tokens, and $D$ is the total number of
 parameters. Meanwhile, accumulating gradients across the batch dimension
-requires $$B \cdot D'$$ FLOPS, where $$B$$ is the batch size (such that $$N = B
-\cdot L$$ where $$L$$ is sequence length), and $$D'$$ is the number of
-*trainable* parameters, which is sometimes the same as $$D$$ (e.g., pretraining,
+requires $B \cdot D'$ FLOPS, where $B$ is the batch size (such that $N = B
+\cdot L$ where $L$ is sequence length), and $D'$ is the number of
+*trainable* parameters, which is sometimes the same as $D$ (e.g., pretraining,
 full fine-tuning) and sometimes much smaller (e.g., parameter-efficient
 fine-tuning). Either way, this is a small fraction of the total number of FLOPS
 needed for the train step, and hence higher precision dtypes can be used with

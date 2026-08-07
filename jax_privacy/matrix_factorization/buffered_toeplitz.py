@@ -15,7 +15,7 @@
 """Functions for working with Buffered Linear Toeplitz (BLT) strategy matrices.
 
 `BufferedToeplitz` is the main BLT class, with several helper functions
-for error and sensitity calculation, as well as optimization.
+for error and sensitivity calculation, as well as optimization.
 """
 
 from collections.abc import Callable
@@ -220,7 +220,7 @@ class BufferedToeplitz:
       buf_decay: The buf_decay parameters of a BLT.
       output_scale: The output_scale parameters of a BLT.
       dtype: The dtype to use for the BLT parameters. The default,
-        `jnp.float64`, is storngly recommended for numerical stability. However,
+        `jnp.float64`, is strongly recommended for numerical stability. However,
         this requires either the global option
         `jax.config.update('jax_enable_x64', True)` or that build() and
         subsequent computations occur within a `with jax.enable_x64():` context.
@@ -265,9 +265,9 @@ class BufferedToeplitz:
     NOTE: The BLTs produced by this method are generally significantly inferior
     to those from `buffered_toeplitz.optimize`, which finds a numerically
     optimal BLT for a specific value of `n`. Hence, the primary use of this
-    method is initializating numerical optimization, as well as providing an
+    method is initializing numerical optimization, as well as providing an
     implementation of the "RA-BLT" method of https://arxiv.org/abs/2404.16706v2
-    for use in research conparisons.
+    for use in research comparisons.
 
     Args:
       num_buffers: The number of buffers to use in the BLT (equivalently, the
@@ -683,7 +683,7 @@ class LossFn:
     These correspond to the conditions of Theorem 1 (part a) of "An Inversion
     Theorem for Buffered Linear Toeplitz (BLT) Matrices and Applications to
     Streaming Differential Privacy" (https://arxiv.org/abs/2504.21413), which
-    restricts the optimization to a class of well-behvaved BLTs. Note the
+    restricts the optimization to a class of well-behaved BLTs. Note the
     constraint `pillutla_score < 1` of part (a) is not strictly necessary, but
     empirically including it produces better results.
 

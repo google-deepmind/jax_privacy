@@ -31,7 +31,7 @@ please don't hesitate to [contact us](support).
 DP training is an active research area with many recent developments. It does
 not come for free therefore expect:
 
-*   Some accuracy decrease compared to non-DP model verions, in most of the
+*   Some accuracy decrease compared to non-DP model versions, in most of the
     cases it will be negligible.
 *   Larger training time.
 *   More hyperparameters to tune.
@@ -71,7 +71,7 @@ You can navigate the documentation in the following way:
 1.  Install the library following instructions in [Installation](installation)
     section.
 1.  If you want to use the library for your own use-case, choose the framework
-    you want to use (e.g. [Keras](keras_api.rst) or
+    you want to use (e.g. {doc}`Keras <keras_api>` or
     [JAX & Flax](core_library)) and study its API capabilities with the
     provided examples.
 1.  If you are interested in doing some specific task (e.g. LLM fine-tuning),

@@ -290,11 +290,11 @@ class DPTrainer:
         sampling batches (impacting privacy) and initializing the loss PRNG key
         (potentially impacting utility). Does not influence the noise addition
         transform, which is configured via the DPExecutionPlan.
-      precompile: A boolean indicating whether to asyncronously precompile
+      precompile: A boolean indicating whether to asynchronously precompile
         ``train_step`` for the batch sizes encountered, instead of just-in-time
         compiling on the fly, which can idle accelerators during training.
         Strategies that resolve before training (e.g. ``AutotuneMicrobatch``)
-        run even when this is False.
+        run even when this is ``False``.
 
     Returns:
       Final ``TrainingState``.
