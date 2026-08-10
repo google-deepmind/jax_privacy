@@ -87,6 +87,15 @@ autoclass_content = 'both'
 autodoc_member_order = 'bysource'
 napoleon_use_ivar = True
 
+# -- Intersphinx configuration -----------------------------------------------
+# Creates cross-reference links in pydocs rendered on readthedocs, for example
+# :func:`jax.grad` will link to the JAX documentation page for jax.grad.
+# https://www.sphinx-doc.org/en/master/usage/extensions/intersphinx.html
+intersphinx_mapping = {
+    'jax': ('https://jax.readthedocs.io/en/latest/', None),
+    'optax': ('https://optax.readthedocs.io/en/latest/', None),
+}
+
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
@@ -101,7 +110,10 @@ html_theme_options = {
 }
 
 nb_execution_mode = 'off'
-suppress_warnings = ['misc.highlighting_failure', 'toc.not_included']
+suppress_warnings = [
+    'misc.highlighting_failure',
+    'toc.not_included',
+]
 
 # We have to copy examples to include them in the docs. Without it won't work.
 collections = {
