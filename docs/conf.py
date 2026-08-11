@@ -46,7 +46,7 @@ sys.path.insert(0, os.path.abspath('..'))
 # -- Project information -----------------------------------------------------
 
 project = 'JAX Privacy'
-copyright = '2025, Google DeepMind'  # pylint: disable=redefined-builtin
+copyright = '2026, Google DeepMind'  # pylint: disable=redefined-builtin
 author = 'Google DeepMind'
 release = '2.3.0.dev0'
 
