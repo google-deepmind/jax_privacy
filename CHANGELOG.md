@@ -20,6 +20,13 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+### Added
+
+-   **`examples/dp_sgd_flax_linen_mnist.py`**: Privacy-correct Flax Linen CNN
+    MNIST training example for jax_privacy 2.x (`clipped_grad`, Poisson
+    sampling, PLD calibration). Replaces the deprecated 1.0-only notebook
+    path; `flax` added under the `examples` optional extras.
+
 ### Fixed
 
 -   **`clipped_fun` Formal Guarantees**: Replaced the incorrect claim that
