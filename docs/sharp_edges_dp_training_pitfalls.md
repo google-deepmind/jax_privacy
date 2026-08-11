@@ -31,88 +31,27 @@ specific pitfall we have encountered in practice.
 
 ---
 
-## Three Levels of Assurance
+## API Tiers and Pitfall Ownership
 
-JAX Privacy provides building blocks at three levels of abstraction, each
-with a different level of DP assurance:
+JAX Privacy provides [three API tiers](api-tiers) — end-to-end training loops,
+`DPExecutionPlan`, and low-level building blocks — each trading flexibility for
+stronger built-in DP assurance. Which pitfalls on this page you need to worry
+about depends on the tier you build on:
 
-1.  **End-to-end training loops** ([Keras API](keras_api.rst),
-    [`training`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)):
-    These consume a `DPExecutionPlan` and write the entire training loop for
-    you — batch selection, gradient computation, noise addition, parameter
-    updates, and privacy accounting. The resulting training satisfies the
-    stated DP guarantee unconditionally. It is a design goal of JAX Privacy
-    that you should not need to reason about how the components interact; the
-    library aims to handle this for you.
+-   **Tier 1 (end-to-end training loops):** The library handles component
+    composition for you. None of the composition pitfalls below apply.
 
-2.  **[`DPExecutionPlan`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.execution_plan.DPExecutionPlan.html)**:
-    This bundles batch selection, clipped gradient computation, noise
-    addition, and the corresponding `DpEvent` into a single cohesive object.
-    When you use the plan's components as documented to write your own
-    training loop, the resulting loop inherits the stated DP guarantee
-    *by construction*.
+-   **Tier 2 (`DPExecutionPlan`):** The privacy-critical pieces are already
+    coupled consistently; your job is to wire them into your training loop as
+    described.
 
-3.  **Low-level building blocks** ([`clipped_grad`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.clipping.clipped_grad.html),
-    [`noise_addition`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.noise_addition.html),
-    [`batch_selection`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.batch_selection.html),
-    [`accounting`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.accounting.html)):
-    These give you maximum flexibility. Each individual component is designed
-    so that you should not be able to configure it in a way that breaks its own
-    *local formal guarantees* — and if you can, that is a bug (though, as with
-    any software, we cannot rule out that such bugs exist). Importantly, these
-    local formal guarantees are not DP guarantees: individual components do not
-    satisfy DP by themselves. They are properties like sensitivity bounds and
-    per-example isolation that serve as the building blocks for *proving*
-    DP for the higher-level compositions. This is why they are carefully
-    documented — to enable rigorous reasoning about the end-to-end
-    guarantee when components are composed. The risk at this level is in
-    *composition*: wiring components together incorrectly (e.g., calibrating
-    noise to the wrong sensitivity, or using an accounting method that does
-    not match the batch selection strategy). It is not until you couple
-    components together that you can reason about a complete DP mechanism,
-    and getting that coupling right is your responsibility.
+-   **Tier 3 (Core API):** You own composition. You are responsible for
+    calibrating noise to the right sensitivity and using an accounting method
+    that matches your batch selection. The pitfalls below are most relevant at
+    this tier.
 
-```{tip}
-**Design principle:** You should not be able to configure any individual
-JAX Privacy utility in a way that breaks its stated guarantees. If you can,
-that is a bug. We enforce this at the API level, even when it sacrifices
-flexibility.
-```
-
-### Your responsibilities at each tier
-
-Which parts of DP correctness you own depends on the tier you build on:
-
-- **Tier 1 (jax_privacy's end-to-end training loops):** Nothing, as far as
-  component composition goes. Configure the mechanism and the library handles
-  batch selection, clipping, noise, and accounting so the training loop
-  satisfies the stated guarantee.
-- **Tier 2 (`DPExecutionPlan`):** Use the plan's components as documented. The
-  privacy-critical pieces are already coupled consistently; your job is to wire
-  them into your training loop as described.
-- **Tier 3 (low-level building blocks):** You own composition. You are
-  responsible for calibrating noise to the right sensitivity and using an
-  accounting method that matches your batch selection. The components are
-  designed so that assembling a basic DP-SGD loop is straightforward; going
-  beyond that (e.g., custom mechanisms or accounting) requires genuine DP
-  expertise, and that is a deliberate, acceptable trade-off for the flexibility
-  this tier provides.
-
-This is a direct consequence of JAX Privacy's **flat, auditable design**:
-privacy-critical logic is not buried across nested abstraction layers. Each
-component (clipping, noise addition, batch selection, accounting) stands alone
-and can be understood, tested, and audited in isolation; coupling happens only
-at the higher-level API layer, where the joint guarantees are stated
-explicitly. See [Flat, auditable design](#flat-auditable-design) for details.
-
-```{important}
-**What JAX Privacy can and cannot control.** JAX Privacy governs what it
-*computes* -- the sensitivity of a gradient, the noise added, the accounting
-a mechanism. It cannot govern what you *release*. It will not stop you from
-logging a PRNG seed, or checkpointing raw training state to unencrypted storage.
-You must always reason about what leaves your trust boundary, and to whom. This
-is a property of *your* deployment, not of the library.
-```
+See the [API Tiers](api-tiers) section of the Overview for the full description
+of each tier, its capabilities, and your responsibilities.
 
 ---
 
@@ -133,23 +72,25 @@ not satisfy the DP guarantee you intended to claim*; it does **not** mean a
 real privacy violation is likely. In fact the outputs often still satisfy
 *some* (weaker) guarantee than the one you reported.
 
-> [!NOTE]
-> For simplicity we phrase everything in terms of \((\epsilon, \delta)\)-DP,
-> with \(\epsilon\) as the primary parameter and \(\delta\) fixed to some small
-> value. The statements apply equally to other DP formulations (e.g. RDP or
-> \(\mu\)-GDP), or to direct bounds on an attacker's true-positive rate at a
-> fixed false-positive rate.
+```{note}
+For simplicity we phrase everything in terms of $(\epsilon, \delta)$-DP,
+with $\epsilon$ as the primary parameter and $\delta$ fixed to some small
+value. The statements apply equally to other DP formulations (e.g. RDP or
+$\mu$-GDP), or to direct bounds on an attacker's true-positive rate at a
+fixed false-positive rate.
+```
 
-> [!NOTE]
-> These severity classes are orthogonal to the three API tiers above. The tiers
-> describe *who is responsible* for correctness (you vs. the library); the
-> severity classes describe *how badly the guarantee breaks* if correctness
-> fails.
+```{note}
+These severity classes are orthogonal to the [API tiers](api-tiers). The tiers
+describe *who is responsible* for correctness (you vs. the library); the
+severity classes describe *how badly the guarantee breaks* if correctness
+fails.
+```
 
 ```{important}
 **Critical -- silent, formal invalidation.** An ordinary implementation or
 composition mistake means the released outputs *do not satisfy the DP guarantee
-you intended to claim*: the stated \(\epsilon\) no longer holds (though a weaker
+you intended to claim*: the stated $\epsilon$ no longer holds (though a weaker
 guarantee often still does). No adversary is required, and the code runs without
 errors, so nothing warns you. These are the most dangerous pitfalls precisely
 because a careful, well-intentioned user can trigger them by accident.
@@ -168,11 +109,11 @@ depends on your threat model.
 ```{important}
 **Negligible -- bounded, negligible degradation.** Even in the worst case you
 lose only a negligible amount of privacy: the realized guarantee is
-\(\epsilon' = \epsilon + \text{tiny}\) rather than \(\epsilon\). The guarantee
+$\epsilon' = \epsilon + \text{tiny}$ rather than $\epsilon$. The guarantee
 still holds; it is simply a hair weaker than reported, typically because of
 finite-precision arithmetic. *Example: numerical error in accounting, or a
 clipped gradient whose norm floating-point-rounds a hair above the clip norm
-\(C\).*
+$C$.*
 ```
 
 The *same* underlying phenomenon can appear in different classes.
@@ -206,7 +147,7 @@ Every pitfall below is tagged with its severity class in the summary table.
 *Severity key:* **Critical** = the released outputs do not satisfy the DP
 guarantee you intended to claim; **Theoretical** = a formal break only under an
 adversarial, largely theoretical threat model; **Negligible** = bounded,
-negligible degradation (\(\epsilon' = \epsilon + \text{tiny}\)). See
+negligible degradation ($\epsilon' = \epsilon + \text{tiny}$). See
 [How severe is each pitfall?](#how-severe-is-each-pitfall) for definitions.
 
 Beyond these failure modes, JAX Privacy follows several cross-cutting design
@@ -844,19 +785,21 @@ attack variant can violate the formal DP guarantee under a strong adversary
 **The pitfall.** Privacy-critical quantities are computed in finite-precision
 arithmetic, and rounding can nudge them slightly in the *wrong* direction:
 
-- **Clipping.** Per-example clipping *formally* guarantees an L2 norm of at
-  most the clip norm \(C\), but the rescaling that enforces the clip can leave
-  a gradient whose norm is a fraction of an ULP *above* \(C\), so the true
-  sensitivity is \(C(1 + \eta)\) for a tiny \(\eta\).
-- **Noise calibration.** The noise multiplier that an accountant computes for a
-  target \((\epsilon, \delta)\) can round a hair *low*, so slightly less noise
-  is added than the guarantee assumes.
-- **Accounting.** Modern accountants (privacy loss distributions, numerical
-  composition, Monte Carlo estimators) discretize distributions and integrate
-  numerically; the reported \(\epsilon\) can differ slightly from the true one.
+-   **Clipping.** Per-example clipping *formally* guarantees an L2 norm of at
+    most the clip norm $C$, but the rescaling that enforces the clip can leave
+    a gradient whose norm is a fraction of an ULP *above* $C$, so the true
+    sensitivity is $C(1 + \eta)$ for a tiny $\eta$.
+
+-   **Noise calibration.** The noise multiplier that an accountant computes for
+    a target $(\epsilon, \delta)$ can round a hair *low*, so slightly less noise
+    is added than the guarantee assumes.
+
+-   **Accounting.** Modern accountants (privacy loss distributions, numerical
+    composition, Monte Carlo estimators) discretize distributions and integrate
+    numerically; the reported $\epsilon$ can differ slightly from the true one.
 
 In every case the effect is the same in kind: the mechanism realizes
-\(\epsilon' = \epsilon + \text{tiny}\) instead of the \(\epsilon\) you report.
+$\epsilon' = \epsilon + \text{tiny}$ instead of the $\epsilon$ you report.
 
 **Why this loss is negligible.** Unlike the [Critical](#how-severe-is-each-pitfall)
 pitfalls — where the released outputs no longer satisfy the claimed guarantee —
@@ -871,7 +814,7 @@ formal guarantee; this one cannot.
 doing DP in finite precision, and it is negligible: bounded by machine precision
 and far below the noise floor of any realistic privacy claim. JAX Privacy does
 not add special mitigations (e.g., deliberate safe-direction rounding) in the
-standard path, so you should treat the reported \(\epsilon\) as accurate only to
+standard path, so you should treat the reported $\epsilon$ as accurate only to
 within your accountant's numerical tolerance, not to arbitrary precision.
 
 If you need this residual slack *actually eliminated* rather than merely

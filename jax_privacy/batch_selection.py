@@ -439,7 +439,7 @@ class FixedBatchSampling(BatchSelectionStrategy):
 
   References:
     * https://arxiv.org/abs/1807.01647
-    * https://arxiv.org/abs/1908.10530
+    * https://arxiv.org/abs/1808.00087 (sampling without replacement)
 
   Attributes:
     batch_size: The number of examples per batch.

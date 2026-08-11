@@ -56,6 +56,7 @@
    :caption: Technical Documentation
 
    paper_reproductions
+   batch_selection
    troubleshooting
    library_design
    contribution_guide
