@@ -174,12 +174,12 @@ itself a *random variable* that depends on which examples were selected, making
 it technically sensitive: dividing by the actual (random) batch size can itself
 leak information about the batch composition.
 
-**How JAX Privacy handles it.** The `clipped_grad` function computes a *sum*
-of clipped per-example gradients, not a mean. This avoids any dependence on
-the random batch size. If you want to recover a mean gradient (e.g., for
-compatibility with standard optimizers), you can pass a `normalize_by` value
-— typically the *expected* batch size, which is a public, deterministic
-quantity:
+**How JAX Privacy handles it.** The {func}`~jax_privacy.clipping.clipped_grad`
+function computes a *sum* of clipped per-example gradients, not a mean. This
+avoids any dependence on the random batch size. If you want to recover a mean
+gradient (e.g., for compatibility with standard optimizers), you can pass a
+`normalize_by` value — typically the *expected* batch size, which is a public,
+deterministic quantity:
 
 ```python
 # User writes a per-example loss -- no batch-size division needed.
@@ -214,9 +214,11 @@ noise multiplier based on an *assumed* sensitivity that does not match the
 *actual* sensitivity of your clipping configuration, the privacy guarantee is
 invalidated.
 
-**How JAX Privacy handles it.** The callable returned by `clipped_grad` (and
-`clipped_fun`) exposes a `.sensitivity()` method that reports the exact L2
-sensitivity of the clipped output, accounting for all configuration options:
+**How JAX Privacy handles it.** The callable returned by
+{func}`~jax_privacy.clipping.clipped_grad` (and
+{func}`~jax_privacy.clipping.clipped_fun`) exposes a `.sensitivity()` method
+that reports the exact L2 sensitivity of the clipped output, accounting for all
+configuration options:
 
 ```python
 grad_fn = jax_privacy.clipped_grad(
@@ -230,11 +232,12 @@ grad_fn = jax_privacy.clipped_grad(
 sensitivity = grad_fn.sensitivity()
 ```
 
-The `DPExecutionPlan` uses this method internally to calibrate noise, ensuring
-that the noise multiplier and the clipping configuration are always aligned.
-If you are using the lower-level building blocks directly, we recommend always
-calibrating noise against the `.sensitivity()` of the clipped gradient
-callable rather than computing the sensitivity by hand.
+The {class}`~jax_privacy.execution_plan.DPExecutionPlan` uses this method
+internally to calibrate noise, ensuring that the noise multiplier and the
+clipping configuration are always aligned. If you are using the lower-level
+building blocks directly, we recommend always calibrating noise against the
+`.sensitivity()` of the clipped gradient callable rather than computing the
+sensitivity by hand.
 
 ---
 
@@ -250,7 +253,8 @@ guarantee is invalid. This is one of the most common and most dangerous
 mistakes in DP training, because the training loop runs without errors and the
 resulting model looks normal.
 
-**How JAX Privacy handles it.** The `DPExecutionPlan` bundles the batch
+**How JAX Privacy handles it.** The
+{class}`~jax_privacy.execution_plan.DPExecutionPlan` bundles the batch
 selection strategy, clipped gradient computation, noise addition, and the
 corresponding `DpEvent` into a single object. The `DpEvent` is derived from
 the same parameters that configure the batch selection and noise addition,
@@ -275,7 +279,8 @@ If you drop down to the low-level building blocks and assemble batch selection,
 noise, and accounting yourself, this consistency is *your* responsibility:
 there is no cross-check that the accounting method you choose actually matches
 the batch selection strategy you run. Keep them in sync deliberately, or use a
-`DPExecutionPlan` (or a higher tier) so that they are coupled by construction.
+{class}`~jax_privacy.execution_plan.DPExecutionPlan` (or a higher tier) so that
+they are coupled by construction.
 
 ---
 
@@ -305,10 +310,12 @@ explicit.
 
 **How JAX Privacy handles it.** JAX Privacy uses a deliberate structural
 separation. In the batch selection API, for example, the
-`BatchSelectionStrategy` is a frozen dataclass whose *fields* are all public
-configuration (sampling probability, number of iterations, cycle length).
-Data-dependent values — the number of examples and the random number
-generator — are only consumed as *arguments* to the `batch_iterator` method:
+{class}`~jax_privacy.batch_selection.BatchSelectionStrategy` is a frozen
+dataclass whose *fields* are all public configuration (sampling probability,
+number of iterations, cycle length). Data-dependent values — the number of
+examples and the random number generator — are only consumed as *arguments* to
+the {meth}`~jax_privacy.batch_selection.BatchSelectionStrategy.batch_iterator`
+method:
 
 ```python
 # Fields are public configuration -- data-independent, safe to release.
@@ -386,26 +393,30 @@ relations — `ADD_OR_REMOVE_ONE`, `REPLACE_ONE`, and `REPLACE_SPECIAL`
 (zero-out) — and makes the choice explicit and first-class throughout the
 API. Rather than recommending one relation over another, the higher-level
 APIs *determine* the neighboring relation automatically from how you configure
-the mechanism. For example, with `BandMFConfig` the default preset
-(`num_examples=None`) produces a `DPExecutionPlan` under `ADD_OR_REMOVE_ONE`;
-specifying `num_examples` (and optionally `truncated_batch_size`) instead
-produces one under `REPLACE_SPECIAL`, where the dataset size is treated as
-public.
+the mechanism. For example, with
+{class}`~jax_privacy.execution_plan.BandMFConfig` the default preset
+(`num_examples=None`) produces a
+{class}`~jax_privacy.execution_plan.DPExecutionPlan` under
+`ADD_OR_REMOVE_ONE`; specifying `num_examples` (and optionally
+`truncated_batch_size`) instead produces one under `REPLACE_SPECIAL`, where the
+dataset size is treated as public.
 
 The key property is that the neighboring relation is an *explicit field* on the
-`DPExecutionPlan` dataclass. It can be inspected, reported, and
-programmatically enforced alongside the precise `DpEvent` — in contrast to the
-common situation where the neighboring relation is an implicit, undocumented
-assumption baked into the code. When you use the low-level components directly,
-none of this is automatic: choosing a relation and keeping sensitivity, batch
-selection, and accounting consistent with it requires care and DP expertise
-(JAX Privacy does not do it for you at this level).
+{class}`~jax_privacy.execution_plan.DPExecutionPlan` dataclass. It can be
+inspected, reported, and programmatically enforced alongside the precise
+`DpEvent` — in contrast to the common situation where the neighboring relation
+is an implicit, undocumented assumption baked into the code. When you use the
+low-level components directly, none of this is automatic: choosing a relation
+and keeping sensitivity, batch selection, and accounting consistent with it
+requires care and DP expertise (JAX Privacy does not do it for you at this
+level).
 
 The neighboring relation is an explicit parameter at every level:
 
-- The `.sensitivity()` method on `clipped_grad`'s returned callable is
-  parameterized by a `NeighboringRelation` enum, so you always know exactly
-  which neighboring relation your sensitivity bound corresponds to:
+- The `.sensitivity()` method on {func}`~jax_privacy.clipping.clipped_grad`'s
+  returned callable is parameterized by a `NeighboringRelation` enum, so you
+  always know exactly which neighboring relation your sensitivity bound
+  corresponds to:
 
   ```python
   from dp_accounting import NeighboringRelation
@@ -418,9 +429,9 @@ The neighboring relation is an explicit parameter at every level:
   # s_replace == 2 * s_add_remove
   ```
 
-- The `DPExecutionPlan` stores the `neighboring_relation` as a field, and
-  uses it consistently across batch selection, noise calibration, and
-  privacy accounting.
+- The {class}`~jax_privacy.execution_plan.DPExecutionPlan` stores the
+  `neighboring_relation` as a field, and uses it consistently across batch
+  selection, noise calibration, and privacy accounting.
 
 JAX Privacy also takes the philosophy of parameterizing mechanisms directly —
 the way you would in a paper — rather than in terms of derived quantities
@@ -453,22 +464,25 @@ the API avoids baking in assumptions about the neighboring relation.
 Both cases require the training step to produce a well-defined, bounded output
 *regardless* of the input, to preserve the formal DP guarantee.
 
-**How JAX Privacy handles it.** The `clipped_grad` and `clipped_fun` functions
-handle both cases correctly, regardless of how you structure your batches:
+**How JAX Privacy handles it.** The {func}`~jax_privacy.clipping.clipped_grad`
+and {func}`~jax_privacy.clipping.clipped_fun` functions handle both cases
+correctly, regardless of how you structure your batches:
 
-- **Zero-sized batches work directly.** `clipped_grad` produces the correct
-  result even when passed a batch with zero examples — no special handling
-  or padding is required. You can also pad batches to a fixed size and use
-  the `is_padding_example` argument to mark padding examples, whose
-  contributions are zeroed out before aggregation. Either approach works;
-  JAX Privacy produces the correct result in both cases.
+- **Zero-sized batches work directly.**
+  {func}`~jax_privacy.clipping.clipped_grad` produces the correct result even
+  when passed a batch with zero examples — no special handling or padding is
+  required. You can also pad batches to a fixed size and use the
+  `is_padding_example` argument to mark padding examples, whose contributions
+  are zeroed out before aggregation. Either approach works; JAX Privacy
+  produces the correct result in both cases.
 
 - **Non-finite gradients are handled by default.** When `nan_safe=True` (the
-  default), per-example outputs with non-finite L2 norms are zeroed out
-  before aggregation. This ensures that numerical instability in any single
-  example cannot corrupt the aggregate or leak information.
+  default), per-example outputs with non-finite L2 norms are zeroed out before
+  aggregation. This ensures that numerical instability in any single example
+  cannot corrupt the aggregate or leak information.
 
-See also [Variable Batch Sizes](sharp_edges_variable_batch_sizes) for
+See also
+[Handling Variable Batch Sizes](sharp_edges_variable_batch_sizes) for
 strategies to handle variable batch sizes efficiently.
 
 ---
@@ -492,31 +506,32 @@ between accumulation, clipping, and noise calibration correct is subtle and
 error-prone.
 
 **How JAX Privacy handles it.** JAX Privacy folds gradient accumulation *into*
-`clipped_grad` via the `microbatch_size` parameter, and this is the key to why
-it is safe. Microbatching processes the batch in sequential chunks using
-`jax.lax.scan`, performing per-example clipping and aggregation correctly
-inside a single function. Crucially, `microbatch_size` is a **purely
-performance knob**: changing it changes *only* how the computation is
-scheduled — how much work is done sequentially versus vectorized, and therefore
-the memory/throughput tradeoff. It does **not** change what `clipped_grad`
-computes, either semantically or numerically (up to floating-point issues). The
-sum of clipped per-example gradients, its sensitivity,
-and where and at what scale noise is added are all identical regardless of the
-microbatch size you pick.
+{func}`~jax_privacy.clipping.clipped_grad` via the `microbatch_size` parameter,
+and this is the key to why it is safe. Microbatching processes the batch in
+sequential chunks using {func}`jax.lax.scan`, performing per-example clipping
+and aggregation correctly inside a single function. Crucially,
+`microbatch_size` is a **purely performance knob**: changing it changes *only*
+how the computation is scheduled — how much work is done sequentially versus
+vectorized, and therefore the memory/throughput tradeoff. It does **not**
+change what {func}`~jax_privacy.clipping.clipped_grad` computes, either
+semantically or numerically (up to floating-point issues). The sum of clipped
+per-example gradients, its sensitivity, and where and at what scale noise is
+added are all identical regardless of the microbatch size you pick.
 
 This invariance is not a coincidence — it falls directly out of the
-[sum-not-mean design](#division-by-batch-size). Because `clipped_grad` returns a
-*sum* of clipped per-example gradients (not a mean), microbatching is just
-associative addition: splitting the batch into chunks, summing each chunk, and
-adding the partial sums yields the same total for any chunking, up to
-floating-point non-associativity. The sensitivity of that sum — and hence the
-noise calibrated against it — depends only on the per-example clip norm, not on
-how the examples were grouped. Dividing by a *fixed, public* constant afterward
-(the `normalize_by` option) preserves this, since it just scales the total sum.
-What would break the invariance is taking a *per-chunk* mean over the actual
-number of examples in each chunk: the divisor would then depend on how you
-grouped the batch, so both the result and the sensitivity reasoning would too.
-That is exactly the coupling JAX Privacy avoids by summing.
+[sum-not-mean design](#division-by-batch-size). Because
+{func}`~jax_privacy.clipping.clipped_grad` returns a *sum* of clipped
+per-example gradients (not a mean), microbatching is just associative addition:
+splitting the batch into chunks, summing each chunk, and adding the partial
+sums yields the same total for any chunking, up to floating-point
+non-associativity. The sensitivity of that sum — and hence the noise calibrated
+against it — depends only on the per-example clip norm, not on how the examples
+were grouped. Dividing by a *fixed, public* constant afterward (the
+`normalize_by` option) preserves this, since it just scales the total sum. What
+would break the invariance is taking a *per-chunk* mean over the actual number
+of examples in each chunk: the divisor would then depend on how you grouped the
+batch, so both the result and the sensitivity reasoning would too. That is
+exactly the coupling JAX Privacy avoids by summing.
 
 This is what makes it safe by construction: because the result is invariant to
 `microbatch_size`, choosing it is a *performance* decision, never a *DP
@@ -534,13 +549,13 @@ grad_fn = jax_privacy.clipped_grad(
 # accumulation, no brittle code, no error-prone noise calibration.
 ```
 
-To put the scale in context: in a transformer setting, a batch consists of B
-sequences of L tokens stored as `int32` values, requiring `B × L × 4` bytes.
-With a sequence length of L = 1024, each sequence occupies just 4 KB — meaning
-you can fit over 260,000 sequences in 1 GB of memory for the input data alone.
-When training across multiple machines, this scales proportionally, and
-microbatching lets you trade sequential steps for peak memory without touching
-the DP math.
+To put the scale in context: in a transformer setting, a batch consists of $B$
+sequences of $L$ tokens stored as `int32` values, requiring $B \times L \times
+4$ bytes. With a sequence length of $L = 1024$, each sequence occupies just 4
+KB — meaning you can fit over 260,000 sequences in 1 GB of memory for the input
+data alone. When training across multiple machines, this scales proportionally,
+and microbatching lets you trade sequential steps for peak memory without
+touching the DP math.
 
 Contrast this with a hand-rolled accumulation loop, where the noise placement
 and scale are *your* responsibility — exactly the subtleties described above
@@ -570,12 +585,12 @@ are fundamentally incompatible with per-example DP, because a single example's
 contribution affects the quantities used by every other example.
 
 **How JAX Privacy handles it — and the utility cost.** Because JAX Privacy's
-clipping is built on `vmap`, each example's forward and backward pass runs in
-complete isolation. If your loss function includes batch normalization, MoE
-routing, or any other cross-example operation, JAX Privacy will not raise an
-error — it will run and satisfy the stated DP properties. But `vmap` silently
-turns each cross-example operation into its *per-example* analogue, causing
-"batch normalization" to become a no-op or undefined.
+clipping is built on {func}`jax.vmap`, each example's forward and backward pass
+runs in complete isolation. If your loss function includes batch normalization,
+MoE routing, or any other cross-example operation, JAX Privacy will not raise an
+error — it will run and satisfy the stated DP properties. But {func}`jax.vmap`
+silently turns each cross-example operation into its *per-example* analogue,
+causing "batch normalization" to become a no-op or undefined.
 
 This means:
 
@@ -594,15 +609,15 @@ This means:
   couple examples. Treat "does every layer still behave correctly under
   per-example `vmap`?" as a required modeling check, not an afterthought.
 - **No special handling needed for DP.** JAX Privacy does not need to enumerate
-  which operations are compatible; any JAX-traceable loss that runs under `vmap`
-  is automatically DP-compatible. The burden is on you to confirm it is also
-  *semantically* the model you want.
+  which operations are compatible; any JAX-traceable loss that runs under
+  {func}`jax.vmap` is automatically DP-compatible. The burden is on you to
+  confirm it is also *semantically* the model you want.
 
-This is a direct consequence of the `vmap`-based design: the DP guarantee holds
-for *any* JAX-traceable loss function, because per-example isolation is enforced
-at the computation level rather than the layer level. The flip side is that the
-responsibility for preserving model semantics under per-example execution rests
-with you.
+This is a direct consequence of the {func}`jax.vmap`-based design: the DP
+guarantee holds for *any* JAX-traceable loss function, because per-example
+isolation is enforced at the computation level rather than the layer level. The
+flip side is that the responsibility for preserving model semantics under
+per-example execution rests with you.
 
 ---
 
@@ -624,9 +639,10 @@ aggregation functions. This not only complicated the API surface, but it
 also obscured the fact that these aggregated metrics are not private — users
 could easily overlook the need to privatize them.
 
-**How JAX Privacy handles it.** The `clipped_grad` function returns auxiliary
-outputs (loss values, gradient norms, and user-defined auxiliary data) on a
-*per-example* basis. It does not aggregate them.
+**How JAX Privacy handles it.** The {func}`~jax_privacy.clipping.clipped_grad`
+function returns auxiliary outputs (loss values, gradient norms, and
+user-defined auxiliary data) on a *per-example* basis. It does not aggregate
+them.
 
 This design has two benefits:
 
@@ -743,12 +759,12 @@ grad_fn = jax_privacy.clipped_grad(
 )
 ```
 
-This integer-domain pipeline spans two components — `clipped_grad` handles the
-clipping and quantization, and the noise-addition module handles the discrete
-Gaussian noise:
+This integer-domain pipeline spans two components —
+{func}`~jax_privacy.clipping.clipped_grad` handles the clipping and
+quantization, and the noise-addition module handles the discrete Gaussian noise:
 
-1. `clipped_grad` clips per-example gradients and quantizes them to an integer
-   grid with `grid_scale` steps per `l2_clip_norm`.
+1. {func}`~jax_privacy.clipping.clipped_grad` clips per-example gradients and
+   quantizes them to an integer grid with `grid_scale` steps per `l2_clip_norm`.
 2. The quantized gradients are aggregated using exact integer arithmetic.
 3. The noise-addition module adds noise from the discrete Gaussian
    distribution, which is defined over the integers and avoids floating point
@@ -858,15 +874,14 @@ module, batch selection module, and accounting module each stand alone and can
 be understood, tested, and audited in isolation.
 
 The coupling between components only happens at the higher-level API layer
-(e.g., `DPExecutionPlan`), where the joint formal guarantees are explicitly
-stated. This means that auditing *or contributing to* any individual
-component does not require understanding the rest of the library — and
-auditing the composition requires understanding only the thin integration
-layer, not the internals of each component.
+(e.g., {class}`~jax_privacy.execution_plan.DPExecutionPlan`), where the joint
+formal guarantees are explicitly stated. This means that auditing *or
+contributing to* any individual component does not require understanding the
+rest of the library — and auditing the composition requires understanding only
+the thin integration layer, not the internals of each component.
 
 ---
 
-(framework-integration)=
 ### Framework Integration
 
 **Severity: Design.** *Guidance on where privacy-critical logic should live, not
@@ -898,9 +913,10 @@ resulting code is brittle and hard to verify.
 **How JAX Privacy handles it.** JAX Privacy operates at the pure JAX level.
 The core API transforms *loss functions*, not training loops:
 
-- `clipped_grad` transforms a loss function into a clipped-gradient function.
-- `clipped_fun` transforms an arbitrary function into a clipped-output
-  function.
+- {func}`~jax_privacy.clipping.clipped_grad` transforms a loss function into a
+  clipped-gradient function.
+- {func}`~jax_privacy.clipping.clipped_fun` transforms an arbitrary function
+  into a clipped-output function.
 
 This means you can write your training loop the way you would describe it in
 a paper — and anyone can come in and say "yes, this is correct" or "no, this
@@ -908,17 +924,16 @@ is not correct," because the structure matches the mathematical description
 rather than being distorted by framework abstractions.
 
 We recommend using JAX Privacy's high-level training loops (e.g., the
-[Keras API](keras_api.rst) or the `DPExecutionPlan`-based loop shown in our
-[examples](examples_guide)) for the strongest guarantees. If the benefits of
-a specific framework outweigh the benefits of JAX Privacy's built-in training
-loops, you can still use the lower-level building blocks — JAX Privacy will
-not prevent you from doing so. But based on our experience, the
+[Keras API](keras_api.rst) or the
+{class}`~jax_privacy.execution_plan.DPExecutionPlan`-based loop shown in our
+[examples](examples_guide)) for the strongest guarantees. If the benefits
+of a specific framework outweigh the benefits of JAX Privacy's built-in
+training loops, you can still use the lower-level building blocks — JAX Privacy
+will not prevent you from doing so. But based on our experience, the
 framework-agnostic approach is less error-prone.
 
 ---
 
-(foot-gun-apis)=
-(the-vmap-design-decision)=
 ### Foot-gun APIs
 
 **Severity: Design.** *A cross-cutting API principle: refuse to expose
@@ -933,11 +948,12 @@ isolation, the sensitivity bound, noise independence). Because the code runs and
 produces plausible outputs, nothing signals that DP has been broken. The safest
 design is often to *not* expose such a hook at all.
 
-**The canonical example: an injectable `vmap`.** JAX's `vmap` is central to how
-JAX Privacy computes per-example gradients: it vectorizes the gradient
-computation across the batch dimension. A natural, flexible API design would
-parameterize `clipped_grad` with a user-injectable `vmap` function, letting
-users plug in custom variants (e.g., `shard_map` for distributed settings).
+**The canonical example: an injectable `vmap`.** JAX's {func}`jax.vmap` is
+central to how JAX Privacy computes per-example gradients: it vectorizes the
+gradient computation across the batch dimension. A natural, flexible API
+design would parameterize `clipped_grad` with a user-injectable `vmap` function,
+letting users plug in custom variants (e.g., `shard_map` for distributed
+settings).
 
 This is exactly the kind of foot-gun described above. A user could plug in a
 function that *satisfies the signature* of `vmap` but does not actually compute
@@ -948,12 +964,13 @@ example's gradient would stand in for every "per-example" gradient, exposing
 that individual to far higher privacy risk while appearing to work correctly.
 
 **How JAX Privacy handles it.** We deliberately chose *not* to parameterize the
-`vmap` function. The `clipped_grad` and `clipped_fun` functions always use
-`jax.vmap` internally (with an optional `spmd_axis_name` for distributed
-settings), so you cannot accidentally break per-example isolation by plugging in
-a broken vectorization function. More generally, this reflects a design
-principle we apply throughout the library: *correctness over flexibility*. Where
-an extension point would let a user silently invalidate DP, we prefer to close
+`vmap` function. The {func}`~jax_privacy.clipping.clipped_grad` and
+{func}`~jax_privacy.clipping.clipped_fun` functions always use {func}`jax.vmap`
+internally (with an optional `spmd_axis_name` for distributed settings), so you
+cannot accidentally break per-example isolation by plugging in a broken
+vectorization function. More generally, this reflects a design principle we
+apply throughout the library: *correctness over flexibility*. Where an
+extension point would let a user silently invalidate DP, we prefer to close
 it — accepting a small loss in configurability in exchange for an API that
 cannot be misconfigured into a silent privacy break.
 
@@ -992,7 +1009,6 @@ Apache 2.0 license. The codebase is designed for auditability:
 
 ---
 
-(other-potential-issues)=
 ### Other Potential Issues (Out of Scope)
 
 Some important privacy concerns lie outside what JAX Privacy can enforce for
@@ -1007,7 +1023,6 @@ cost.
 
 ---
 
-(references)=
 ## References
 
 Many (though not all) of the pitfalls above are discussed in more depth in the

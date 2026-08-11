@@ -28,22 +28,22 @@ for the following reasons:
 
 We note that since JAX-Privacy has been released, the overall JAX ecosystem has
 matured significantly, and some of the libraries and utilities used in this
-experiment are no longer actively maintained or considered deprecated, like
+experiment are no longer actively maintained or are considered deprecated, like
 [jaxline](https://github.com/google-deepmind/jaxline),
 [haiku](https://github.com/google-deepmind/dm-haiku),
-and [jax.pmap](https://docs.jax.dev/en/latest/_autosummary/jax.pmap.html).
+and {func}`jax.pmap`.
 
 We do not want to force or encourage users of JAX privacy to learn these
 old libraries. We encourage users to refer to our small standalone
-[examples](https://github.com/google-deepmind/jax_privacy/tree/main/examples),
-which are smaller and easier to understand and use.
+[examples](examples_guide), which are smaller and easier to understand
+and use.
 
 ## Changes to JAX-Privacy maintainers
 
-The maintainers of the library has changed since its initial release, and the
+The maintainers of the library have changed since its initial release, and the
 core library is currently undergoing refactorings to simplify the APIs and
 improve the user experience. As the experiments directory is far larger and
 more complex than the core library, ongoing maintenance of these files during
 refactorings is challenging. We encourage the community to develop end-to-end
 training pipelines on top of JAX privacy instead, taking inspiration from our
-examples and current best practices.
+[examples](examples_guide) and current best practices.

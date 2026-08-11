@@ -22,6 +22,7 @@ the JAX Privacy building blocks. The examples fall into two broad categories:
 1. **End-to-end mechanism implementations** — complete DP training pipelines
    that compose clipping, noise addition, batch selection, and accounting into
    a single program.
+
 2. **Isolated component demonstrations** — scripts that exercise or benchmark
    an individual building block (e.g., noise generation, data loading, or
    privacy accounting) without running a full training loop.
@@ -35,7 +36,8 @@ way.
 
 Several examples aim to be end-to-end correct reference implementations.
 These examples use proper Poisson sampling for batch selection (via
-`CyclicPoissonSampling` or the Keras API with `poisson_sampling_in_fit=True`)
+{class}`~jax_privacy.batch_selection.CyclicPoissonSampling` or the
+[Keras API](keras_api.rst) with `poisson_sampling_in_fit=True`)
 and treat the batch size as private information (normalizing by the *expected*
 batch size rather than the actual batch size). If any bugs are found in these
 files, we would consider those unexpected and serious. These examples are
@@ -50,6 +52,7 @@ demonstration purposes. The most common issues are:
   fixed-size batches via `tf.data` shuffling or do not opt into Poisson
   sampling in the Keras API, even though the privacy accounting assumes
   Poisson-sampled batches.
+
 * **Treating the (possibly padded) batch size as public information**, for
   example by dividing gradients by the actual batch size inside the
   JIT-compiled update step, when it should be treated as private.
@@ -67,10 +70,12 @@ training pipeline.
 ### `dp_logistic_regression.py` ✅
 
 Trains a logistic regression model on synthetic data using DP-BandMF.
-Demonstrates the full pipeline: `BandMFConfig` for calibration
-and plan construction, `CyclicPoissonSampling` for batch selection with
-proper padding, clipped gradient computation, correlated noise addition, and
-post-training privacy auditing with canary scores.
+Demonstrates the full pipeline:
+{class}`~jax_privacy.execution_plan.BandMFConfig` for calibration
+and plan construction,
+{class}`~jax_privacy.batch_selection.CyclicPoissonSampling` for batch selection
+with proper padding, clipped gradient computation, correlated noise addition,
+and post-training privacy auditing with canary scores.
 
 **Correctness status:** Aims to be a correct reference implementation.
 
@@ -78,7 +83,8 @@ post-training privacy auditing with canary scores.
 
 Trains a logistic regression model using DP-SGD with the discrete Gaussian
 mechanism backed by cryptographically secure CPU-side randomness (via
-`randomgen.RDRAND`). Uses `CyclicPoissonSampling` for Poisson-sampled
+`randomgen.RDRAND`). Uses
+{class}`~jax_privacy.batch_selection.CyclicPoissonSampling` for Poisson-sampled
 batches, integer-grid rounding of clipped gradients, and RDP accounting.
 
 **Correctness status:** Aims to be a correct reference implementation.
@@ -86,16 +92,18 @@ batches, integer-grid rounding of clipped gradients, and RDP accounting.
 ### `dp_sgd_transformer.py` ✅
 
 Trains a character-level Transformer decoder on the Tiny Shakespeare dataset
-using DP-SGD with `BandMFConfig`. Demonstrates next-character
-prediction with per-sequence privacy. Uses `CyclicPoissonSampling` (via the
-execution plan) for batch selection and normalizes by the expected batch size.
+using DP-SGD with {class}`~jax_privacy.execution_plan.BandMFConfig`.
+Demonstrates next-character prediction with per-sequence privacy. Uses
+{class}`~jax_privacy.batch_selection.CyclicPoissonSampling` (via the execution
+plan) for batch selection and normalizes by the expected batch size.
 
 **Correctness status:** Aims to be a correct reference implementation.
 
 ### `keras_api_example.py` ✅
 
 Trains a CNN on MNIST using the JAX Privacy Keras integration
-(`keras_api.DPKerasConfig` / `make_private`) with
+({class}`~jax_privacy.keras_api.DPKerasConfig` /
+{func}`~jax_privacy.keras_api.make_private`) with
 `poisson_sampling_in_fit=True`. Demonstrates how to enable DP-SGD with
 minimal code changes on top of a standard Keras training loop.
 
@@ -104,8 +112,9 @@ minimal code changes on top of a standard Keras training loop.
 ### `jax_api_example.py`
 
 Trains a linear regression model on synthetic data using the JAX Privacy
-core API (`clipped_grad`, `gaussian_privatizer`, PLD-based noise calibration).
-Shows both DP and non-DP training paths for comparison.
+core API ({func}`~jax_privacy.clipping.clipped_grad`,
+{func}`~jax_privacy.noise_addition.gaussian_privatizer`, PLD-based noise
+calibration). Shows both DP and non-DP training paths for comparison.
 
 **Correctness status:** Research / demonstration. Uses `tf.data` shuffling
 with fixed-size batches (`drop_remainder=True`) rather than Poisson sampling,
@@ -115,8 +124,9 @@ and divides gradients by the fixed batch size.
 
 Step-by-step Colab tutorial that trains a Flax Linen CNN on MNIST with
 DP-SGD. Walks through hyper-parameter setup, PLD-based noise calibration,
-per-example gradient clipping via `dp_sgd.grad_clipping`, and comparing DP
-vs. non-DP accuracy.
+per-example gradient clipping via
+{func}`~jax_privacy.clipping.clipped_grad`, and comparing DP vs. non-DP
+accuracy.
 
 **Correctness status:** Research / demonstration. Uses `tf.data` shuffling
 with fixed-size batches rather than Poisson sampling.
@@ -125,8 +135,8 @@ with fixed-size batches rather than Poisson sampling.
 
 Colab tutorial for DP-SGD LoRA fine-tuning of Gemma 3 (4B) on the SAMSum
 summarization dataset using the Keras API. Covers data preprocessing,
-mixed-precision training, enabling DP via `DPKerasConfig`, and ROUGE
-evaluation.
+mixed-precision training, enabling DP via
+{class}`~jax_privacy.keras_api.DPKerasConfig`, and ROUGE evaluation.
 
 **Correctness status:** Research / demonstration. Does not enable
 `poisson_sampling_in_fit` in the Keras API configuration.
@@ -150,7 +160,8 @@ DP training loop.
 
 ### `data_loading.py`
 
-Demonstrates how to integrate `jax_privacy.BatchSelectionStrategy` with
+Demonstrates how to integrate
+{class}`~jax_privacy.batch_selection.BatchSelectionStrategy` with
 [PyGrain](https://github.com/google/grain) for efficient data loading from
 on-disk datasets. Includes a reusable `CustomBatchIterator` class with
 checkpointing support, and benchmarks throughput comparing the custom
@@ -176,4 +187,4 @@ different configurations.
 Uses Monte Carlo accounting to calibrate the noise multiplier for DP-SGD
 under the "balls-in-bins" batch selection strategy. Demonstrates sample
 generation, noise multiplier sweeping, and verification-based calibration
-from the `jax_privacy.experimental.monte_carlo` module.
+from the {mod}`jax_privacy.experimental.monte_carlo` module.

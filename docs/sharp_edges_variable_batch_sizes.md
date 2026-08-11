@@ -21,11 +21,11 @@ compilations, and greatly affect the overall training performance. In the
 sections below, we outline a few different strategies you can employ to reduce
 this cost.
 
-## Definitions: Global Batch Size vs. Minibatch Size vs. Microbatch Size
+**Definitions: Global Batch Size vs. Minibatch Size vs. Microbatch Size**
 
 **(Physical) Microbatch Size** (default = None): The minibatch will be split
 up into smaller microbatches of this size, which will be sequentially
-fed into the loss and gradient function using jax.lax.scan. Can reduce
+fed into the loss and gradient function using {func}`jax.lax.scan`. Can reduce
 memory at increased sequential computation. Can be especially useful
 when the size of the batch inputs is small relative to the intermediate
 model activations, as in standard language modeling tasks.
@@ -115,8 +115,9 @@ The approaches above that involve padding (Approaches 2–5) all require a
 mechanism to tell the clipping function which batch elements are real and
 which are synthetic padding. This is accomplished via the
 `is_padding_example` keyword argument, which is accepted by the
-[`BoundedSensitivityCallable`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.clipping.BoundedSensitivityCallable.html#jax_privacy.clipping.BoundedSensitivityCallable)
-returned by `clipped_grad` and `clipped_fun`.
+{class}`~jax_privacy.clipping.BoundedSensitivityCallable` returned by
+{func}`~jax_privacy.clipping.clipped_grad` and
+{func}`~jax_privacy.clipping.clipped_fun`.
 
 ### What it is
 
@@ -142,7 +143,7 @@ is_padding_example = (indices == -1)
 ```
 
 This convention is used consistently by
-[`batch_selection.pad_to_multiple_of`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.batch_selection.pad_to_multiple_of.html),
+{func}`~jax_privacy.batch_selection.pad_to_multiple_of`,
 `training._get_batch`, and all reference examples.
 
 When using the indices returned by `pad_to_multiple_of` to form a batch,
@@ -158,7 +159,8 @@ intended to hold even if this is not the case.
 
 The different API tiers handle `is_padding_example` differently:
 
-**Core API** (`clipped_grad` / `clipped_fun`): Users must construct and
+**Core API** ({func}`~jax_privacy.clipping.clipped_grad` /
+{func}`~jax_privacy.clipping.clipped_fun`): Users must construct and
 pass `is_padding_example` explicitly as a keyword argument. This is the
 most flexible tier and is used by all the non-Keras example scripts.
 
@@ -174,16 +176,19 @@ clipped_grads = grad_fn(params, *batch,
                         is_padding_example=is_padding_example)
 ```
 
-**`DPTrainer`** (`training.py`): Most users should be able to use
-`DPTrainer.fit`, in which case padding is handled automatically. If the
-`train_step` method is used directly, it accepts `is_padding_example` and
-passes it through to `clipped_grad` internally.
+**`DPTrainer`** ({class}`~jax_privacy.training.DPTrainer` in
+{mod}`jax_privacy.training`): Most users should be able to use
+{meth}`~jax_privacy.training.DPTrainer.fit`, in which case padding is handled
+automatically. If the {meth}`~jax_privacy.training.DPTrainer.train_step` method
+is used directly, it accepts `is_padding_example` and passes it through to
+{func}`~jax_privacy.clipping.clipped_grad` internally.
 
-**Keras API** (`keras_api.py`): Padding is handled entirely
-automatically. When `poisson_sampling_in_fit=True`, the Keras integration
-derives `is_padding_example` from the `sample_weight` array (positions
-with weight 0 are treated as padding). Users do not need to interact
-with `is_padding_example` directly.
+**Keras API** ([Keras API](keras_api.rst) /
+{mod}`jax_privacy.keras_api`): Padding is handled entirely automatically.
+When `poisson_sampling_in_fit=True`, the Keras integration derives
+`is_padding_example` from the `sample_weight` array (positions with weight 0 are
+treated as padding). Users do not need to interact with `is_padding_example`
+directly.
 
 ### Interaction with microbatching
 

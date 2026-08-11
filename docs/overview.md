@@ -17,28 +17,30 @@ limitations under the License. -->
 JAX Privacy aims to provide robust, scalable, pure-jax implementations of the
 building blocks necessary to develop end-to-end DP mechanisms for machine
 learning applications. The core library does not provide end-to-end mechanism
-implementations, but we do provide some
-[examples](https://github.com/google-deepmind/jax_privacy/tree/main/examples) of
-how the core library can be used to do this.
+implementations, but we do provide some [examples](examples_guide) of how
+the core library can be used to do this.
 
 The key building blocks that constitute a DP Mechanism include:
 
-1.  **(Gradient) Clipping**: Compute bounded-sensitivity aggregations over a
-    batch of examples (usually minibatch gradients).
+1.  **(Gradient) Clipping** ({mod}`jax_privacy.clipping`):
+    Compute bounded-sensitivity aggregations over a batch of examples (usually
+    minibatch gradients).
 
-2.  **Noise Addition**: Add (possibly correlated or adaptive) noise to clipped
-    minibatch gradients, providing formal guarantees for the output.
+2.  **Noise Addition** ({mod}`jax_privacy.noise_addition`): Add
+    (possibly correlated or adaptive) noise to clipped minibatch gradients,
+    providing formal guarantees for the output.
 
-3.  **Batch Selection**: Construct a (usually non-deterministic) sequence of
-    example batches to apply gradient clipping and noise addition to.
+3.  **Batch Selection** ({mod}`jax_privacy.batch_selection`): Construct a
+    (usually non-deterministic) sequence of example batches to apply gradient
+    clipping and noise addition to.
 
-4.  **Accounting**: To compute the privacy budget required to run a given
-    mechanism or calibrate the mechanism parameters (like noise multiplier) to
-    achieve a given privacy target.
+4.  **Accounting** ({mod}`jax_privacy.accounting`): To compute the privacy
+    budget required to run a given mechanism or calibrate the mechanism
+    parameters (like noise multiplier) to achieve a given privacy target.
 
-5.  **Auditing**: To provide empirical measures of the privacy of a model,
-    usually used in conjunction with canary insertion (either at the example
-    level or the gradient level).
+5.  **Auditing** ({mod}`jax_privacy.auditing`): To provide
+    empirical measures of the privacy of a model, usually used in conjunction
+    with canary insertion (either at the example level or the gradient level).
 
 The design of the JAX Privacy core library aims to make these different building
 blocks work together seamlessly, while allowing the user to pick and choose
