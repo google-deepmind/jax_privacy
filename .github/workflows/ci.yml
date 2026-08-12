@@ -96,11 +96,6 @@ jobs:
           pylint --rcfile=.pylintrc jax_privacy || pylint-exit -efail -wfail -cfail -rfail $?
           pylint --rcfile=.pylintrc examples || pylint-exit -efail -wfail -cfail -rfail $?
           pylint --rcfile=.pylintrc tests -d W0101,W0212,C0114 || pylint-exit -efail -wfail -cfail -rfail $?
-      - name: Run pytype
-        run: |
-          pytype jax_privacy -k
-          pytype tests -k
-          pytype examples -k
       - name: Run pyrefly
         run: |
           pyrefly check

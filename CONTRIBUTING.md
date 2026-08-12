@@ -312,12 +312,11 @@ directive.
 
 ## Linting and testing
 
-We use `flake8`, `pylint`, `pytype` and `pyrefly` for linting and type checking.
+We use `flake8`, `pylint`, and `pyrefly` for linting and type checking.
 Please run the following commands locally before submitting a pull request:
 
 ```bash
 $ flake8 jax_privacy/**.py
 $ pylint jax_privacy/**.py
-$ pytype jax_privacy/**.py
 $ pyrefly check
 ```

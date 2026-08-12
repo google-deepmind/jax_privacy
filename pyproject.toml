@@ -41,7 +41,6 @@ lint = [
     "pydocstyle",
     "pylint",
     "pylint-exit",
-    "pytype",
     "pyrefly",
     "pyink",
     "pyink[jupyter]",
