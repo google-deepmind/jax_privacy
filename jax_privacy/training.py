@@ -18,6 +18,17 @@ This module provides :class:`~jax_privacy.training.DPTrainer`, a class that
 encapsulates the static configuration for a DP training loop (execution plan,
 loss function, optimizer) and exposes a reusable ``train_step`` that can be
 independently JIT-compiled or ahead-of-time compiled.
+
+Design notes: This module aims to provide a framework-agnostic and model
+agnostic DP training loop that can be easily configured to use a variety of
+mechanism variants and performance knobs. Since it is defined in terms of an
+ExecutionPlanConfig object, it automatically works with any mechanism plan
+supported by our Tier 2 API.
+
+Because it is designed to be framework and model-agnostic, there are a few
+things that are explicitly out of scope, like checkpointing and metrics logging.
+Callers are expected to implement these things themselves via dependency
+injection through the callback_fn option.
 """
 
 from collections.abc import Callable
@@ -276,7 +287,7 @@ class DPTrainer:
   def fit(
       self,
       dataset: Dataset,
-      params: Params,
+      state: Params | TrainingState,
       *,
       callback: CallbackFn | None = None,
       rng_or_seed: np.random.Generator | int | None = None,
@@ -287,7 +298,10 @@ class DPTrainer:
     Args:
       dataset: The training dataset, as a PyTree of arrays where the first axis
         of each leaf is the batch / example dimension.
-      params: Initial parameter PyTree.
+      state: Initial parameter PyTree or a resumable ``TrainingState``. If a
+        ``TrainingState`` is provided, training continues from the step recorded
+        in the state, and the batch selection iterator safely fast-forwards to
+        maintain deterministic DP properties.
       callback: Called after each step as ``callback(step, state, aux)``.
         ``step`` is a Python int.
       rng_or_seed: Optional random seed or ``numpy.random.Generator``, used for
@@ -310,9 +324,14 @@ class DPTrainer:
     # than ``self``.
     trainer: DPTrainer = self
     futures: dict[int, PrecompiledFuture] = {}
+
+    # Clone state. train_step uses donate_argnames.
+    if not isinstance(state, TrainingState):
+      state = self.init(jax.tree.map(jax.numpy.copy, state))
+
     if precompile or isinstance(self.compilation_strategy, AutotuneMicrobatch):
       trainer, futures = self._precompile(
-          dataset, params, rng_or_seed=rng_or_seed
+          dataset, state.params, rng_or_seed=rng_or_seed
       )
     assert isinstance(trainer.compilation_strategy, PadToMultiple)
     warn_on_cache_miss = bool(futures)
@@ -322,13 +341,18 @@ class DPTrainer:
     prng_key = jax.random.key(int(rng.integers(2**63)))
 
     num_examples = _validate.batch(dataset)
-    # Copy here due to the donate_argnames on the jit decorated train_step.
-    state = trainer.init(jax.tree.map(jax.numpy.copy, params))
 
-    step = 0
     with _compilation.hoist_closed_over_constants():
       bss = trainer.plan.batch_selection_strategy
-      for indices in bss.batch_iterator(num_examples, rng=rng):
+      batch_iterator = bss.batch_iterator(num_examples, rng=rng)
+
+      # initial state.step is 0 (no replay). Otherwise replay to the saved step.
+      # TODO: b/545416482 - Investigate stateful iterator instead of rng replay.
+      for _ in range(int(state.step)):
+        next(batch_iterator)
+
+      step = int(state.step)
+      for indices in batch_iterator:
         indices = batch_selection.pad_to_multiple_of(
             indices,
             trainer.compilation_strategy.multiple,

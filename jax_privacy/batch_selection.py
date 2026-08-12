@@ -239,6 +239,7 @@ class BatchSelectionStrategy(abc.ABC):
   that the format used supports efficient random access to individual examples.
   """
 
+  # TODO: b/545416482 - Investigate stateful iterator instead of plain method.
   @abc.abstractmethod
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
