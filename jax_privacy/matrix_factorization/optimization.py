@@ -79,26 +79,26 @@ def optimize(
   this codebase, and has generally been observed to work well for
   matrix-factorization-type problems
   in the past.  See e.g.,
-    * https://arxiv.org/abs/2106.12118
-    * https://arxiv.org/abs/2405.15913
-    * https://arxiv.org/abs/2306.08153
-    * https://arxiv.org/abs/2408.08868
+    * `McKenna et al. (2021) <https://arxiv.org/abs/2106.12118>`_
+    * `McKenna (2024) <https://arxiv.org/abs/2405.15913>`_
+    * `Choquette-Choo et al. (2023) <https://arxiv.org/abs/2306.08153>`_
+    * `McMahan et al. (2024) <https://arxiv.org/abs/2408.08868>`_
 
   Args:
     loss_fn: A loss function to minimize.
     params: Initial parameters.  These will be cast to float64 internally.
     max_optimizer_steps: The (maximum) number of optimization steps.
-    grad: Flag indicating if the loss_fn also returns the gradient.
+    grad: Flag indicating if the ``loss_fn`` also returns the gradient.
     callback: Optional callback function to call after each optimization step.
-      The callback will be called after each iteration with a `CallbackArgs`
-      dataclass.  Early stopping can be achieved by having the callback return a
-      truthy value.
-    optimizer: An optax.GradientTransformation to use as the underlying
+      The callback will be called after each iteration with a
+      :class:`CallbackArgs` dataclass. Early stopping can be achieved by having
+      the callback return a truthy value.
+    optimizer: An :class:`optax.GradientTransformation` to use as the underlying
       optimizer.
 
   Returns:
-    The parameters that approximately locally minimize the given loss_fn,
-    casted back to the same types as the original `params`.
+    The parameters that approximately locally minimize the given ``loss_fn``,
+    casted back to the same types as the original ``params``.
   """
   loss_and_grad = loss_fn if grad else jax.value_and_grad(loss_fn)
   value_fn = (lambda x: loss_fn(x)[0]) if grad else loss_fn

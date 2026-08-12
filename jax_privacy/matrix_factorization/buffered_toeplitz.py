@@ -14,7 +14,7 @@
 
 """Functions for working with Buffered Linear Toeplitz (BLT) strategy matrices.
 
-`BufferedToeplitz` is the main BLT class, with several helper functions
+:class:`BufferedToeplitz` is the main BLT class, with several helper functions
 for error and sensitivity calculation, as well as optimization.
 """
 
@@ -33,7 +33,6 @@ from . import optimization
 from . import sensitivity
 from . import streaming_matrix
 from . import toeplitz
-
 
 # Disabling pylint invalid-name to allow mathematical notation including
 # single-capital-letter variables for matrices.
@@ -80,10 +79,10 @@ class StreamingMatrixBuilder:
   """Builder to convert a BLT to a StreamingMatrix.
 
   Attributes:
-    buf_decay: A numpy array of shape `(num_buffers,)` representing the decay
+    buf_decay: A numpy array of shape ``(num_buffers,)`` representing the decay
       factors for each buffer.
-    output_scale: A numpy array of shape `(num_buffers,)` representing the scale
-      factors applied to each buffer when reading the output.
+    output_scale: A numpy array of shape ``(num_buffers,)`` representing the
+      scale factors applied to each buffer when reading the output.
   """
 
   buf_decay: np.ndarray
@@ -124,7 +123,8 @@ class StreamingMatrixBuilder:
   def build(
       self,
   ) -> streaming_matrix.StreamingMatrix:
-    """Returns a `StreamingMatrix` representing C.
+    # pylint: disable=line-too-long
+    """Returns a :class:`~jax_privacy.matrix_factorization.streaming_matrix.StreamingMatrix` representing C.
 
     This implements Alg 2 of https://arxiv.org/pdf/2408.08868
     """
@@ -141,7 +141,8 @@ class StreamingMatrixBuilder:
   def build_inverse(
       self,
   ) -> streaming_matrix.StreamingMatrix:
-    """Returns a `StreamingMatrix` representing C^{-1}.
+    # pylint: disable=line-too-long
+    """Returns a :class:`~jax_privacy.matrix_factorization.streaming_matrix.StreamingMatrix` representing C^{-1}.
 
     This implements Alg 3 of https://arxiv.org/pdf/2408.08868
     """
@@ -159,13 +160,14 @@ class StreamingMatrixBuilder:
 @jax.tree_util.register_dataclass
 @dataclasses.dataclass
 class BufferedToeplitz:
+  # pylint: disable=line-too-long
   """A lower-triangular Toeplitz C parameterized as a BLT.
 
-  `BufferedToeplitz.build` is the recommended way to construct a BLT.
+  :meth:`BufferedToeplitz.build` is the recommended way to construct a BLT.
 
   For background on Buffered Linear Toeplitz matrices and DP mechanisms, see:
-   - https://arxiv.org/abs/2404.16706
-   - https://arxiv.org/abs/2408.08868
+   - `Dvijotham et al. (2024) <https://arxiv.org/abs/2404.16706>`_
+   - `McMahan et al. (2024) <https://arxiv.org/abs/2408.08868>`_
 
   If buf_decay = [d1, d2] and output_scale = [s1, s2], for n = 5
   this class represents
@@ -177,7 +179,7 @@ class BufferedToeplitz:
     t3 t2 t1  1  0             t3 = s1*d1**2 + s2*d2**2
     t4 t3 t2 t1  1             t4 = s1*d1**3 + s2*d2**3
 
-  These Toeplitz parameters are returned by `toeplitz_coefs(n=5)`.
+  These Toeplitz parameters are returned by ``toeplitz_coefs(n=5)``.
   """
 
   buf_decay: jax.Array  # Shape(nbuf, )
@@ -220,14 +222,17 @@ class BufferedToeplitz:
       buf_decay: The buf_decay parameters of a BLT.
       output_scale: The output_scale parameters of a BLT.
       dtype: The dtype to use for the BLT parameters. The default,
-        `jnp.float64`, is strongly recommended for numerical stability. However,
-        this requires either the global option
-        `jax.config.update('jax_enable_x64', True)` or that build() and
-        subsequent computations occur within a `with jax.enable_x64():` context.
-        See also `check_float64_dtype`.
+        ``jnp.float64``, is strongly recommended for numerical stability.
+        However, this requires either the global option
+        ``jax.config.update('jax_enable_x64', True)`` or that build() and
+        subsequent computations occur within a ``with jax.enable_x64():``
+        context. See also
+        :func:`~jax_privacy.matrix_factorization.buffered_toeplitz.check_float64_dtype`.
 
     Returns:
-      A `BufferedToeplitz` with buf_decay in decreasing order.
+      A
+      :class:`~jax_privacy.matrix_factorization.buffered_toeplitz.BufferedToeplitz`
+      with buf_decay in decreasing order.
     """
     if (dtype == jnp.float64) and not jax.config.read('jax_enable_x64'):
       raise ValueError(
@@ -253,21 +258,24 @@ class BufferedToeplitz:
     """Returns a BLT based on a rational approximation of 1/sqrt(1 - x).
 
     The optimal-for-max-loss Toeplitz coefficients (see
-    `toeplitz.optimal_max_error_strategy_coefs`) correspond to the ordinary
-    generating function 1/sqrt(1 - x). Thus, this method is used to produce
-    a BLT that approximates these coefficients, but allows for a much more
-    memory-efficient implementation of multiplication by the noising matrix
-    $C^{-1}$.
+    :func:`~jax_privacy.matrix_factorization.toeplitz.optimal_max_error_strategy_coefs`)
+    correspond to the ordinary generating function 1/sqrt(1 - x). Thus, this
+    method is used to produce a BLT that approximates these coefficients, but
+    allows for a much more memory-efficient implementation of multiplication by
+    the noising matrix :math:`C^{-1}`.
 
-    The rational approximation is from https://arxiv.org/abs/2404.16706v2,
+    The rational approximation is from `Dvijotham et al. (2024)
+    <https://arxiv.org/abs/2404.16706v2>`__,
     see Proposition 4.5 in particular.
 
     NOTE: The BLTs produced by this method are generally significantly inferior
-    to those from `buffered_toeplitz.optimize`, which finds a numerically
-    optimal BLT for a specific value of `n`. Hence, the primary use of this
-    method is initializing numerical optimization, as well as providing an
-    implementation of the "RA-BLT" method of https://arxiv.org/abs/2404.16706v2
-    for use in research comparisons.
+    to those from
+    :func:`~jax_privacy.matrix_factorization.buffered_toeplitz.optimize`, which
+    finds a numerically optimal BLT for a specific value of ``n``. Hence, the
+    primary use of this method is initializing numerical optimization, as well
+    as providing an implementation of the "RA-BLT" method of
+    `Dvijotham et al. (2024) <https://arxiv.org/abs/2404.16706v2>`__ for use in
+    research comparisons.
 
     Args:
       num_buffers: The number of buffers to use in the BLT (equivalently, the
@@ -284,15 +292,15 @@ class BufferedToeplitz:
       buf_decay_scale: A factor that scales the dynamic range of the buf_decay
         parameters. Larger values indicate a coarser resolution, and hence the
         largest buf_decay will be closer to 1.0, and the smallest closer to 0.0.
-      buf_decay_shift: A shift added to the range of the counter `k` in the
+      buf_decay_shift: A shift added to the range of the counter ``k`` in the
         construction of the rational approximation. The buf decay parameters
-        come from a discrete set indexed by `k`, with resolution that depends on
-        the `buf_decay_scale`. A negative `buf_decay_shift` shifts the selected
-        buf_decay parameters toward 1.0; a positive shift moves the selected set
-        closer to 0.0. The default of -1 is recommended.
+        come from a discrete set indexed by ``k``, with resolution that depends
+        on the ``buf_decay_scale``. A negative ``buf_decay_shift`` shifts the
+        selected buf_decay parameters toward 1.0; a positive shift moves the
+        selected set closer to 0.0. The default of -1 is recommended.
 
     Returns:
-      A `BufferedToeplitz` matrix generated by a rational function
+      A :class:`BufferedToeplitz` matrix generated by a rational function
       approximation of 1/sqrt(1 - x).
     """
     # Note: Following Prop 4.5, we actually construct a BLT for
@@ -347,7 +355,7 @@ class BufferedToeplitz:
     return blt
 
   def canonicalize(self) -> 'BufferedToeplitz':
-    """Returns a `BufferedToeplitz` with buf_decay in decreasing order."""
+    """Returns a :class:`BufferedToeplitz` with buf_decay decreasing."""
     self.validate()  # Make sure lengths match.
     idx = jnp.argsort(self.buf_decay)[::-1]
     return BufferedToeplitz(
@@ -359,7 +367,7 @@ class BufferedToeplitz:
     return self.buf_decay.dtype
 
   def toeplitz_coefs(self, n: int) -> jax.Array:
-    """Returns the Toeplitz coefficients for `C`."""
+    """Returns the Toeplitz coefficients for ``C``."""
     powers = jnp.arange(n - 1)
     tmp = self.buf_decay ** powers[:, None] * self.output_scale
     return jnp.append(1, jnp.sum(tmp, axis=1))
@@ -435,18 +443,18 @@ class BufferedToeplitz:
   def pillutla_score(self) -> ScalarFloat:
     """Returns the 'Pillutla Score' of the BLT.
 
-    See Theorem 1 of "An Inversion Theorem for Buffered Linear Toeplitz (BLT)
-    Matrices and Applications to Streaming Differential Privacy",
-    https://arxiv.org/abs/2504.21413. To avoid a negative buf_decay value in the
-    noising matric BLT (which produces an oscillating term), we enforce a
-    pillutla_score < 1 during optimization.
+    See Theorem 1 of `An Inversion Theorem for Buffered Linear Toeplitz (BLT)
+    Matrices and Applications to Streaming Differential Privacy
+    <https://arxiv.org/abs/2504.21413>`_. To avoid a negative buf_decay value
+    in the noising matric BLT (which produces an oscillating term), we enforce
+    a pillutla_score < 1 during optimization.
 
-    Note that a BLT may have `buf_decay == 0` values, which leads to an
+    Note that a BLT may have ``buf_decay == 0`` values, which leads to an
     nan or inf pillutla score. (In particular, the inverse of a BLT with
     pillutla_score=0 will have this property).
 
     Returns:
-      The Pillutla Score of the BLT, `sum_i(output_scale[i] / buf_decay[i]).`
+      The Pillutla Score of the BLT, ``sum_i(output_scale[i] / buf_decay[i])``.
     """
     return jnp.sum(self.output_scale / self.buf_decay)
 
@@ -464,14 +472,16 @@ class BufferedToeplitz:
   def as_streaming_matrix(
       self,
   ) -> streaming_matrix.StreamingMatrix:
-    """Returns a `StreamingMatrix` representing C."""
+    # pylint: disable=line-too-long
+    """Returns a :class:`~jax_privacy.matrix_factorization.streaming_matrix.StreamingMatrix` representing C."""
     check_float64_dtype(self)
     return self._streaming_matrix_builder().build()
 
   def inverse_as_streaming_matrix(
       self,
   ) -> streaming_matrix.StreamingMatrix:
-    """Returns a `StreamingMatrix` representing C^{-1}."""
+    # pylint: disable=line-too-long
+    """Returns a :class:`~jax_privacy.matrix_factorization.streaming_matrix.StreamingMatrix` representing C^{-1}."""
     check_float64_dtype(self)
     return self._streaming_matrix_builder().build_inverse()
 
@@ -509,7 +519,7 @@ def _lt_one_penalty(x: jax.Array) -> jax.Array:
 
 
 def min_buf_decay_gap(buf_decay: jax.Array) -> jax.Array:
-  """Returns max_{i,j i!=j} abs(theta[i] - theta[j]).
+  r"""Returns :math:`\min_{i, j; i \neq j} |\theta_i - \theta_j|`.
 
   Much of the theory for BLTs, as well as the numerical functions in this file,
   require uniqueness of the buf_decay parameters theta. This function computes
@@ -519,7 +529,7 @@ def min_buf_decay_gap(buf_decay: jax.Array) -> jax.Array:
     buf_decay: The buf_decay parameters of a BLT.
 
   Returns:
-    max_{i,j i!=j} abs(theta[i] - theta[j])
+    The minimum gap :math:`\min_{i, j; i \neq j} |\theta_i - \theta_j|`.
   """
   theta = jnp.asarray(buf_decay)
   A = theta[:, jnp.newaxis] - theta
@@ -530,6 +540,7 @@ def min_buf_decay_gap(buf_decay: jax.Array) -> jax.Array:
 
 @dataclasses.dataclass(frozen=True)
 class LossFn:
+  # pylint: disable=line-too-long
   """Encapsulates the loss to be optimized for a specific setting.
 
   This can represent the loss for both single participation and min-sep
@@ -547,7 +558,8 @@ class LossFn:
     penalty_strength: The multiplier applied to the sum of penalties for the
       loss.
     penalty_multipliers: A dict of multipliers (default 1.0) applied to the
-      individual penalties returned by `compute_penalties`.
+      individual penalties returned by
+      :meth:`~jax_privacy.matrix_factorization.buffered_toeplitz.ObjectiveState.compute_penalties`.
     max_second_coef: The maximum value of the second Toeplitz coefficient, which
       is equal to sum(output_scale).
     min_theta_gap: The minimum gap between buf_decay parameters allowed by the
@@ -571,26 +583,26 @@ class LossFn:
 
   @classmethod
   def build_closed_form_single_participation(cls, n: int, **kwargs) -> 'LossFn':
-    """Construct a `LossFn` for single participation max-error.
+    """Construct a :class:`LossFn` for single participation max-error.
 
     This function utilizes the closed-form calculations for sensitivity and
-    error from https://arxiv.org/abs/2404.16706, and hence optimization time
-    is essentially independent of `n`.  However, particularly for large `n` or
-    large numbers of buffers, the optimal BLT may have a buf_decay theta very
-    near 1, which leads to numerical issues in the closed forms. For max error,
-    this function has been reasonably well tested up to n=10**7.  Closed-form
-    optimization of the mean loss closed form is possible, but this has not been
-    well tested.
+    error from `Dvijotham et al. (2024) <https://arxiv.org/abs/2404.16706>`__,
+    and hence optimization time is essentially independent of ``n``. However,
+    particularly for large ``n`` or large numbers of buffers, the optimal BLT
+    may have a buf_decay theta very near 1, which leads to numerical issues in
+    the closed forms. For max error,this function has been reasonably well
+    tested up to n=10**7.  Closed-form optimization of the mean loss closed
+    form is possible, but this has not beenwell tested.
 
     Args:
       n: The number of iterations the mechanism is optimized for.
       **kwargs: Optional additional arguments to pass to the constructor.
 
     Returns:
-      A `LossFn` for single participation.
+      A :class:`LossFn` for single participation.
 
     Raises:
-      ValueError: If `error` is not 'max' or 'mean'.
+      ValueError: If ``error`` is not 'max' or 'mean'.
     """
     return cls(
         error_for_inv=functools.partial(max_error, n=n),
@@ -610,13 +622,14 @@ class LossFn:
       max_participations: int | None = None,
       **kwargs,
   ) -> 'LossFn':
-    """Construct a `LossFn` for min-sep participation.
+    """Construct a :class:`LossFn` for min-sep participation.
 
     This LossFn computes loss and sensitivity by materializing the Toeplitz
     coefficients of C and C^{-1}, and then using the loss functions of
-    `toeplitz.py`, as described in https://arxiv.org/abs/2408.08868. This is
-    still significantly faster than computing the error directly from the
-    Toeplitz coefficients of C, because
+    :mod:`~jax_privacy.matrix_factorization.toeplitz`, as described in
+    `McMahan et al. (2024) <https://arxiv.org/abs/2408.08868>`__. This is still
+    significantly faster than computing the error directly from the Toeplitz
+    coefficients of C, because
     ::
 
       c_inv_coef = blt.inverse().toeplitz_coefs(n)
@@ -636,10 +649,10 @@ class LossFn:
       **kwargs: Optional additional arguments to pass to the constructor.
 
     Returns:
-      A `LossFn` for min-sep participation.
+      A :class:`LossFn` for min-sep participation.
 
     Raises:
-      ValueError: If `error` is not 'max' or 'mean'.
+      ValueError: If ``error`` is not 'max' or 'mean'.
     """
 
     if error == 'mean':
@@ -684,7 +697,7 @@ class LossFn:
     Theorem for Buffered Linear Toeplitz (BLT) Matrices and Applications to
     Streaming Differential Privacy" (https://arxiv.org/abs/2504.21413), which
     restricts the optimization to a class of well-behaved BLTs. Note the
-    constraint `pillutla_score < 1` of part (a) is not strictly necessary, but
+    constraint ``pillutla_score < 1`` of part (a) is not strictly necessary, but
     empirically including it produces better results.
 
     Args:
@@ -821,8 +834,9 @@ class LossFn:
 class Parameterization:
   """A parameterization of a BufferedToeplitz for optimization.
 
-  Used by `optimize_loss` to specify how parameters relate to the pair of
-  BLTs representing C and C^{-1}.
+  Used by
+  :func:`~jax_privacy.matrix_factorization.buffered_toeplitz.optimize_loss` to
+  specify how parameters relate to the pair of BLTs representing C and C^{-1}.
 
   Attributes:
     params_from_blt: Constructs parameters to be optimized initialized from a
@@ -854,14 +868,14 @@ class Parameterization:
     """A parameterization where a pair of buf_decay parameters is optimized.
 
     This parameterization is generally more numerically stable than the
-    `strategy_blt` parameterization, as well as being negligibly faster to
+    ``strategy_blt`` parameterization, as well as being negligibly faster to
     compute (as it does not require a singular-value decomposition). However,
     the current L-BFGS parameters are tuned for the strategy_blt
     parameterization, so this parameterization may not converge as well with the
     default settings.
 
     Returns:
-        A `Parameterization`.
+        A :class:`Parameterization`.
     """
 
     def params_from_blt(blt: BufferedToeplitz) -> tuple[jax.Array, jax.Array]:
@@ -893,18 +907,20 @@ def get_init_blt(
 ) -> BufferedToeplitz:
   """Returns an initial BufferedToeplitz for initializing optimization.
 
-  Currently, this defaults to `BufferedToeplitz.from_rational_approx_to_sqrt_x`,
-  setting max_buf_decay and max_pillutla_score so that the solution is within
-  the feasible set imposed by the optimization penalities in
-  `LosssFn.compute_penalties`. However, this initialization choice may be
+  Currently, this defaults to
+  :meth:`BufferedToeplitz.from_rational_approx_to_sqrt_x`, setting
+  max_buf_decay and max_pillutla_score so that the solution is within the
+  feasible set imposed by the optimization penalities in
+  :meth:`LossFn.compute_penalties`. However, this initialization choice may be
   changed in the future.
 
   Args:
     num_buffers: The number of buffers to use in the initial BLT, greater than
       or equal to zero.
-    init_blt: An initial BLT to use. If None, a default initialization is used.
-      This is a convienence for callers who want to handle an optional explicit
-      initialization and check that it has the correct number of buffers.
+    init_blt: An initial BLT to use. If ``None``, a default initialization is
+      used. This is a convenience for callers who want to handle an optional
+      explicit initialization and check that it has the correct number of
+      buffers.
 
   Returns:
     A BufferedToeplitz with the requested number of buffers.
@@ -935,21 +951,23 @@ def optimize_loss(
     parameterization: Parameterization | None = None,
     **kwargs,
 ) -> tuple[BufferedToeplitz, ScalarFloat]:
-  """Like, optimize(), but more configurable and a fixed number of buffers.
+  """Like :func:`optimize`, but more configurable and a fixed number of buffers.
 
   Args:
     loss_fn: The loss to optimize.
     num_buffers: The number of buffers to optimize for; the default of 3 is a
       good choice in general; large number of buffers can cause numerical
       instability in the optimization.
-    init_blt: An initial BLT to start the optimization from. If None, a default
-      initialization is used.
-    parameterization: The parameterization to use for optimization. If None, the
-      default parameterization is used.
-    **kwargs: Optional additional arguments to pass to optimization.optimize,
-      such as `max_optimizer_steps`, `callback`, and `optimizer`. Note this
+    init_blt: An initial BLT to start the optimization from. If ``None``, a
+      default initialization is used.
+    parameterization: The parameterization to use for optimization. If ``None``,
+      the default parameterization is used.
+    **kwargs: Optional additional arguments to pass to
+      :func:`~jax_privacy.matrix_factorization.optimization.optimize`, such as
+      ``max_optimizer_steps``, ``callback``, and ``optimizer``. Note this
       function may supply different defaults for these arguments compared to
-      `optimization.optimize`, so use with care.
+      :func:`~jax_privacy.matrix_factorization.optimization.optimize`, so use
+      with care.
 
   Returns:
      A tuple (blt, loss).
@@ -1062,29 +1080,31 @@ def optimize(
 ) -> BufferedToeplitz:
   """Computes a good BLT with a dynamically-chosen num_buffers for min-sep.
 
-  Internally this function uses `jax.jit` on the key optimization steps, but it
-  is not intended to be called from a jitted context itself.
+  Internally this function uses ``jax.jit`` on the key optimization steps, but
+  it is not intended to be called from a jitted context itself.
 
   For single-participation optimization of max error, this function utilizes the
-  closed-form calculations for sensitivity and
-  error from https://arxiv.org/abs/2404.16706, and hence optimization time
-  is essentially independent of `n`.  However, particularly for large `n` or
-  large numbers of buffers, the optimal BLT may have a buf_decay theta very
-  near 1, which leads to numerical issues in the closed forms. This function
-  has been reasonably well tested for max loss up to n=10**7.
+  closed-form calculations for sensitivity and error from
+  `Dvijotham et al. (2024) <https://arxiv.org/abs/2404.16706>`__ and hence
+  optimization time is essentially
+  independent of ``n``. However, particularly for large ``n`` or large numbers
+  of buffers, the optimal BLT may have a buf_decay theta very near 1, which
+  leads to numerical issues in the closed forms. This function has been
+  reasonably well tested for max loss up to n=10**7.
 
   Otherwise (for multiple-participations or mean loss optimization), this
   function computes loss and sensitivity by materializing the Toeplitz
   coefficients of C and C^{-1}, and then using the loss functions of
-  `toeplitz.py`, as described in https://arxiv.org/abs/2408.08868. This is still
-  significantly faster than directly optimizing
-  Toeplitz mechanisms, because `blt.inverse()` is much faster than
-  computing the Toeplitz coefficients of C^{-1} directly. This optimization
-  benefits from GPUs for large n (say > 1000);
-  We have observed some issues using TPUs, so avoid them for now.
+  :mod:`~jax_privacy.matrix_factorization.toeplitz`, as described in
+  `McMahan et al. (2024) <https://arxiv.org/abs/2408.08868>`__. This is still
+  significantly faster than
+  directly optimizing Toeplitz mechanisms, because ``blt.inverse()`` is much
+  faster than computing the Toeplitz coefficients of C^{-1} directly. This
+  optimization benefits from GPUs for large n (say > 1000); We have observed
+  some issues using TPUs, so avoid them for now.
 
-  Internally this function uses `jax.jit` on the key optimization steps, but it
-  is not intended to be called from a jitted context itself.
+  Internally this function uses ``jax.jit`` on the key optimization steps, but
+  it is not intended to be called from a jitted context itself.
 
   Args:
     n: The number of iterations the mechanism is optimized for.
@@ -1096,12 +1116,14 @@ def optimize(
     max_buffers: The maximum number of buffers to optimize for (inclusive).
     rtol: The relative tolerance for the loss improvement in order to increase
       the number of buffers.
-    **kwargs: Optional additional arguments to pass to optimization.optimize,
-      such as `max_optimizer_steps` and `optimizer`. Note this function may
-      supply different defaults for these arguments compared to
-      `optimization.optimize`, so use with care. Further, the same arguments
-      will be passed to each optimization (for different `num_buffers`), so for
-      example a stateful `callback` function may not work as expected.
+    **kwargs: Optional additional arguments to pass to
+      :func:`~jax_privacy.matrix_factorization.optimization.optimize`, such as
+      ``max_optimizer_steps`` and ``optimizer``. Note this function may supply
+      different defaults for these arguments compared to
+      :func:`~jax_privacy.matrix_factorization.optimization.optimize`, so use
+      with care. Further, the same arguments will be passed to each optimization
+      (for different ``num_buffers``), so for example a stateful ``callback``
+      function may not work as expected.
 
   Returns:
     A BLT that approximately minimizes the loss.
@@ -1229,7 +1251,7 @@ def _poly_from_theta(theta: jax.Array) -> jax.Array:
 
   Returns:
      A polynomial of degree len(theta) -1  = d represented as an array under the
-     `np.poly1d` convention. If the returned array is `c`,then
+     ``np.poly1d`` convention. If the returned array is ``c``, then
      p(x) = c[0]*x**d + c[1]*x**(d-1) + ... + c[-2]*x + c[-1]
   """
   theta = jnp.asarray(theta)
@@ -1244,18 +1266,21 @@ def blt_pair_from_theta_pair(
 ) -> tuple[BufferedToeplitz, BufferedToeplitz]:
   """Computes BLTs (C, C_inv) from theta and theta_hat.
 
-  This implements Lemma 5.2 of https://arxiv.org/abs/2404.16706 (See also
-  Algorithm 5 of https://arxiv.org/abs/2408.08868). The simplified computation
+  This implements Lemma 5.2 of `Dvijotham et al. (2024)
+  <https://arxiv.org/abs/2404.16706>`__ (See also
+  Algorithm 5 of `McMahan et al. (2024) <https://arxiv.org/abs/2408.08868>`__).
+  The simplified computation
   used in the implementation here appears as Theorem 2 of
-  https://arxiv.org/abs/2504.21413.
+  `McMahan and Pillutla (2025) <https://arxiv.org/abs/2504.21413>`_.
 
   This function uses quantities like 1 /(1/theta[i] - 1/theta[j]), and so can be
   numerically unstable if abs(theta[i] - theta[j]) is too small; hence, by
-  default the Parameterization based on `blt.inverse()` should be used instead.
+  default the Parameterization based on ``blt.inverse()`` should be used
+  instead.
 
   Args:
-     theta: Array of thetas for the denominator q of `r(x) = p(x; theta_hat) /
-       q(x; theta)`.
+     theta: Array of thetas for the denominator q of ``r(x) = p(x; theta_hat) /
+       q(x; theta)``.
      theta_hat: Array of thetas for the numerator of r(x).
 
   Returns:
@@ -1488,13 +1513,13 @@ def robust_max_error_Gamma_jk(
 def iteration_error(
     inv_blt: BufferedToeplitz, i: jax.typing.ArrayLike
 ) -> jax.Array:
-  """Computes the error on iteration `i` which is also the max error.
+  """Computes the error on iteration ``i`` which is also the max error.
 
   That is, for a Buffered Linear Toeplitz matrix, the max error from iteration 0
-  through `i` is achieved on iteration `i`, so this equivalently computes
-  the max error for `i+1` iterations.
+  through ``i`` is achieved on iteration ``i``, so this equivalently computes
+  the max error for ``i+1`` iterations.
 
-  Here "error" is the squared error introduced in the `n`-th iterate (partial
+  Here "error" is the squared error introduced in the ``n``-th iterate (partial
   sum) assuming unit-variance noise. This generally scales as O(n), and
   so optimization routines might normalize by an additional factor of n.
 
@@ -1504,11 +1529,11 @@ def iteration_error(
     inv_blt: The Buffered Linear Toeplitz operator where inv_blt.C() represents
       C^{-1} in the matrix factorization mechanism.
     i: The iteration for which to compute error, 0-indexed. To compute the max
-      error for an `n` iteration mechanism, one should thus pass i = n-1 to this
-      function.
+      error for an ``n`` iteration mechanism, one should thus pass i = n-1 to
+      this function.
 
   Returns:
-    The squared-error (variance) on iteration `iter`.
+    The squared-error (variance) on iteration ``iter``.
   """
   check_float64_dtype(inv_blt)
   # Note: The derivation in the paper is 1-indexed and uses `n`;

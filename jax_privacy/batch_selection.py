@@ -23,8 +23,8 @@ pygrain (https://github.com/google/grain), or using an offline job to reorder
 the data on disk before loading into your training pipeline.
 
 The implementations in this file generally materialize a vector of indices of
-size `num_examples` and hence it requires that this object fits in memory,
-i.e., roughly that num_examples < 1e9.
+size ``num_examples`` and hence it requires that this object fits in memory,
+i.e., roughly that ``num_examples < 1e9``.
 
 The examples below demonstrate how to use the BatchSelectionStrategy API.
 via the CyclicPoissonSampling implementation (all with expected batch size 3):
@@ -52,10 +52,10 @@ This module also provides multi-owner differential privacy support via
 attributed to multiple users [4].
 
 References:
-  * [1] https://arxiv.org/abs/2211.06530
-  * [2] https://arxiv.org/abs/1607.00133
-  * [3] https://arxiv.org/abs/2306.08153
-  * [4] https://arxiv.org/abs/2503.03622
+  * [1] `Choquette-Choo et al. (2022) <https://arxiv.org/abs/2211.06530>`_
+  * [2] `Abadi et al. (2016) <https://arxiv.org/abs/1607.00133>`_
+  * [3] `Choquette-Choo et al. (2023) <https://arxiv.org/abs/2306.08153>`_
+  * [4] `Ganesh et al. (2025) <https://arxiv.org/abs/2503.03622>`_
 
 Design Note (public vs. non-public information):
   Batch selection strategy implementations are typically defined as frozen
@@ -143,10 +143,10 @@ def split_and_pad_global_batch(
 ) -> list[np.ndarray]:
   """Splits a global batch of indices into a list of fixed-size minibatches.
 
-  The last minibatch will be padded with `-1` indices to make it the right size.
-  It is crucial that downstream users correctly account for this by e.g.,
+  The last minibatch will be padded with ``-1`` indices to make it the right
+  size. It is crucial that downstream users correctly account for this by e.g.,
   loading in a dummy example not derived from real data, and explicitly passing
-  in `is_padding_example` to the clipped gradient function to ensure the
+  in ``is_padding_example`` to the clipped gradient function to ensure the
   gradients for these examples are correctly zeroed out.
 
   Example Usage:
@@ -162,11 +162,12 @@ def split_and_pad_global_batch(
     microbatch_size: The size of each microbatch. If set, will reorder the last
       minibatch to ensure that the padding indices appear in the right indices
       to enable early stopping within the last minibatch gradient evaluation.
-      See `microbatching.compute_early_stopping_order` for more details on this.
+      See :func:`~jax_privacy.sharding_utils.compute_early_stopping_order` for
+      more details on this.
 
   Returns:
     A list of minibatches of indices, each of size exactly minibatch_size.
-    The last minibatch may contain extra `-1` indices representing padding
+    The last minibatch may contain extra ``-1`` indices representing padding
     examples to make it the right size.
   """
   sections = range(minibatch_size, indices.shape[0], minibatch_size)
@@ -188,11 +189,11 @@ def pad_to_multiple_of(
 ) -> np.ndarray:
   """Pads the last dimension of indices to a multiple of multiple.
 
-  Creates a new 1D array of indices whose length is a multiple of `multiple`.
-  Padding positions are filled with `-1`; callers should derive
-  `is_padding_example = (indices == -1)` and pass it to
-  `clipped_grad` or `clipped_fun`. See `Using is_padding_example
-  <https://jax-privacy.readthedocs.io/en/latest/sharp_edges_variable_batch_sizes.html#using-is-padding-example>`_.
+  Creates a new 1D array of indices whose length is a multiple of ``multiple``.
+  Padding positions are filled with ``-1``; callers should derive
+  ``is_padding_example = (indices == -1)`` and pass it to
+  :func:`~jax_privacy.clipping.clipped_grad` or
+  :func:`~jax_privacy.clipping.clipped_fun`.
 
   Example Usage:
     >>> indices = np.arange(10)
@@ -205,7 +206,7 @@ def pad_to_multiple_of(
       of this value.
     microbatch_size: If set, reorders the padded indices so that padding
       examples cluster into the last microbatches under Fortran-order reshaping.
-      See `sharding_utils.compute_early_stopping_order`.
+      See :func:`~jax_privacy.sharding_utils.compute_early_stopping_order`.
 
   Returns:
     The padded array of indices.
@@ -252,41 +253,42 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   This generalizes several common sampling strategies [1,2,3,4].
 
   References:
-    * [1] https://arxiv.org/abs/2211.06530
-    * [2] https://arxiv.org/abs/1607.00133
-    * [3] https://arxiv.org/abs/2306.08153
-    * [4] https://arxiv.org/abs/2411.04205
+    * [1] `Choquette-Choo et al. (2022) <https://arxiv.org/abs/2211.06530>`_
+    * [2] `Abadi et al. (2016) <https://arxiv.org/abs/1607.00133>`_
+    * [3] `Choquette-Choo et al. (2023) <https://arxiv.org/abs/2306.08153>`_
+    * [4] `Chua et al. (2024) <https://arxiv.org/abs/2411.04205>`_
 
-  Formal guarantees of the batch_iterator:
-    - All batches consist of indices in the range [0, num_examples).
-    - Each example only appears in batches with index i such that i %
-      cycle_length == j for some fixed j per example.
+  Formal guarantees of the ``batch_iterator``:
+    - All batches consist of indices in the range ``[0, num_examples)``.
+    - Each example only appears in batches with index ``i`` such that
+      ``i % cycle_length == j`` for some fixed ``j`` per example.
     - Without truncation, every index independently appears in each batch
       (where it is eligible to participate subject to the previous
-      guarantee) with probability sampling_prob.
-    - With truncation, if > truncated_batch_size examples appear in a batch
-      under the previous guarantee, then we select truncated_batch_size of
+      guarantee) with probability ``sampling_prob``.
+    - With truncation, if > ``truncated_batch_size`` examples appear in a batch
+      under the previous guarantee, then we select ``truncated_batch_size`` of
       them uniformly at random and discard the rest.
-    - If partition_type = EQUAL_SPLIT, num_examples % cycle_length examples are
-      discarded, i.e. never sampled.
+    - If ``partition_type = PartitionType.EQUAL_SPLIT``,
+      ``num_examples % cycle_length`` examples are discarded, i.e. never
+      sampled.
 
   Attributes:
     sampling_prob: The probability of sampling an example in rounds when it is
       eligible to participate. To achieve an average batch size of
-      expected_batch_size, one should ideally set sampling_prob =
-      expected_batch_size / (num_examples // cycle_length).
+      ``expected_batch_size``, one should ideally set ``sampling_prob =
+      expected_batch_size / (num_examples // cycle_length)``.
     iterations: The number of total iterations / batches to generate.
     truncated_batch_size: If set, after Poisson sampling, if we have more than
-      truncated_batch_size examples in a batch, we uniformly sample
-      truncated_batch_size of them and discard the rest.
+      ``truncated_batch_size`` examples in a batch, we uniformly sample
+      ``truncated_batch_size`` of them and discard the rest.
     cycle_length: If > 1, we use cyclic Poisson sampling: we partition the
-      examples into cycle_length groups, and do Poisson sampling from the groups
-      in a round-robin fashion. cycle_length == 1 retrieves standard Poisson
-      sampling.
+      examples into ``cycle_length`` groups, and do Poisson sampling from the
+      groups in a round-robin fashion. ``cycle_length == 1`` retrieves standard
+      Poisson sampling.
     partition_type: How to partition the examples into groups for before Poisson
-      sampling. EQUAL_SPLIT is the default, and is only compatible with zero-out
-      and replace-one adjacency notions, while INDEPENDENT is compatible with
-      the add-remove adjacency notion.
+      sampling. ``EQUAL_SPLIT`` is the default, and is only compatible with
+      zero-out and replace-one adjacency notions, while ``INDEPENDENT`` is
+      compatible with the add-remove adjacency notion.
   """
 
   sampling_prob: float
@@ -334,15 +336,15 @@ class BallsInBinsSampling(BatchSelectionStrategy):
   """Implements balls-in-bins sampling.
 
   In balls-in-bins, each example is independently assigned a 'bin' from 0 to
-  cycle_length-1 uniformly at random, and then appears in all rounds i such that
-  i % cycle_length == bin. See https://arxiv.org/abs/2410.06266 and
-  https://arxiv.org/abs/2412.16802 for more details.
+  ``cycle_length - 1`` uniformly at random, and then appears in all rounds ``i``
+  such that ``i % cycle_length == bin``. See https://arxiv.org/abs/2410.06266
+  and https://arxiv.org/abs/2412.16802 for more details.
 
-  Formal guarantees of the batch_iterator:
-    - All batches consist of indices in the range [0, num_examples).
-    - Each example appears in all batches with index i such that i %
-      cycle_length == j, with j chosen uniformly at random independently for
-      each example, and in no other batches.
+  Formal guarantees of the ``batch_iterator``:
+    - All batches consist of indices in the range ``[0, num_examples)``.
+    - Each example appears in all batches with index ``i`` such that
+      ``i % cycle_length == j``, with ``j`` chosen uniformly at random
+      independently for each example, and in no other batches.
 
   Attributes:
     iterations: The number of total iterations / batches to generate.
@@ -372,9 +374,9 @@ class BallsInBinsSampling(BatchSelectionStrategy):
 class RandomAllocationSampling(BatchSelectionStrategy):
   """Implements k-out-of-t random allocation (aka balanced-iteration sampling).
 
-  Each example independently selects exactly k steps (out of iterations total)
-  to participate in, uniformly at random. For k=1, this participation pattern
-  is equivalent to BallsInBinsSampling.
+  Each example independently selects exactly :math:`k` steps (out of
+  ``iterations`` total) to participate in, uniformly at random. For
+  :math:`k=1`, this participation pattern is equivalent to BallsInBinsSampling.
 
   References:
     * https://arxiv.org/abs/2206.03151 (k=1 only)
@@ -386,11 +388,10 @@ class RandomAllocationSampling(BatchSelectionStrategy):
     * https://arxiv.org/abs/2602.17284 (k>1)
     * https://arxiv.org/abs/2605.07072 (k>1)
 
-
-  Formal guarantees of the batch_iterator:
-    - All batches consist of indices in the range [0, num_examples).
-    - Each example appears in exactly k of the iterations batches, chosen
-      uniformly at random without replacement from [0, iterations).
+  Formal guarantees of the ``batch_iterator``:
+    - All batches consist of indices in the range ``[0, num_examples)``.
+    - Each example appears in exactly :math:`k` of the ``iterations`` batches,
+      chosen uniformly at random without replacement from ``[0, iterations)``.
     - The allocation for each example is independent of all other examples.
 
   Attributes:
@@ -478,36 +479,36 @@ class BMinSepSampling(BatchSelectionStrategy):
   """Implements b-min-sep sampling.
 
   Each batch is sampled using Poisson sampling, ignoring any example that
-  participated in the previous min_sep-1 iterations.
+  participated in the previous ``min_sep - 1`` iterations.
 
   - While both this and cyclic Poisson sampling enforce the b-min-sep
     property, cyclic Poisson does so by only allowing an example to be eligible
-    to participate every b iterations, whereas here every example is eligible
-    to participate in every iteration as long as it did not participate in the
-    previous b-1 iterations. However, we can do accounting for cyclic Poisson
-    via PLD accounting, whereas we only know how to analyze b-min-sep via
-    Monte Carlo accounting.
+    to participate every :math:`b` iterations, whereas here every example is
+    eligible to participate in every iteration as long as it did not participate
+    in the previous :math:`b - 1` iterations. However, we can do accounting for
+    cyclic Poisson via PLD accounting, whereas we only know how to analyze
+    b-min-sep via Monte Carlo accounting.
   - This is a generalization of balls-in-bins, which also enforces b-min-sep
-    sampling. In particular, this reduces to balls-in-bins when warm_start =
-    True and sampling_prob = 1.
+    sampling. In particular, this reduces to balls-in-bins when
+    ``warm_start = True`` and ``sampling_prob = 1``.
 
   References:
     * https://arxiv.org/abs/2602.09338
 
   Attributes:
     sampling_prob: The probability an example is sampled in a given iteration,
-      given that it was not sampled in any of the previous min_sep - 1
-      iterations. Note that the expected batch size is dataset size / (min_sep -
-      1 + 1 / sampling_prob), not just dataset_size * sampling_prob.
+      given that it was not sampled in any of the previous ``min_sep - 1``
+      iterations. Note that the expected batch size is ``dataset_size / (min_sep
+      - 1 + 1 / sampling_prob)``, not just ``dataset_size * sampling_prob``.
     iterations: The number of total iterations / batches to generate.
     min_sep: The minimum separation between two sampled examples.
-    warm_start: If True, we initialize the b-min-sep sampling process at a warm
-      start. This ensures the batch size is consistent from the start of
+    warm_start: If ``True``, we initialize the b-min-sep sampling process at a
+      warm start. This ensures the batch size is consistent from the start of
       training.
     truncated_batch_size: If set, we truncate the batch to this size. To
       maintain that the participation of examples is independent prior to
       truncation, examples which were sampled and then truncated are still
-      excluded in the next min_sep - 1 iterations.
+      excluded in the next ``min_sep - 1`` iterations.
   """
 
   sampling_prob: float
@@ -573,14 +574,15 @@ class BMinSepSampling(BatchSelectionStrategy):
 class UserSelectionStrategy:
   """A strategy that applies a base_strategy at the user level.
 
-  Each batch returned by the batch_iterator is a 2D array of integer indices,
+  Each batch returned by the ``batch_iterator`` is a 2D array of integer
+  indices,
   where all entries in the same row are examples owned by the same user. The
-  examples in this `user-batch` are chosen in a cyclic fashion (maybe after
+  examples in this ``user-batch`` are chosen in a cyclic fashion (maybe after
   shuffling). For example, if a user owns 3 examples [0, 5, 10], then each
   time this user is selected, the batches will be selected from
   [0, 5, 10, 0, 5, 10, 0, 5, 10, ...]. It is expected that the gradient will be
-  evaluated and clipped w.r.t. this `user-batch` before being aggregated across
-  users.
+  evaluated and clipped w.r.t. this ``user-batch`` before being aggregated
+  across users.
 
   Example Usage:
     >>> rng = np.random.default_rng(0)

@@ -41,12 +41,14 @@ _REPLACE_SPECIAL = dp_accounting.NeighboringRelation.REPLACE_SPECIAL
 class BoundedSensitivityCallable:
   """Callable with a sensitivity property.
 
-  If has_aux is False, the sensitivity guarantee holds for the entire output
-  which may be an arbitrary PyTree of JAX Arrays.  If has_aux is True, the
-  output of the function is a pair `(value, aux)` and the sensitivity guarantee
-  only holds for `value` PyTree. The aux PyTree is returned on a per-example
-  basis (i.e., as a PyTree of arrays having a batch axis).  The caller should
-  handle the aux output with care w.r.t. DP guarantees, should they be needed.
+  If ``has_aux`` is ``False``, the sensitivity guarantee holds for the
+  entire output which may be an arbitrary PyTree of JAX Arrays.  If
+  ``has_aux`` is ``True``, the output of the function is a pair
+  ``(value, aux)`` and the sensitivity guarantee only holds for the
+  ``value`` PyTree. The ``aux`` PyTree is returned on a per-example
+  basis (i.e., as a PyTree of arrays having a batch axis).  The caller
+  should handle the ``aux`` output with care w.r.t. DP guarantees,
+  should they be needed.
   """
 
   bounded_sensitivity_fun: Callable[..., Any]
@@ -64,7 +66,7 @@ class BoundedSensitivityCallable:
     Args:
       *args: The same positional arguments as the original ``fun`` passed to
         ``clipped_fun`` or ``clipped_grad``.
-      is_padding_example: An optional 1-D boolean ``jax.Array`` of shape
+      is_padding_example: An optional 1-D boolean :class:`jax.Array` of shape
         ``(batch_size,)`` indicating which examples in the batch are synthetic
         padding (``True``) vs. real data (``False``).  Padding examples are
         zeroed out after clipping but before summation, so they contribute
@@ -116,29 +118,32 @@ def clip_pytree(
 ):
   """Clips a PyTree of jax arrays.
 
-    The clipping behavior is determined by the type of `clip_norm`, like so:
+    The clipping behavior is determined by the type of ``clip_norm``,
+    like so:
 
-    - If `clip_norm` is a Scalar (Global Clipping): Calculates the global L2
-      norm of the input PyTree; & if the norm exceeds `clip_norm`, the entire
-      PyTree is scaled down.
-    - If `clip_norm` is a PyTree (Per-Layer Clipping): Calculates the L2 norm
-      for each individual leaf; & if a leaf's norm exceeds its corresponding
-      threshold in `clip_norm`, that specific leaf is scaled down. The
-      `clip_norm` PyTree structure must be a prefix of the input `pytree`.
-      Where `clip_norm` terminates early, its leaf values automatically
-      broadcast down to match all corresponding sub-leaves of `pytree`.
+    - If ``clip_norm`` is a Scalar (Global Clipping): Calculates the
+      global L2 norm of the input PyTree; & if the norm exceeds
+      ``clip_norm``, the entire PyTree is scaled down.
+    - If ``clip_norm`` is a PyTree (Per-Layer Clipping): Calculates
+      the L2 norm for each individual leaf; & if a leaf's norm exceeds
+      its corresponding threshold in ``clip_norm``, that specific leaf
+      is scaled down. The ``clip_norm`` PyTree structure must be a
+      prefix of the input ``pytree``. Where ``clip_norm`` terminates
+      early, its leaf values automatically broadcast down to match all
+      corresponding sub-leaves of ``pytree``.
 
-  If `rescale_to_unit_norm` is True, the PyTree is additionally scaled by
-  `1.0 / clip_norm` (resulting in a norm of at most 1.0 no matter
-  what clip_norm is). Handles cases where the original norm is zero,
-  or the clip norm is 0 or infinity.
+  If ``rescale_to_unit_norm`` is ``True``, the PyTree is additionally
+  scaled by ``1.0 / clip_norm`` (resulting in a norm of at most 1.0
+  no matter what ``clip_norm`` is). Handles cases where the original norm
+  is zero, or the clip norm is 0 or infinity.
 
   Formal Guarantees:
 
-  - When the input PyTree is all-finite, the output PyTree will have norm at
-    most `clip_norm` if `rescale_to_unit_norm` is False, and at most 1.0 if
-    it is True. For low-precision leaves (e.g., float16), the norm bound may
-    be exceeded by up to the leaf dtype's machine epsilon due to rounding.
+  - When the input PyTree is all-finite, the output PyTree will have
+    norm at most ``clip_norm`` if ``rescale_to_unit_norm`` is
+    ``False``, and at most 1.0 if it is ``True``. For low-precision
+    leaves (e.g., float16), the norm bound may be exceeded by up to
+    the leaf dtype's machine epsilon due to rounding.
   - The output PyTree will have the same structure+dtypes as the input PyTree.
   - The output PyTree may contain NaN or inf values, but only when the
     returned L2 norm is non-finite (i.e., NaN or inf). If the returned L2
@@ -163,15 +168,16 @@ def clip_pytree(
     clip_norm: The maximum L2 norm allowed. Can be a single float or a PyTree;
       depending on whether Global / "Per-Layer" clipping is to be done (see
       details above).
-    rescale_to_unit_norm: If True, the output PyTree's norm is rescaled by `1.0
-      / clip_norm` after potential clipping. If False, the output PyTree has
-      norm at most `clip_norm`.
+    rescale_to_unit_norm: If ``True``, the output PyTree's norm is rescaled by
+      ``1.0 / clip_norm`` after potential clipping. If ``False``, the output
+      PyTree has norm at most ``clip_norm``.
 
   Returns:
-    A tuple `(clipped_pytree, original_l2_norm)`, where `clipped_pytree` is the
-    processed PyTree and `original_l2_norm` is the L2 norm of the input PyTree.
-    In case of per-layer clipping the original_l2_norm is a PyTree containing
-    l2 norms of each leaf.
+    A tuple ``(clipped_pytree, original_l2_norm)``, where
+    ``clipped_pytree`` is the processed PyTree and
+    ``original_l2_norm`` is the L2 norm of the input PyTree. In case
+    of per-layer clipping, ``original_l2_norm`` is a PyTree containing
+    L2 norms of each leaf.
   """
   # -- Per-layer Norm --
   if not jnp.isscalar(clip_norm):
@@ -279,8 +285,8 @@ def clip_and_round_to_grid(
 
   After rounding, the integer vector has L2 norm at most ``grid_scale``.
 
-  This function is designed to be used with ``jax.vmap`` to process a batch of
-  per-example gradients.
+  This function is designed to be used with :func:`jax.vmap` to process a batch
+  of per-example gradients.
 
   Args:
     gradient: A pytree of gradient arrays for a single example.
@@ -346,10 +352,10 @@ def _num_real_microbatches(
 
   Args:
     is_padding_example: A 1D array of shape (num_examples,).
-    microbatch_size: Argument passed to `microbatch`.
+    microbatch_size: Argument passed to ``microbatch``.
 
   Returns:
-    The `true` batch size, as a scalar jax array.
+    The true batch size.
   """
   if microbatch_size is None:
     return is_padding_example.shape[0]
@@ -374,7 +380,8 @@ def _maybe_squeeze_axis_1(x: jax.Array) -> jax.Array:
   squeeze valid 2D+ arrays that actually have size 1 at index 1.
 
   Note that this will also squeeze axis 1 for auxiliary outputs that naturally
-  have a shape like `(Batch, 1, ...)`. Callers should be aware of this potential
+  have a shape like ``(Batch, 1, ...)``. Callers should be aware of this
+  potential
   side effect.
 
   Args:
@@ -456,39 +463,41 @@ def clipped_fun(
 
   Args:
     fun: The function to be clipped.
-    has_aux: If True, `fun` is expected to return a tuple `(value, aux)`. Only
-      the value will be clipped + aggregated, `aux` will be returned on a
-      per-example basis. Exercise caution when using this as the sensitivity
-      guarantees of the returned Callable are only provided w.r.t. `value`.
-    batch_argnums: Specifies which argument(s) of `fun` contain the batch
+    has_aux: If ``True``, ``fun`` is expected to return a tuple ``(value,
+      aux)``. Only the value will be clipped + aggregated, ``aux`` will be
+      returned on a per-example basis. Exercise caution when using this as the
+      sensitivity guarantees of the returned Callable are only provided w.r.t.
+      ``value``.
+    batch_argnums: Specifies which argument(s) of ``fun`` contain the batch
       dimension. All arguments specified here must have the same size along the
       0th axis.
-    keep_batch_dim: If True, batch inputs will be passed to `fun` with a leading
-      batch axis of size 1.  If False, this size 1 axis will be dropped
-      (reducing the rank of the batch args by 1 before passing to `fun`).
+    keep_batch_dim: If ``True``, batch inputs will be passed to ``fun`` with a
+      leading batch axis of size 1.  If ``False``, this size 1 axis will be
+      dropped (reducing the rank of the batch args by 1 before passing to
+      ``fun``).
     l2_clip_norm: The maximum L2 norm allowed. Can be a single float or a
       PyTree; depending on whether Global / "Per-Layer" clipping is to be done.
-    rescale_to_unit_norm: If True, the output PyTree's norm is rescaled by `1.0
-      / clip_norm` after potential clipping. If False, the output PyTree has
-      norm at most `clip_norm`.
+    rescale_to_unit_norm: If ``True``, the output PyTree's norm is rescaled by
+      ``1.0 / clip_norm`` after potential clipping. If ``False``, the output
+      PyTree has norm at most ``clip_norm``.
     normalize_by: Divide the clipped output by this value before returning.
-    return_norms: If True, the returned Callable will return the l2_norms of the
-      per-example values before clipping. These values should be handled with
-      care, see the formal guarantees above.
+    return_norms: If ``True``, the returned Callable will return the l2_norms of
+      the per-example values before clipping. These values should be handled
+      with care, see the formal guarantees above.
     microbatch_size: If set, the batch is split up into microbatches of this
       size. These microbatches are then processed sequentially, with operations
-      on the groups within each microbatch being vectorized using `vmap`. This
-      can be used to reduce peak memory usage at the cost of increased
-      sequential computation.
-    nan_safe: If True, per-example outputs with non-finite L2 norms (NaN or inf)
-      are zeroed out before aggregation, preserving the formal guarantees.
-    dtype: Optional dtype for the clipped+aggregated PyTree. If None, the dtype
-      will be the same as the dtypes of the function output. Can be useful to
-      avoid overflow issues when using low-precision dtypes as the transformed
-      function computes a sum over a potentially large batch.
-    prng_argnum: If set, specifies which argument of `fun` is a PRNG key. The
+      on the groups within each microbatch being vectorized using
+      :func:`jax.vmap`. This can be used to reduce peak memory usage at the cost
+      of increased sequential computation.
+    nan_safe: If ``True``, per-example outputs with non-finite L2 norms (NaN or
+      inf) are zeroed out before aggregation, preserving the formal guarantees.
+    dtype: Optional dtype for the clipped+aggregated PyTree. If ``None``, the
+      dtype will be the same as the dtypes of the function output. Can be useful
+      to avoid overflow issues when using low-precision dtypes as the
+      transformed function computes a sum over a potentially large batch.
+    prng_argnum: If set, specifies which argument of ``fun`` is a PRNG key. The
       PRNG will be split to have a batch dimension and vmapped over.
-    spmd_axis_name: See jax.vmap.
+    spmd_axis_name: See :func:`jax.vmap`.
     grid_scale: If set, per-example outputs are additionally scaled and rounded
       to an integer grid after clipping.  Specifically, each clipped output is
       multiplied by ``grid_scale / l2_clip_norm``, rounded to the nearest
@@ -500,12 +509,14 @@ def clipped_fun(
       ``jnp.int64``).
 
   Returns:
-    A `BoundedSensitivityCallable` wrapping a new function `clip_fn` that
-    clips the output of `fun` and sums across the batch. `clip_fn` takes
-    the same positional arguments as `fun`, and additionally accepts an
+    A :class:`~jax_privacy.clipping.BoundedSensitivityCallable`
+    wrapping a new function ``clip_fn`` that clips the output of
+    ``fun`` and sums across the batch. ``clip_fn`` takes the same
+    positional arguments as ``fun``, and additionally accepts an
     optional keyword argument ``is_padding_example`` (see
-    `BoundedSensitivityCallable.__call__` for details). The exact output
-    signature depends on `has_aux` and `return_norms`:
+    :meth:`~jax_privacy.clipping.BoundedSensitivityCallable.__call__`
+    for details). The exact output signature depends on ``has_aux``
+    and ``return_norms``:
 
     .. list-table::
        :header-rows: 1
@@ -665,20 +676,21 @@ def clipped_grad(
 ) -> BoundedSensitivityCallable:
   """Create a function to compute the sum of clipped gradients of fun.
 
-  This function acts as a transformation similar to `jax.grad`, but with added
-  functionality for gradient clipping applied on a per-example (or per-group)
-  basis before summation. It computes the gradient of `fun` with respect to
-  `argnums`, calculates the L2 norm of the gradient for each example slice
-  along the first axis of the `batch_argnums` args, clips each per-example
-  gradient to have a norm of at most `l2_clip_norm`, and finally sums these
-  clipped gradients.
+  This function acts as a transformation similar to :func:`jax.grad`,
+  but with added functionality for gradient clipping applied on a
+  per-example (or per-group) basis before summation. It computes the
+  gradient of ``fun`` with respect to ``argnums``, calculates the L2
+  norm of the gradient for each example slice along the first axis of
+  the ``batch_argnums`` args, clips each per-example gradient to have
+  a norm of at most ``l2_clip_norm``, and finally sums these clipped
+  gradients.
 
-  Non-grad outputs of the returned function (aux, values, grad_norms) may
-  optionally be returned by setting the arguments `has_aux`,
-  `return_values`, and/or `return_grad_norms` to True.  These outputs are
-  per-example, and hence have a batch axis. It is up to the caller to handle
-  these as necessary. See the `DP Sensitivity Guarantee` below for more details
-  on this design choice.
+  Non-grad outputs of the returned function (aux, values, grad_norms)
+  may optionally be returned by setting the arguments ``has_aux``,
+  ``return_values``, and/or ``return_grad_norms`` to ``True``.  These
+  outputs are per-example, and hence have a batch axis. It is up to
+  the caller to handle these as necessary. See the ``DP Sensitivity
+  Guarantee`` below for more details on this design choice.
 
   Example Usage:
     >>> import jax.numpy as jnp
@@ -723,73 +735,76 @@ def clipped_grad(
 
   Args:
     fun: The function to be differentiated, which should return a scalar loss
-      value. If `has_aux` is True, it should return a tuple `(value, aux)`.
-    argnums: Specifies which argument(s) of `fun` to differentiate with respect
-      to. Can be an integer or a sequence of integers. These arguments should
-      *not* have a batch dimension.
-    has_aux: If True, `fun` is expected to return a tuple `(value, aux)`. The
-      auxiliary data `aux` will be returned by the transformed function.
-      Exercise caution when using this as no DP sensitivity guarantees are
-      provided for the auxiliary data.
+      value. If ``has_aux`` is ``True``, it should return a tuple ``(value,
+      aux)``.
+    argnums: Specifies which argument(s) of ``fun`` to differentiate with
+      respect to. Can be an integer or a sequence of integers. These arguments
+      should *not* have a batch dimension.
+    has_aux: If ``True``, ``fun`` is expected to return a tuple ``(value,
+      aux)``. The auxiliary data ``aux`` will be returned by the transformed
+      function. Exercise caution when using this as no DP sensitivity guarantees
+      are provided for the auxiliary data.
     l2_clip_norm: The maximum L2 norm for each per-example gradient. Gradients
       with a norm larger than this value will be scaled down. Can be a single
       float or a PyTree. If Scalar: It does global clipping across all
       gradients. If PyTree: It does per-layer clipping and contains l2 norm
-      associated with each leaf of the PyTre. The `clip_norm` PyTree structure
-      must be a prefix of the input `pytree`. Where `clip_norm` terminates
-      early, its leaf values automatically broadcast down to match all
-      corresponding sub-leaves of `pytree`.
-    rescale_to_unit_norm: If True, clipped gradients are rescaled by `1.0 /
-      l2_clip_norm`. This ensures the sensitivity is 1.0. If False, they are
-      only scaled down if their norm exceeds `l2_clip_norm`, resulting in a
-      sensitivity of `l2_clip_norm`. The motivation for setting this to True is
-      to decouple the clipping norm from the learning rate for non-adaptive
-      optimizers, as described in https://arxiv.org/abs/2204.13650.
+      associated with each leaf of the PyTree. The ``clip_norm`` PyTree
+      structure must be a prefix of the input ``pytree``. Where ``clip_norm``
+      terminates early, its leaf values automatically broadcast down to match
+      all corresponding sub-leaves of ``pytree``.
+    rescale_to_unit_norm: If ``True``, clipped gradients are rescaled by ``1.0 /
+      l2_clip_norm``. This ensures the sensitivity is 1.0. If ``False``, they
+      are only scaled down if their norm exceeds ``l2_clip_norm``, resulting in
+      a sensitivity of ``l2_clip_norm``. The motivation for setting this to
+      ``True`` is to decouple the clipping norm from the learning rate for
+      non-adaptive optimizers, as described in https://arxiv.org/abs/2204.13650
     normalize_by: Divide the clipped output by this value before returning.
-    batch_argnums: Specifies which argument(s) of `fun` contain the batch
+    batch_argnums: Specifies which argument(s) of ``fun`` contain the batch
       dimension (usually the data and labels). Can be an integer or a sequence
       of integers. All arguments specified here must have the same size along
       their first dimension (the batch dimension). The default value of 1
-      assumes the signature of fun is `fun(params, batch)`.
-    keep_batch_dim: If True, batch inputs will be passed to `fun` with a leading
-      batch axis of size 1.  If False, this size 1 axis will be dropped
-      (reducing the rank of the batch args by 1 before passing to `fun`). The
-      default value of True assumes that `fun` expects inputs with a batch axis.
-      Overriding this default can be useful if fun defines the loss function for
-      a single example, or if clipping should be applied at the group or user
-      level (in which case an extra batch axis is added to the inputs).
-    return_values: If True, the transformed function will also return the
+      assumes the signature of fun is ``fun(params, batch)``.
+    keep_batch_dim: If ``True``, batch inputs will be passed to ``fun`` with a
+      leading batch axis of size 1.  If ``False``, this size 1 axis will be
+      dropped (reducing the rank of the batch args by 1 before passing to
+      ``fun``). The default value of ``True`` assumes that ``fun`` expects
+      inputs with a batch axis. Overriding this default can be useful if fun
+      defines the loss function for a single example, or if clipping should be
+      applied at the group or user level (in which case an extra batch axis is
+      added to the inputs).
+    return_values: If ``True``, the transformed function will also return the
       per-example values, before clipping.
-    return_grad_norms: If True, the transformed function will also return the
-      per-example gradient norms, before clipping. If `l2_clip_norm` is a
+    return_grad_norms: If ``True``, the transformed function will also return
+      the per-example gradient norms, before clipping. If ``l2_clip_norm`` is a
       scalar, it returns a single global norm for the entire gradient PyTree. If
-      `l2_clip_norm` is a PyTree, it returns a matching PyTree structure where
+      ``l2_clip_norm`` is a PyTree, it returns a matching PyTree structure where
       each leaf contains the L2 norm of the corresponding subtree in the
       gradient PyTree.
     pre_clipping_transform: An optional function to apply to the per-example
       gradients before clipping. The function should consume the gradient pytree
-      for a single example and returned a new pytree (possibly with different
+      for a single example and return a new pytree (possibly with different
       structure). Can be used to e.g., scale the leaves of the pytree to
       accommodate preconditioner clipping. Does not affect the sensitivity
       guarantee.
     microbatch_size: If set, input groups are formed into microbatches of this
       size. These microbatches are then processed sequentially, with operations
-      on the groups within each microbatch being vectorized using `vmap`. This
-      can be used to reduce peak memory usage at the cost of increased
-      sequential computation. Microbatching will be at the level of
+      on the groups within each microbatch being vectorized using
+      :func:`jax.vmap`. This can be used to reduce peak memory usage at the cost
+      of increased sequential computation. Microbatching will be at the level of
       users/groups.  E.g., if there are 500 users, with 7 examples per user, and
-      microbatch_size=100, then the input will be broken into 5 microbatches of
-      100 users, and when processing a microbatch, `fun` will be invoked 100
-      times (in parallel with vmap) on groups of 7 examples.
-    nan_safe: If True, per-example gradients with non-finite L2 norms (NaN or
-      inf) are zeroed out before aggregation, preserving the formal guarantees.
-    dtype: Optional dtype for the returned gradient. If None, the dtype will be
-      the same as the dtypes of the gradient function. Can be useful to avoid
+      ``microbatch_size=100``, then the input will be broken into 5 microbatches
+      of 100 users, and when processing a microbatch, ``fun`` will be invoked
+      100 times (in parallel with vmap) on groups of 7 examples.
+    nan_safe: If ``True``, per-example gradients with non-finite L2 norms (NaN
+      or inf) are zeroed out before aggregation, preserving the formal
+      guarantees.
+    dtype: Optional dtype for the returned gradient. If ``None``, the dtype will
+      be the same as the dtypes of the gradient function. Can be useful to avoid
       overflow issues when using low-precision dtypes as the returned function
       computes a sum over a potentially large batch.
-    prng_argnum: If set, specifies which argument of `fun` is a PRNG key. The
+    prng_argnum: If set, specifies which argument of ``fun`` is a PRNG key. The
       PRNG will be split to have a batch dimension and vmapped over.
-    spmd_axis_name: See jax.vmap. Only relevant in distributed settings.
+    spmd_axis_name: See :func:`jax.vmap`. Only relevant in distributed settings.
     grid_scale: If set, per-example grads are additionally scaled and rounded to
       an integer grid after clipping.  Specifically, each clipped grad is
       multiplied by ``grid_scale / l2_clip_norm``, rounded to the nearest
@@ -801,21 +816,24 @@ def clipped_grad(
       ``jnp.int64``).
 
   Returns:
-    A `BoundedSensitivityCallable` wrapping a new function
-    `values_and_clipped_grad_fn` that computes the sum of clipped per-group
-    gradients of `fun`. The returned callable accepts the same positional
-    arguments as `fun`, plus an optional ``is_padding_example`` keyword
-    argument (see `BoundedSensitivityCallable.__call__` for details).
+    A :class:`~jax_privacy.clipping.BoundedSensitivityCallable`
+    wrapping a new function ``values_and_clipped_grad_fn`` that
+    computes the sum of clipped per-group gradients of ``fun``. The
+    returned callable accepts the same positional arguments as
+    ``fun``, plus an optional ``is_padding_example`` keyword argument
+    (see
+    :meth:`~jax_privacy.clipping.BoundedSensitivityCallable.__call__`
+    for details).
 
-    The returned function returns `grad` if `return_values`,
-    `return_grad_norms`, and `has_aux` are all `False`.  Otherwise,
-    it returns a tuple `(grad, AuxiliaryOutput)`, where
-    `AuxiliaryOutput` is a namedtuple with fields `(values,
-    grad_norms, aux)`.  Each field is set to `None` when its
-    corresponding flag is `False`: `values` is `None` unless
-    `return_values=True`, `grad_norms` is `None` unless
-    `return_grad_norms=True`, and `aux` is `None` unless
-    `has_aux=True`.  When present, these outputs are per-example
+    The returned function returns ``grad`` if ``return_values``,
+    ``return_grad_norms``, and ``has_aux`` are all ``False``.
+    Otherwise, it returns a tuple ``(grad, AuxiliaryOutput)``, where
+    ``AuxiliaryOutput`` is a namedtuple with fields ``(values,
+    grad_norms, aux)``.  Each field is set to ``None`` when its
+    corresponding flag is ``False``: ``values`` is ``None`` unless
+    ``return_values=True``, ``grad_norms`` is ``None`` unless
+    ``return_grad_norms=True``, and ``aux`` is ``None`` unless
+    ``has_aux=True``.  When present, these outputs are per-example
     (i.e., they retain a batch axis).
   """
   _validate_static_args(argnums, batch_argnums, normalize_by)

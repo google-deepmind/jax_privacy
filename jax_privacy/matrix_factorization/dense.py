@@ -14,7 +14,8 @@
 
 """Optimization and error fns for dense (explicitly represented) strategies.
 
-See `sensitivity.py` for sensitivity calculations for dense strategies.
+See :mod:`~jax_privacy.matrix_factorization.sensitivity` for sensitivity
+calculations for dense strategies.
 """
 
 from collections.abc import Callable
@@ -44,16 +45,17 @@ def per_query_error(
 ) -> jax.Array:
   """Expected per-query squared error for a general matrix mechanism.
 
-  Exactly one of `strategy_matrix` and `noising_matrix` should be provided.
+  Exactly one of ``strategy_matrix`` and ``noising_matrix`` should be provided.
 
   Args:
-    strategy_matrix: The (square) strategy matrix C defining the mechanism.
-    noising_matrix: The (possibly non-square) noising matrix C^{-1}.
-    workload_matrix: The workload matrix. Defaults to `jnp.tri`, the prefix sum
-      workload matrix.
-    skip_checks: If True, skip input verification that depends on array values
-      (e.g. finiteness, triangularity). Checks on static attributes (shapes,
-      None-ness) are always performed.
+    strategy_matrix: The (square) strategy matrix :math:`C` defining the
+      mechanism.
+    noising_matrix: The (possibly non-square) noising matrix :math:`C^{-1}`.
+    workload_matrix: The workload matrix. Defaults to :func:`jax.numpy.tri`, the
+      prefix sum workload matrix.
+    skip_checks: If ``True``, skip input verification that depends on array
+      values (e.g. finiteness, triangularity). Checks on static attributes
+      (shapes, None-ness) are always performed.
 
   Returns:
     The expected per-query squared error, an array of length n.
@@ -88,16 +90,18 @@ def per_query_error(
 
 
 def get_orthogonal_mask(n: int, epochs: int = 1) -> jax.Array:
-  """Computes a mask that imposes orthogonality constraints on the optimization.
+  # pylint: disable-next=line-too-long
+  r"""Computes a mask that imposes orthogonality constraints on the optimization.
 
   This is specific to the fixed-epoch-order (k, b)-participation schema of
-  https://arxiv.org/pdf/2211.06530.pdf, where participations are separated by
-  exactly b-1 steps, and b = n / epochs.
+  `Choquette-Choo et al. (2022) <https://arxiv.org/abs/2211.06530>`_, where
+  participations are separated by exactly :math:`b - 1` steps, and :math:`b = n
+  / \text{epochs}`.
 
-  This mask sets entry M_{ij} = 0 if i == j (mod b) and M_{ij} = 1
-  otherwise.  Sensitivity for any matrix with 0s in these entries is easy to
-  calculate as only a function of the diagonal.  Moreover, the sensitivity is
-  equal for all possible {-1,1} participation vectors.
+  This mask sets entry :math:`M_{ij} = 0` if :math:`i \equiv j \pmod b` and
+  :math:`M_{ij} = 1` otherwise.  Sensitivity for any matrix with 0s in these
+  entries is easy to calculate as only a function of the diagonal.  Moreover,
+  the sensitivity is equal for all possible {-1,1} participation vectors.
 
   Args:
     n: the size of the mask
@@ -120,11 +124,11 @@ def _mean_loss_and_gradient(
 ) -> tuple[jax.Array, jax.Array]:
   r"""Computes the matrix mechanism total squared error loss and gradient.
 
-  This function computes $\tr[A^T A X^{-1}]$ and the associated gradient
-  $dX = -X^{-1} A^T A X^{-1}$.  It assumes that $X$ is a symmetric positive
-  definite matrix.  For efficiency, no error is thrown if this assumption is
-  not satisfied, but the returned loss or gradient may contain NaN's if this
-  is the case.
+  This function computes :math:`\operatorname{tr}(A^T A X^{-1})` and the
+  associated gradient :math:`dX = -X^{-1} A^T A X^{-1}`.  It assumes that
+  :math:`X` is a symmetric positive definite matrix.  For efficiency, no error
+  is thrown if this assumption is not satisfied, but the returned loss or
+  gradient may contain NaN's if this is the case.
 
   Args:
     X: The current iterate, an n x n symmetric positive definite matrix.
@@ -142,19 +146,19 @@ def _mean_loss_and_gradient(
 
 
 def strategy_from_X(X: jax.Array) -> jax.Array:
-  """Return a lower triangular strategy matrix C from its Gram matrix.
+  r"""Return a lower triangular strategy matrix C from its Gram matrix.
 
   Args:
     X: A positive symmetric semidefinite matrix.
 
   Returns:
-    A lower triangular matrix C satisfying X = C^T C.
+    A lower triangular matrix :math:`C` satisfying :math:`X = C^T C`.
   """
   return jnp.linalg.cholesky(X[::-1, ::-1]).T[::-1, ::-1]
 
 
 def pg_tol_termination_fn(step_info: optimization.CallbackArgs) -> bool:
-  """Callback function that returns True if projected gradient is near-zero."""
+  """Callback function returning ``True`` if projected gradient is near-zero."""
   return bool(jnp.abs(step_info.grad).max() <= 1e-3)
 
 
@@ -169,49 +173,51 @@ def optimize(
     reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
     callback: optimization.CallbackFnType = pg_tol_termination_fn,
 ) -> jax.Array:
-  """Optimizes a strategy matrix C for a given reduction_fn and participation.
+  """Finds an optimal strategy matrix using a projected-gradient based method.
 
-  Note: While the function accepts a reduction_fn keyword argument, it has been
-  tuned and tested rigorously only for mean-squared error (i.e.,
-  reduction_fn=jnp.mean).
+  This is a numerical optimization method that directly optimizes over the
+  entries of the matrix mechanism, running the projected gradient descent
+  algorithm of `Choquette-Choo et al. (2022)
+  <https://arxiv.org/abs/2211.06530>`_.
 
-  This function can be used to optimize matrices under
+  This optimization can find optimal strategies for:
 
   * Single-participation:
-    [Denisov et al., 2022](https://arxiv.org/abs/2202.08312).  This can be
+    `Denisov et al. (2022) <https://arxiv.org/abs/2202.08312>`_.  This can be
     accomplished by running with default arguments.
 
   * Multi-participation with fixed-epoch order:
-    [Choquette-Choo et al., 2022](https://arxiv.org/abs/2211.06530).
-    This can be accomplished by setting epochs=k.
+    `Choquette-Choo et al. (2022) <https://arxiv.org/abs/2211.06530>`_.
+    This can be accomplished by setting ``epochs=k``.
 
   * Multi-participation with min-separation (useful for federated training
-    scenarios).  This can be accomplished by setting bands = min_sep and
-    equal_norm = True.
+    scenarios).  This can be accomplished by setting ``bands=min_sep`` and
+    ``equal_norm=True``.
 
   * Multi-participation with amplification via subsampled fixed-epoch order:
-    [Choquette-Choo et al., 2022](https://arxiv.org/abs/2211.06530). This can
-    be accomplished by setting epochs=1, bands<separation, and equal_norm=True.
+    `Choquette-Choo et al. (2022) <https://arxiv.org/abs/2211.06530>`_. This can
+    be accomplished by setting ``epochs=1``, ``bands < separation``, and
+    ``equal_norm=True``.
 
   Args:
     n: the number of iterations the strategy should encode.
     epochs: The number of epochs the strategy should be calibrated for. Assumes
       (k, b)-fixed-epoch order participation.
     bands: The number of bands in the strategy.
-    equal_norm: Flag to indicate that each column of C should have equal_norm.
-      Useful for BandMF.  If epochs=1, this flag is a no-op, as the returned
+    equal_norm: Flag to indicate that each column of C should have equal norm.
+      Useful for BandMF.  If ``epochs=1``, this flag is a no-op, as the returned
       strategy will be column normalized either way.
     A: The workload matrix (defaults to Prefix).
     max_optimizer_steps: The maximum number of LBFGS steps to take.
     reduction_fn: A function that converts per query squared errors to a scalar.
-      Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
-      squared error, or any other differentiable function writtten in Jax.
+      Use ``jnp.mean`` to optimize mean-squared-error, ``jnp.max`` to optimize
+      max squared error, or any other differentiable function written in Jax.
     callback: An optional callback function to monitor optimization progress.
       The default callback terminates the optimization early if the projected
       gradient is near-zero.
 
   Returns:
-    The strategy matrix C that minimizes expected total squared error.
+    The strategy matrix :math:`C` that minimizes expected total squared error.
   """
   A = np.tri(n) if A is None else A
   mask = get_orthogonal_mask(n, epochs)

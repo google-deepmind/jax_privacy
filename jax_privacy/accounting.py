@@ -116,19 +116,20 @@ def dpsgd_event(
 ) -> dp_accounting.DpEvent:
   """Returns the DpEvent for DP-SGD with the given training parameters.
 
-  This mechanism is a composition of poisson-sampled Gaussian mechanisms. See
+  This mechanism is a composition of Poisson-sampled Gaussian mechanisms. See
   this paper for more details:
 
-  * [Deep Learning with Differential Privacy](https://arxiv.org/abs/1607.00133)
+  * "Deep Learning with Differential Privacy"
+    `Abadi et al. (2016) <https://arxiv.org/abs/1607.00133>`_
 
   Args:
     noise_multiplier: The noise multiplier of the mechanism.
     iterations: The number of iterations to run the mechanism for.
     sampling_prob: The Poisson sampling probability of the mechanism, i.e., the
       probability an example will be included in each batch.
-    use_zcdp: Whether to use generic dp_event.ZCDpEvent instead of specific
-      dp_event.GaussianDpEvent. For example, set this to True if using discrete
-      Gaussian noise instead of continuous Gaussian noise.
+    use_zcdp: Whether to use generic ``dp_event.ZCDpEvent`` instead of specific
+      ``dp_event.GaussianDpEvent``. For example, set this to ``True`` if using
+      discrete Gaussian noise instead of continuous Gaussian noise.
 
   Returns:
     A DpEvent object.
@@ -164,9 +165,9 @@ def fixed_dpsgd_event(
     dataset_size: The number of examples in the dataset.
     batch_size: The fixed batch size per iteration.
     replace: Whether to sample with replacement.
-    use_zcdp: Whether to use generic dp_event.ZCDpEvent instead of specific
-      dp_event.GaussianDpEvent. For example, set this to True if using discrete
-      Gaussian noise instead of continuous Gaussian noise.
+    use_zcdp: Whether to use generic ``dp_event.ZCDpEvent`` instead of specific
+      ``dp_event.GaussianDpEvent``. For example, set this to ``True`` if using
+      discrete Gaussian noise instead of continuous Gaussian noise.
 
   Returns:
     A DpEvent object.
@@ -204,14 +205,14 @@ def truncated_dpsgd_event(
 ) -> dp_accounting.DpEvent:
   """Returns the DpEvent for truncated DP-SGD with the given training params.
 
-  This mechanism is like DP-SGD, but batches larger than `truncated_batch_size`
-  are truncated to size `truncated_batch_size`. See these references for more
-  information about this mechanism:
+  This mechanism is like DP-SGD, but batches larger than
+  ``truncated_batch_size`` are truncated to size ``truncated_batch_size``. See
+  these references for more information about this mechanism:
 
-  * [Scalable DP-SGD: Shuffling vs. Poisson
-    Subsampling](https://arxiv.org/abs/2411.04205)
-  * [Tighter Privacy Analysis for Truncated Poisson
-    Sampling](https://arxiv.org/abs/2508.15089)
+  * "Scalable DP-SGD: Shuffling vs. Poisson Subsampling"
+    `Chua et al. (2024) <https://arxiv.org/abs/2411.04205>`_
+  * "Tighter Privacy Analysis for Truncated Poisson Sampling"
+    `Ganesh et al. (2025) <https://arxiv.org/abs/2508.15089>`_
 
   Args:
     noise_multiplier: The noise multiplier of the mechanism.
@@ -243,11 +244,11 @@ def amplified_bandmf_event(
 ) -> dp_accounting.DpEvent:
   """Returns the DpEvent for DP-BandMF with the given training parameters.
 
-  The examples will be split up into `num_bands` groups, and then minibatches
-  will be formed by sampling within each group. See this paper for more details:
-
-  * [(Amplified) Banded Matrix Factorization: A unified approach to private
-    training](https://arxiv.org/abs/2306.08153) for more details.
+  The examples will be split up into ``num_bands`` groups, and then minibatches
+  will be formed by sampling within each group. See "(Amplified) Banded Matrix
+  Factorization: A unified approach to private training"
+  `Choquette-Choo et al. (2023) <https://arxiv.org/abs/2306.08153>`_ for
+  details.
 
   Args:
     noise_multiplier: The noise multiplier to use, assuming the strategy matrix
@@ -256,9 +257,9 @@ def amplified_bandmf_event(
     num_bands: The number of bands to use.
     sampling_prob: The Poisson sampling probability of the mechanism, i.e., the
       probability an example will be included in each batch. Note that because
-      the examples are partitioned into `num_bands` groups, the expected batch
-      size is actually `dataset_size * sampling_prob / num_bands` (i.e., a
-      factor of `num_bands` smaller than DP-SGD).
+      the examples are partitioned into ``num_bands`` groups, the expected batch
+      size is actually ``dataset_size * sampling_prob / num_bands`` (i.e., a
+      factor of ``num_bands`` smaller than DP-SGD).
 
   Returns:
     A DpEvent object.
@@ -283,10 +284,10 @@ def truncated_amplified_bandmf_event(
 ) -> dp_accounting.DpEvent:
   """Returns the DpEvent for truncated DP-BandMF with the given parameters.
 
-  This mechanism is like BandMF, but batches larger than `truncated_batch_size`
-  are truncated to size `truncated_batch_size`. This mechanism is compatible
-  with the `zero-out` adjacency notion, and requires knowledge of the total
-  number of examples.
+  This mechanism is like BandMF, but batches larger than
+  ``truncated_batch_size`` are truncated to size ``truncated_batch_size``. This
+  mechanism is compatible with the ``zero-out`` adjacency notion, and requires
+  knowledge of the total number of examples.
 
   Args:
     noise_multiplier: The noise multiplier to use, assuming the strategy matrix
@@ -295,12 +296,12 @@ def truncated_amplified_bandmf_event(
     num_bands: The number of bands to use.
     sampling_prob: The Poisson sampling probability of the mechanism, i.e., the
       probability an example will be included in each batch before truncation.
-      Note that because the examples are partitioned into `num_bands` groups,
-      the expected batch size (before truncation) is actually `dataset_size *
-      sampling_prob / num_bands` (i.e., a factor of `num_bands` smaller than
+      Note that because the examples are partitioned into ``num_bands`` groups,
+      the expected batch size (before truncation) is actually ``dataset_size *
+      sampling_prob / num_bands`` (i.e., a factor of ``num_bands`` smaller than
       DP-SGD).
     largest_group_size: The number of examples in the largest group, usually
-      math.ceil(num_examples / num_bands).
+      ``math.ceil(num_examples / num_bands)``.
     truncated_batch_size: The maximum batch size.
 
   Returns:

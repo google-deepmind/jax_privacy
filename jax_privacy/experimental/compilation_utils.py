@@ -41,7 +41,7 @@ def optimal_physical_batch_sizes(
   not highly optimized.
 
   Args:
-    batch_sizes: A list of non-negative integers B_1, ..., B_n.
+    batch_sizes: A list of non-negative integers :math:`B_1, \dots, B_n`.
     num_compilations: A non-negative integer representing the number of unique
       batch sizes to return (and compile downstream functions for).
 

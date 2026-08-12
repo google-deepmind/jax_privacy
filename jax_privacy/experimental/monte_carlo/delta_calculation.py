@@ -195,20 +195,21 @@ def delta_from_epsilon_and_samples(
     counts: Sequence[float] | None = None,
     other_event: DpEventOrAccountant | None = None,
 ):
-  """Calculate the delta parameter for a given epsilon and list of samples.
+  r"""Calculate the delta parameter for a given epsilon and list of samples.
 
   Args:
     epsilon: The epsilon parameter of the DP guarantee.
     samples: Samples from the privacy loss distribution. That is, to estimate
-      the e^epsilon-hockey stick divergence between P and Q, we sample x from P,
-      and then compute ln(P(x)/Q(x)) to get a single sample.
-    counts: A list of floats representing the counts of the samples. If None, we
-      assume the samples are count 1. This can be helpful if the number of
-      samples is very large, in which case one can discretize the samples and
-      pass the counts of each discretization. If passed, should be the same
-      length as samples.
-    other_event: An optional DpEvent or PrivacyAccountant object. If None, we
-      are just computing the delta parameter for the event whose samples are
+      the :math:`e^\varepsilon` hockey-stick divergence between :math:`P` and
+      :math:`Q`, we sample :math:`x` from :math:`P`, and then compute
+      :math:`\ln(P(x)/Q(x))` to get a single sample.
+    counts: A list of floats representing the counts of the samples. If
+      ``None``, we assume the samples are count 1. This can be helpful if the
+      number of samples is very large, in which case one can discretize the
+      samples and pass the counts of each discretization. If passed, should be
+      the same length as samples.
+    other_event: An optional DpEvent or PrivacyAccountant object. If ``None``,
+      we are just computing the delta parameter for the event whose samples are
       given by samples. If an accountant is given, the method returns the
       estimate for Monte Carlo accounting of the composition of the event whose
       samples are given by samples, and other_event.
@@ -250,7 +251,7 @@ def perform_calibration_from_samples(
         DpEventOrAccountant | Sequence[DpEventOrAccountant] | None
     ) = None,
 ) -> tuple[bool, int | float]:
-  """Perform calibration to find highest-utility parameter for DP target.
+  r"""Perform calibration to find highest-utility parameter for DP target.
 
   This is Algorithm 5 in https://arxiv.org/pdf/2602.09338.
 
@@ -306,37 +307,36 @@ def perform_calibration_from_samples(
       unweighted. If passed, each list should be the same length as the
       associated list of negative_samples. Ignored if negative_samples is None.
     other_event: Optional DpEvent or PLDAccountant or sequence thereof. For
-    simplicity we don't accept Sequence[DpEvent], the ComposedDpEvent can be
-    used instead. For brevity, we below refer to other_event as if it is a
-    DpEvent, but if an accountant is passed the below logic is equivalent by
-    substituting in the event represented by the accountant.
-      - If other_event is None, we are just calibrating the single event
-        corresponding to the sequence of privacy loss samples.
-      - If other_event is a single DpEvent, we are calibrating the composition
-        of the mechanism whose privacy loss samples we computed and other_event,
-        and are assuming other_event is fixed with respect to the parameter we
-        are calibrating.
-      - If other_event is a list of other_event objects, it must have the same
-        length as positive_samples, i.e. one event for each hyperparameter
-        value. In this case, we are again calibrating the composition of the
-        mechanism whose privacy loss samples we computed, and other_event, but
-        now we are assuming other_event is defined as a function of the
-        parameter we are calibrating (and other_event[i] corresponds to the
-        i-th hyperparameter value).
-        For example, suppose we are calibrating sigma in {sigma_1, sigma_2} for
-        the composition of a mechanism M(sigma) with a Gaussian mechanism with 
-        noise multiplier sigma. Then we should have `positive_samples =
-        [samples_1, samples_2]`, where `samples_i` is the privacy loss samples
-        for M(sigma_i) (and `samples_1` is independent of `samples_2`), and
-        other_event is `[GaussianDpEvent(sigma_1), GaussianDpEvent(sigma_2)]`.
+      simplicity we don't accept Sequence[DpEvent], the ComposedDpEvent can be
+      used instead. For brevity, we below refer to other_event as if it is a
+      DpEvent, but if an accountant is passed the below logic is equivalent by
+      substituting in the event represented by the accountant.  - If other_event
+      is None, we are just calibrating the single event corresponding to the
+      sequence of privacy loss samples. - If other_event is a single DpEvent, we
+      are calibrating the composition of the mechanism whose privacy loss
+      samples we computed and other_event, and are assuming other_event is fixed
+      with respect to the parameter we are calibrating. - If other_event is a
+      list of other_event objects, it must have the same length as
+      positive_samples, i.e. one event for each hyperparameter value. In this
+      case, we are again calibrating the composition of the mechanism whose
+      privacy loss samples we computed, and other_event, but now we are assuming
+      other_event is defined as a function of the parameter we are calibrating
+      (and other_event[i] corresponds to the i-th hyperparameter value). For
+      example, suppose we are calibrating sigma in {sigma_1, sigma_2} for the
+      composition of a mechanism M(sigma) with a Gaussian mechanism with noise
+      multiplier sigma. Then we should have ``positive_samples = [samples_1,
+      samples_2]``, where ``samples_i`` is the privacy loss samples for
+      M(sigma_i) (and ``samples_1`` is independent of ``samples_2``), and
+      other_event is ``[GaussianDpEvent(sigma_1), GaussianDpEvent(sigma_2)]``.
 
   Returns:
-    Either (True, i), or (False, base_delta). If there is an associated set of
-    hyperparameters and (True, i) is returned, i is the index of the
-    highest-utility hyperparameter we can use while satisfying the target
-    (epsilon, delta)-DP guarantee. If (False, base_delta) is returned, we should
-    fall back to a mechanism that is known to be (epsilon, base_delta)-DP (i.e.,
-    one that can be calibrated without Monte Carlo verification)
+    Either ``(True, i)``, or ``(False, base_delta)``. If there is an associated
+    set of hyperparameters and ``(True, i)`` is returned, ``i`` is the index of
+    the highest-utility hyperparameter we can use while satisfying the target
+    :math:`(\varepsilon, \delta)`-DP guarantee. If ``(False, base_delta)`` is
+    returned, we should fall back to a mechanism that is known to be
+    :math:`(\varepsilon, \text{base\_delta})`-DP (i.e., one that can be
+    calibrated without Monte Carlo verification).
   """  # fmt: skip
   if not positive_samples:
     raise ValueError('positive_samples must be non-empty.')

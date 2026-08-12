@@ -18,7 +18,7 @@ Provides data structures and algorithms for the multi-owner model of
 differential privacy, where examples may be attributed to multiple users.
 
 References:
-  * https://arxiv.org/abs/2503.03622
+  * `Ganesh et. al (2025) <https://arxiv.org/abs/2503.03622>`_
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ class MultiOwnerGraph:
     5
 
   References:
-    * https://arxiv.org/abs/2503.03622
+    * `Ganesh et al. (2025) <https://arxiv.org/abs/2503.03622>`_
 
   Attributes:
     example_ids: 1D integer array of example indices in ``[0, num_examples)``.
@@ -204,7 +204,7 @@ def greedy_contribution_bound(
 
 
   References:
-    * [1] https://arxiv.org/abs/2503.03622
+    * [1] `Ganesh et al. (2025) <https://arxiv.org/abs/2503.03622>`_
 
   Args:
     attribution: Multi-owner attribution data.
@@ -258,7 +258,8 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
 
   Note that both the attribution graph and the resulting batch assignments are
   considered **public information** and are not protected by differential
-  privacy. The example ordering can be accessed directly via the `example_order`
+  privacy. The example ordering can be accessed directly via the
+  ``example_order``
   field of the dataclass, which is precomputed at initialization.
   As a result, the max_part values are not specified as inputs, but
   rather computed post-hoc after identifying a valid example ordering.
@@ -272,7 +273,7 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
     post-hoc).
 
   References:
-    * [1] https://arxiv.org/abs/2503.03622
+    * [1] `Ganesh et al. (2025) <https://arxiv.org/abs/2503.03622>`_
   """
 
   def __init__(
@@ -384,8 +385,8 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
   ) -> Iterator[np.ndarray]:
     """Yields batches satisfying the b-min-sep property.
 
-    All batches are predetermined at initialization. Therefore, `num_examples`
-    is only used for validation, and `rng` is unused. See the class docstring
+    All batches are predetermined at initialization. Therefore, ``num_examples``
+    is only used for validation, and ``rng`` is unused. See the class docstring
     for more details.
 
     Args:

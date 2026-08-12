@@ -89,7 +89,7 @@ class KerasApiTest(parameterized.TestCase):
     # Noise multiplier is too small
     with self.assertRaisesRegex(
         ValueError,
-        "Value error occured while calculating epsilon",
+        "Value error occurred while calculating epsilon",
     ):
       dataclasses.replace(valid_params, noise_multiplier=1e-10)
 

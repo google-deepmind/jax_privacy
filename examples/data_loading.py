@@ -16,8 +16,8 @@
 
 This file is meant to demonstrate how the BatchSelectionStrategy API can be
 used with pygrain for efficient data loading from on-disk datasets. This example
-can be forked for your own use cases for your own use cases, potentially with
-some customization, but should work out-of-the-box as well.
+can be forked for your own use cases, potentially with some customization, but
+should work out-of-the-box as well.
 
 By default, this data loader is configured to load all of the data into a single
 JAX process. In multi-controller JAX setups, the default behavior means all
@@ -47,8 +47,8 @@ class CustomBatchIterator(grain.DatasetIterator):
 
   This DatasetIterator yields batches of data from the given dataset, along with
   a boolean mask indicating which examples in the batch are padding examples.
-  `get_state` and `set_state` are implemented to allow for easy and lightweight
-  checkpointing of this batch iterator.
+  ``get_state`` and ``set_state`` are implemented to allow for easy and
+  lightweight checkpointing of this batch iterator.
   """
 
   def __init__(
@@ -76,10 +76,11 @@ class CustomBatchIterator(grain.DatasetIterator):
         number. Larger values reduces the number of compilations needed in
         downstream JAX code.
       max_workers: The number of workers to use for parallel loading. The
-        behavior the default `max_workers=None` is version-dependent, and
+        behavior of the default ``max_workers=None`` is version-dependent, and
         typically depends on the number of available CPU cores. See
-        https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.ThreadPoolExecutor
-          for more details.
+        `ThreadPoolExecutor
+        <https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.ThreadPoolExecutor>`_
+        for more details.
     """
     super().__init__()
     self._dataset = dataset

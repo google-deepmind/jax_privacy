@@ -98,8 +98,8 @@ class ColumnNormalizedBanded:
     """Construct a default instance of this object given n and bands.
 
     This object is initialized by using the fixed toeplitz strategy proposed
-    in [1; Algorithm 1], truncating to $b$ entries, and column normalizing.
-    It can act as a useful initialization for further optimization.
+    in [1; Algorithm 1], truncating to :math:`b` entries, and column
+    normalizing. It can act as a useful initialization for further optimization.
 
     [1] https://proceedings.mlr.press/v202/fichtenberger23a/fichtenberger23a.pdf
 
@@ -127,7 +127,7 @@ class ColumnNormalizedBanded:
   def inverse_as_streaming_matrix(
       self,
   ) -> streaming_matrix.StreamingMatrix:
-    """Create $C^{-1}$ as a StreamingMatrix object."""
+    r"""Create :math:`C^{-1}` as a StreamingMatrix object."""
 
     def init_fn(abstract_value):
       dtype = jnp.promote_types(abstract_value.dtype, self.params.dtype)
@@ -144,7 +144,8 @@ class ColumnNormalizedBanded:
       k = index % self.bands
       r = jnp.arange(self.bands)
       row = self.params[index - r, r]
-      # Algorithm 9 from https://arxiv.org/abs/2306.08153
+      # Algorithm 9 from Choquette-Choo et al. (2023)
+      # https://arxiv.org/abs/2306.08153
       # Compute xi = (value - row[1:] @ bufs[k-r][1:]) / row[0]
       inner = jnp.tensordot(row[1:], bufs[k - r][1:], axes=((0,), (0,)))
       xi = (value - inner) / row[0]
@@ -172,16 +173,16 @@ def minsep_sensitivity_squared(
   Args:
     strategy: The strategy matrix defining the mechanism.
     min_sep: The minimum separation between two participation of a worst-case
-      client/sample. Note that we use the definition in [(Amplified) Banded
-      Matrix Factorization: A unified approach to private
-      training](https://arxiv.org/abs/2306.08153). For a user participating on
-      iteration $i$ and then again on iteration $j$,  the separation is $j -i$;
-      that is, a min_sep of 1 allows participation on every iteration.
+      client/sample. Note that we use the definition in `Choquette-Choo et al.
+      (2023) <https://arxiv.org/abs/2306.08153>`_. For a user participating on
+      iteration :math:`i` and then again on iteration :math:`j`, the separation
+      is :math:`j - i`; that is, a ``min_sep`` of 1 allows participation on
+      every iteration.
     max_participations: The maximum participation of a worst-case user. The
-      default value None allows the max number of possible participations.
-    n: Optional, the size of the matrix C (see `coef` above). If None, the size
-      of the matrix is equal to the number of coefficients.
-    skip_checks: If True, don't perform input verification which may not be
+      default value ``None`` allows the max number of possible participations.
+    n: Optional, the size of the matrix :math:`C`. If ``None``, the size of the
+      matrix is equal to the number of coefficients in ``strategy``.
+    skip_checks: If ``True``, don't perform input verification which may not be
       supported in jitted contexts.
 
   Returns:
@@ -244,21 +245,21 @@ def per_query_error(
     A: streaming_matrix.StreamingMatrix | None = None,
     scan_fn: Any = jax.lax.scan,
 ) -> jnp.ndarray:
-  """Computes expected per-query squared error of a strategy.
+  r"""Computes expected per-query squared error of a strategy.
 
-  Specifically, this function computes the row-wise L2^2 norm of B = A C^{-1}.
-  this vector to a scalar via the reduction_fn.
+  Specifically, this function computes the row-wise :math:`L_2^2` norm of
+  :math:`B = A C^{-1}`.
 
-  Since C is column normalized, this error function can be used as
+  Since :math:`C` is column normalized, this error function can be used as
   a loss function, since sensitivity is constant for ColumnNormalizedBanded
   strategies for both single-participation and multi-participation settings,
-  as long as the number of bands in C is less than or equal to the (minimum)
-  separation between contributions from the same user.
+  as long as the number of bands in :math:`C` is less than or equal to the
+  (minimum) separation between contributions from the same user.
 
   If you need to backpropagate through this function, you can use the
-  `equinox` or `dinosaur` scan functions to make the scan checkpointed,
-  which allows the scan to be performed for large n without OOMing the
-  accelerator.
+  ``'equinox'`` or ``'dinosaur'`` scan functions to make the scan
+  checkpointed, which allows the scan to be performed for large ``n`` without
+  OOMing the accelerator.
 
   Args:
     C: the strategy matrix, represented implicitly.
@@ -267,7 +268,7 @@ def per_query_error(
 
   Returns:
     The per query expected squared error of the strategy on the workload,
-    represented as an array of length `n`.
+    represented as an array of length ``n``.
   """
   if scan_fn == 'equinox':
     scan_fn = _equinox_scan_fn(C.n, C.bands)
@@ -291,19 +292,23 @@ def optimize(
     scan_fn: Any = jax.lax.scan,
     callback: optimization.CallbackFnType = lambda _: None,
 ) -> ColumnNormalizedBanded:
-  """Optimize the strategy using a gradient-based method.
+  r"""Optimize the strategy using a gradient-based method.
 
   Note that this function benefits substantially from GPUs.  This function
   is primarily supported to aid in reproducing results from
-  https://arxiv.org/abs/2405.15913.  In practice, we recommend using a
-  banded Toeplitz strategy instead (see toeplitz.optimize_banded_toeplitz),
-  which are <0.5% suboptimal in the regimes of most interest (n>=1000, b<=32).
+  `McKenna (2024) <https://arxiv.org/abs/2405.15913>`_  In practice, we
+  recommend using a
+  banded Toeplitz strategy instead (see
+  :func:`~jax_privacy.matrix_factorization.toeplitz.optimize_banded_toeplitz`),
+  which are <0.5% suboptimal in the regimes of most interest
+  (:math:`n \ge 1000`, :math:`b \le 32`).
 
   The strategies produced by this procedure can be used in both single- and
   multi-participation settings -- both (k, b)-min-sep and (k, b)-fixed epoch
-  order, as described in https://arxiv.org/abs/2306.08153, as long as the
-  number of bands in C is less than or equal to the (minimum) separation
-  between contributions from the same user.
+  order, as described in `Choquette-Choo et al. (2023)
+  <https://arxiv.org/abs/2306.08153>`_, as long as the
+  number of bands in :math:`C` is less than or equal to the (minimum)
+  separation between contributions from the same user.
 
   Args:
     n: The number of training iterations the strategy is configured for.
@@ -312,18 +317,20 @@ def optimize(
     A: The target workload.
     max_optimizer_steps: The maximum number of iterations to optimize for.
     reduction_fn: A function that converts per query squared errors to a scalar.
-      Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
-      squared error, or lambda v: v[-1] to optimize last iterate squared error.
-    scan_fn: Either 'equinox', 'dinosaur', or a function with the same signature
-      as jax.lax.scan.  Using 'equinox' or 'dinosaur' is helpful for doing
-      strategy optimization on GPUs for large n, since it allows the scan
-      function used internally by per_query_error to be checkpointed, avoiding
-      OOM errors during backpropagation.
+      Use ``jnp.mean`` to optimize mean-squared-error, ``jnp.max`` to optimize
+      max squared error, or ``lambda v: v[-1]`` to optimize last iterate squared
+      error.
+    scan_fn: Either ``'equinox'``, ``'dinosaur'``, or a function with the same
+      signature as :func:`jax.lax.scan`.  Using ``'equinox'`` or ``'dinosaur'``
+      is helpful for doing strategy optimization on GPUs for large ``n``, since
+      it allows the scan function used internally by ``per_query_error`` to be
+      checkpointed, avoiding OOM errors during backpropagation.
     callback: A function to call after each optimization iteration. See
-      optimization.optimize for details.
+      :func:`~jax_privacy.matrix_factorization.optimization.optimize` for
+      details.
 
   Returns:
-    An optimized strategy having the same structure as C.
+    An optimized strategy having the same structure as ``C``.
   """
 
   A = A or streaming_matrix.prefix_sum()

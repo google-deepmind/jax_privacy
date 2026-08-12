@@ -18,14 +18,15 @@ This file houses helper functions related to sharding. Users of JAX Privacy
 should not need to use this file directly, but the utilities implemented here
 are leveraged by higher-level APIs elsewhere in the library. The functions
 defined here assume that input arrays are enriched with type-level sharding
-information, as described in
-https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html.
+information, as described in `JAX Explicit Sharding
+<https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html>`_.
 
 This file contains primitives needed for "distributed noise generation"
-as described in [Scaling up the Banded Matrix Factorization Mechanism for
-Differentially Private ML](https://arxiv.org/abs/2405.15913) and in
-[Correlated Noise Mechanisms for Differentially Private Learning]
-(https://arxiv.org/abs/2506.08201).
+as described in `Scaling up the Banded Matrix Factorization Mechanism for
+Differentially Private ML, McKenna (2024)
+<https://arxiv.org/abs/2405.15913>`_
+and in `Correlated Noise Mechanisms for Differentially Private Learning,
+Pillutla et al. (2025) <https://arxiv.org/abs/2506.08201>`_.
 """
 
 import math
@@ -174,19 +175,19 @@ def compute_early_stopping_order(
   microbatch_size, *dims) using a Fortran-order reshape.
 
   This is a helper function to reorder data so that they get processed in the
-  same order by `microbatch` as they would be processed
+  same order by ``microbatch`` as they would be processed
   without microbatching. This can be particularly helpful when the last elements
   of the batch are padding examples, in which case if they appear in the
   same microbatch we can avoid processing them.  This function is only useful
   if using the "is_padding_example" keyword argument with
-  `microbatch`.
+  ``microbatch``.
 
   Example Usage:
     >>> order = compute_early_stopping_order(batch_size=10, microbatch_size=2)
     >>> order
     array([0, 2, 4, 6, 8, 1, 3, 5, 7, 9])
 
-  When permuting the input data to `microbatch` according
+  When permuting the input data to ``microbatch`` according
   to the above permutation, the examples will be split up into 5 microbatches:
   [0, 1], [2, 3], [4, 5], [6, 7], [8, 9] and processed sequentially.
 
@@ -200,7 +201,7 @@ def compute_early_stopping_order(
 
   We can see how this is directly useful in the context of padding below.
   Because the last two microbatches consist of only padding examples,
-  `microbatch` will skip them, saving compute.
+  ``microbatch`` will skip them, saving compute.
 
     >>> is_padding = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1])
     >>> microbatching.reshape_batch_axis(is_padding[order], microbatch_size=2)
@@ -213,7 +214,7 @@ def compute_early_stopping_order(
   Args:
     batch_size: The size of the batch axis.
     microbatch_size: The target microbatch size that will be used with
-      `microbatch`.
+      ``microbatch``.
 
   Returns:
     A permutation of the example indices, where padding examples are evenly
@@ -293,7 +294,7 @@ def parallel_sample_pytree(
   This function is intended to bridge the gap between JAX programs and
   external sources of randomness, e.g., generating on CPU with numpy. This
   function is defined in terms of a np.random.Generator input, such as those
-  defined by the `randomgen` python library. This function parallelizes the
+  defined by the ``randomgen`` python library. This function parallelizes the
   sampling across all devices defined by the mesh, then communicates the
   samples between devices as necessary to produce the desired output sharding.
 
@@ -302,11 +303,11 @@ def parallel_sample_pytree(
     struct: A PyTree of jax.Array or jax.ShapeDtypeStruct objects, defining the
       shape, sharding, and dtype of the output pytree.
     sampler: The sampler to use. Must consume a Generator as the 0th argument,
-      have a `size` keyword argument, and return a pure numpy array, i.e.,
-      `sampler(rng: np.random.Generator, size: int) -> np.ndarray`.
+      have a ``size`` keyword argument, and return a pure numpy array, i.e.,
+      ``sampler(rng: np.random.Generator, size: int) -> np.ndarray``.
 
   Returns:
-    A PyTree with the same structure as `struct`, with the sampled values.
+    A PyTree with the same structure as ``struct``, with the sampled values.
   """
   _check_jit()
 

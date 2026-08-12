@@ -83,9 +83,9 @@ class DPKerasConfig:
         delta only because of poor model performance.
       clipping_norm: The clipping norm for the per-example gradients.
       batch_size: The batch size used by the DP optimizer. When
-        `poisson_sampling_in_fit=True`, this is the expected batch size of the
+        ``poisson_sampling_in_fit=True``, this is the expected batch size of the
         internal Poisson sampler. Otherwise it must match the batch size
-        supplied to `fit()`.
+        supplied to ``fit()``.
       gradient_accumulation_steps: The number of gradient accumulation steps.
         This is the number of batches to accumulate before adding noise and
         performing an optimizer step. 1 means that there is no gradient
@@ -100,9 +100,9 @@ class DPKerasConfig:
         useful during DP training.
       train_steps: The number of training steps (optimizer update steps). If you
         try to train the model for more steps, it will fail. Because one
-        optimizer update consumes `gradient_accumulation_steps` batches, this is
-        the number of optimizer updates, not the number of (micro-)batches. If
-        you train by epochs, then it is epochs * (train_size //
+        optimizer update consumes ``gradient_accumulation_steps`` batches, this
+        is the number of optimizer updates, not the number of (micro-)batches.
+        If you train by epochs, then it is epochs * (train_size //
         effective_batch_size), where effective_batch_size = batch_size *
         gradient_accumulation_steps (this reduces to epochs * (train_size //
         batch_size) only when gradient_accumulation_steps == 1). If you train
@@ -112,11 +112,11 @@ class DPKerasConfig:
       train_size: The number of training examples in the dataset. If you repeat
         the examples in your dataset iterator, it should be the number of
         training examples in the original dataset before repeating.
-      poisson_sampling_in_fit: Whether `fit()` should internally resample
-        random-access array inputs using Poisson sampling. Leave this as False
-        for backwards-compatible behavior or when the user supplies a dataset
-        iterator that already handles sampling.
-      noise_multiplier: The noise multiplier for the gradients. If None
+      poisson_sampling_in_fit: Whether ``fit()`` should internally resample
+        random-access array inputs using Poisson sampling. Leave this as
+        ``False`` for backwards-compatible behavior or when the user supplies a
+        dataset iterator that already handles sampling.
+      noise_multiplier: The noise multiplier for the gradients. If ``None``
         (recommended), the noise multiplier will be automatically calculated
         based on epsilon, delta, effective_batch_size, train_steps and
         train_size. The noise added to the average of gradients per total batch
@@ -124,23 +124,23 @@ class DPKerasConfig:
         effective_batch_size.
       rescale_to_unit_norm: Whether to rescale the gradients to unit norm.
         Simplifies learning-rate tuning, see https://arxiv.org/abs/2204.13650.
-      seed: The seed for the random number generator. If None, a random seed is
-        used. It must be an int64. Useful for reproducibility.
+      seed: The seed for the random number generator. If ``None``, a random seed
+        is used. It must be an int64. Useful for reproducibility.
       microbatch_size: The size of each microbatch. The device batch size will
         be split up into microbatches of this size and processed sequentially on
-        the forward/backward pass. By setting microbatch_size=batch_size, the
-        forward/backward pass is performed once on the entire batch using
-        jax.vmap. By setting microbatch_size=1, the forward/backward pass is
-        performed on each batch element individually, with the gradients
-        accumulated sequentially using jax.lax.scan. Setting to batch_size gives
-        the largest degree of parallelism, while setting to 1 gives the least
-        memory consumption. Any value in between can be used to trade-off memory
-        consumption vs. parallel computation. This parameter is similar to
-        `gradient_accumulation_steps`, but it works fully inside of device
-        memory under a single jitted function, while
-        `gradient_accumulation_steps` operates outside of the jit boundary. The
-        default value is None, which means that no microbatching is used, and is
-        equivalent to microbatch_size=batch_size.
+        the forward/backward pass. By setting ``microbatch_size=batch_size``,
+        the forward/backward pass is performed once on the entire batch using
+        :func:`jax.vmap`. By setting ``microbatch_size=1``, the forward/backward
+        pass is performed on each batch element individually, with the gradients
+        accumulated sequentially using :func:`jax.lax.scan`. Setting to
+        ``batch_size`` gives the largest degree of parallelism, while setting to
+        1 gives the least memory consumption. Any value in between can be used
+        to trade-off memory consumption vs. parallel computation. This parameter
+        is similar to ``gradient_accumulation_steps``, but it works fully inside
+        of device memory under a single jitted function, while
+        ``gradient_accumulation_steps`` operates outside of the jit boundary.
+        The default value is ``None``, which means that no microbatching is
+        used, and is equivalent to ``microbatch_size=batch_size``.
   """
 
   epsilon: float
@@ -163,7 +163,7 @@ class DPKerasConfig:
   def effective_batch_size(self) -> int:
     """The effective batch size which is used for the model update.
 
-    It equals to batch_size * gradient_accumulation_steps.
+    It equals ``batch_size * gradient_accumulation_steps``.
     """
     return self.batch_size * self.gradient_accumulation_steps
 
@@ -247,7 +247,7 @@ class DPKerasConfig:
         )
       except ValueError as e:
         raise ValueError(
-            'Value error occured while calculating epsilon based on the'
+            'Value error occurred while calculating epsilon based on the'
             f' provided {self.noise_multiplier=}. Maybe the noise multiplier is'
             f' too small? Original error: {e}'
         ) from e
@@ -275,7 +275,8 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
 
   Args:
     model: The Keras model to add DP-SGD training to.
-    params: The parameters for DP-SGD training.
+    params: The :class:`~jax_privacy.keras_api.DPKerasConfig` parameters for
+      DP-SGD training.
 
   Returns:
     The input model with overloaded methods for DP-SGD training.
@@ -305,7 +306,7 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
     # _update_metrics_variables was extracted from train_step recently in
     # https://github.com/keras-team/keras/pull/20805/. Since in our train_step
     # we use it, we need to add it if it's not present. In the future, when
-    # will stop support old versions of Keras, we can remove this.
+    # we stop supporting old versions of Keras, we can remove this.
     model._update_metrics_variables = types.MethodType(  # pylint: disable=protected-access
         _update_metrics_variables, model
     )
@@ -315,11 +316,13 @@ def make_private(model: keras.Model, params: DPKerasConfig) -> keras.Model:
 def get_noise_multiplier(model: keras.Model) -> float:
   """Returns the noise multiplier used for DP-SGD training.
 
-  If the noise multiplier is not set in DPKerasConfig, this will calibrate it
-  once and cache the value on the model.
+  If the noise multiplier is not set in
+  :class:`~jax_privacy.keras_api.DPKerasConfig`, this will calibrate it once and
+  cache the value on the model.
 
   Args:
-    model: A Keras model previously wrapped with make_private().
+    model: A Keras model previously wrapped with
+      :func:`~jax_privacy.keras_api.make_private`.
 
   Returns:
     The configured or calibrated noise multiplier.

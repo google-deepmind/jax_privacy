@@ -451,7 +451,7 @@ class KerasApiE2ETest(parameterized.TestCase):
     """Verifies DP seq2seq fit across different dataset types (including dict).
 
     Input data: 32 samples of sequences of length 5. Vocabulary size 100.
-    Targets are token IDs modulo `num_classes`.
+    Targets are token IDs modulo ``num_classes``.
     Expectation: Model should learn this simple lookup relationship and achieve
     accuracy > 0.6.
 

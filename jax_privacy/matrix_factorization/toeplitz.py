@@ -48,15 +48,15 @@ def _reconcile(coef: jax.Array, n: int | None = None) -> tuple[jax.Array, int]:
 
   Args:
     coef: The nonzero coefficients of a lower-triangular Toeplitz matrix C, that
-      is, `coef` are the leading nonzero entries of C[:, 0]. C is of size n x n;
-      if len(coef) < n, the remaining coefficients are assumed to be zero. If
+      is, ``coef`` are the leading nonzero entries of C[:, 0]. C is of size n x
+      n; if len(coef) < n, the remaining coefficients are assumed to be zero. If
       len(coef) > n, then only the first n coefficients are used.
-    n: Optional, the size of the matrix C (see `coef` above). If None, the size
-      of the matrix is equal to the number of coefficients.
+    n: Optional, the size of the matrix C (see ``coef`` above). If None, the
+      size of the matrix is equal to the number of coefficients.
 
   Returns:
-    A tuple (coef, n) where n >= len(coef). If a non-None `n` keyword argument
-    was provided, then this function will return the same `n` value.
+    A tuple (coef, n) where n >= len(coef). If a non-None ``n`` keyword argument
+    was provided, then this function will return the same ``n`` value.
   """
   n = n or len(coef)
   coef = jnp.array(coef)[:n]  # Drop extra coefficients if needed.
@@ -73,38 +73,40 @@ def inverse_as_streaming_matrix(
     coef: jax.Array,
     column_normalize_for_n: int | None = None,
 ) -> streaming_matrix.StreamingMatrix:
-  """Create $C^{-1}$ as a StreamingMatrix object.
+  r"""Create :math:`C^{-1}` as a StreamingMatrix object.
 
-  If column_normalize_for_n is None, the returned object represents $C^{-1}$,
-  the inverse of an arbitrarily large banded Toeplitz matrix $C$ with
-  coefficients `coef`.
+  If ``column_normalize_for_n`` is ``None``, the returned object represents
+  :math:`C^{-1}`, the inverse of an arbitrarily large banded Toeplitz matrix
+  :math:`C` with coefficients ``coef``.
 
-  If column_normalize_for_n is finite, the returned object represents
-  $C^{-1}$, the inverse of a banded matrix $C$ of the given size n x n, formed
-  by taking the banded Toeplitz matrix with coefficients `coef` and re-scaling
-  each column so it has L2 norm 1.0. We recommend setting column_normalize_for_n
-  in centralized training scenarios where `n` is known in advance.
+  If ``column_normalize_for_n`` is finite, the returned object represents
+  :math:`C^{-1}`, the inverse of a banded matrix :math:`C` of the given size
+  :math:`n \times n`, formed by taking the banded Toeplitz matrix with
+  coefficients ``coef`` and re-scaling each column so it has :math:`L_2` norm
+  1.0. We recommend setting ``column_normalize_for_n`` in centralized training
+  scenarios where ``n`` is known in advance.
 
   Formal Guarantees:
-    * The maximum L2 norm of the strategy matrix $C$ is || coef ||_2 if
-      column_normalize_for_n is None, and 1.0 if it is not None.
-    * The strategy matrix $C$ corresponding to the returned noising matrix
-      $C^{-1}$ is b-banded, where b = coef.size.
+    * The maximum :math:`L_2` norm of the strategy matrix :math:`C` is
+      :math:`\|\text{coef}\|_2` if ``column_normalize_for_n`` is ``None``, and
+      1.0 if it is not ``None``.
+    * The strategy matrix :math:`C` corresponding to the returned noising matrix
+      :math:`C^{-1}` is :math:`b`-banded, where :math:`b = \text{coef.size}`.
 
   This implementation is based on Algorithm 9 from
-  https://arxiv.org/abs/2306.08153.
+  `Choquette-Choo et al. (2023) <https://arxiv.org/abs/2306.08153>`_
 
   Args:
     coef: The Toeplitz coefficients of the strategy.
     column_normalize_for_n: If given, the returned object represents the inverse
       of a *column-normalized* banded Toeplitz matrix of the given size.
       Otherwise, it represents the inverse of an ordinary banded Toeplitz
-      matrix. If not None, the supplied `coef` must have an L2 norm of 1.0
-      (otherwise, column normalization could change the sensitivity of the
-      implied $C$ matrix).
+      matrix. If not ``None``, the supplied ``coef`` must have an :math:`L_2`
+      norm of 1.0 (otherwise, column normalization could change the sensitivity
+      of the implied :math:`C` matrix).
 
   Returns:
-    A StreamingMatrix object representing $C^{-1}$.
+    A StreamingMatrix object representing :math:`C^{-1}`.
   """
   coef, _ = _reconcile(coef, column_normalize_for_n)
   bands = coef.shape[0]
@@ -134,38 +136,39 @@ def inverse_as_streaming_matrix(
 
 
 def optimal_max_error_strategy_coefs(n: int) -> jax.Array:
-  """Returns the coefs of the optimal Toeplitz strategy matrix C for max error.
+  # pylint: disable=line-too-long
+  r"""Returns the coefs of the optimal Toeplitz strategy matrix :math:`C` for max error.
 
   These coefficients were introduced by Fichtenberger, Henzinger, and Upadhyay
-  in "Constant Matters: Fine-grained Error Bound on Differentially Private
-  Continual Observation"
-  (https://proceedings.mlr.press/v202/fichtenberger23a/fichtenberger23a.pdf,
-  https://arxiv.org/pdf/2202.11205),
+  in `Constant Matters: Fine-grained Error Bound on Differentially Private
+  Continual Observation <https://arxiv.org/abs/2202.11205>`_,
   and proved to be optimal for max error under single participations by
   Dvijotham, McMahan, Pillutla, Steinke, and Thakurta in
   "Efficient and Near-Optimal Noise Generation for Streaming Differential
-  Privacy" (https://arxiv.org/abs/2404.16706).
+  Privacy" (`Dvijotham et al. (2024) <https://arxiv.org/abs/2404.16706>`_).
 
   Args:
     n: The number of coefficients to return.
 
   Returns:
-    The coefficients of the lower-triangular Toeplitz matrix C that
-    factorizes the prefix sum matrix A as A = C @ C.
+    The coefficients of the lower-triangular Toeplitz matrix :math:`C` that
+    factorizes the prefix sum matrix :math:`A` as :math:`A = C @ C`.
   """
   k = jnp.arange(n)
   return jnp.cumprod(((2 * k - 1) / (2 * k)).at[0].set(1))
 
 
 def optimal_max_error_noising_coefs(n: int) -> jax.Array:
-  """Returns the coefs of the optimal Toeplitz noise matrix for max error.
+  # pylint: disable=line-too-long
+  r"""Returns the coefs of the optimal Toeplitz noise matrix for max error.
 
   Args:
     n: The number of coefficients to return.
 
   Returns:
-    The coefficients of the lower-triangular Toeplitz matrix C^{-1} that
-    is the inverse of the matrix returned by `optimal_max_error_strategy_coefs`.
+    The coefficients of the lower-triangular Toeplitz matrix :math:`C^{-1}`
+    that is the inverse of the matrix returned by
+    :func:`~jax_privacy.matrix_factorization.toeplitz.optimal_max_error_strategy_coefs`.
   """
   # This factorization of A = B C where A is the prefix-sum matrix is symmetric,
   # in that C = B = A C^{-1}, so C^{-1} = A^{-1} C, where A^{-1}
@@ -177,7 +180,7 @@ def optimal_max_error_noising_coefs(n: int) -> jax.Array:
 def materialize_lower_triangular(
     coef: jax.Array, n: int | None = None
 ) -> jax.Array:
-  """Creates a lower-triangular Toeplitz matrix.
+  r"""Creates a lower-triangular Toeplitz matrix.
 
   Example: If `coef = [a, b, c]` and `n = 6`, then this method returns::
 
@@ -189,12 +192,13 @@ def materialize_lower_triangular(
     [0 0 0 c b a]
 
   Args:
-    coef: The nonzero coefficients of a lower-triangular Toeplitz matrix C, that
-      is, `coef` are the leading nonzero entries of C[:, 0]. C is of size n x n;
-      if len(coef) < n, the remaining coefficients are assumed to be zero. If
-      len(coef) > n, then only the first n coefficients are used.
-    n: Optional, the size of the matrix C (see `coef` above). If None, the size
-      of the matrix is equal to the number of coefficients.
+    coef: The nonzero coefficients of a lower-triangular Toeplitz matrix
+      :math:`C`, that is, ``coef`` are the leading nonzero entries of
+      :math:`C[:, 0]`. :math:`C` is of size :math:`n \times n`; if ``len(coef) <
+      n``, the remaining coefficients are assumed to be zero. If ``len(coef) >
+      n``, then only the first ``n`` coefficients are used.
+    n: Optional, the size of the matrix :math:`C` (see ``coef`` above). If
+      ``None``, the size of the matrix is equal to the number of coefficients.
 
   Returns:
     The lower-triangular Toeplitz matrix.
@@ -204,15 +208,17 @@ def materialize_lower_triangular(
 
 
 def solve_banded(coef: jax.Array, rhs: jax.Array) -> jax.Array:
-  """Solve the linear system T_{coef} x = rhs for x for Toeplitz matrix T.
+  # pylint: disable=line-too-long
+  r"""Solve the linear system :math:`T_{\text{coef}} x = \text{rhs}` for :math:`x` for Toeplitz matrix :math:`T`.
 
-  Specifically, T_{coef} is a lower triangular banded Toeplitz matrix.
+  Specifically, :math:`T_{\text{coef}}` is a lower triangular banded Toeplitz
+  matrix.
 
   Note we want to be able to back-propagate gradients through this function,
-  hence we cannot use scipy.linalg.solve_toeplitz.
+  hence we cannot use :func:`scipy.linalg.solve_toeplitz`.
 
-  Example: coef = [a, b, c], rhs = [1, 1, 1, 1, 1, 1], we solve the following
-  system for x::
+  Example: ``coef = [a, b, c]``, ``rhs = [1, 1, 1, 1, 1, 1]``, we solve the
+  following system for x::
 
     [a 0 0 0 0 0] [x_0]   [1]
     [b a 0 0 0 0] [x_1]   [1]
@@ -222,12 +228,13 @@ def solve_banded(coef: jax.Array, rhs: jax.Array) -> jax.Array:
     [0 0 0 c b a] [x_5]   [1]
 
   Args:
-    coef: The nonzero coefficients of a lower-triangular Toeplitz matrix C, that
-      is, `coef` are the leading nonzero entries of C[:, 0]. C is of size n x n
-      where n = len(rhs) (see below); if len(coef) < n, the remaining
-      coefficients are assumed to be zero. If len(coef) > n, then only the first
-      n coefficients are used.
-    rhs: The right hand side vector, of length `n`.
+    coef: The nonzero coefficients of a lower-triangular Toeplitz matrix
+      :math:`C`, that is, ``coef`` are the leading nonzero entries of
+      :math:`C[:, 0]`. :math:`C` is of size :math:`n \times n` where ``n =
+      len(rhs)`` (see below); if ``len(coef) < n``, the remaining coefficients
+      are assumed to be zero. If ``len(coef) > n``, then only the first ``n``
+      coefficients are used.
+    rhs: The right hand side vector, of length ``n``.
 
   Returns:
     The solution to the linear system Toeplitz(coef, n) x = rhs.
@@ -240,23 +247,24 @@ def multiply(
     rhs_coef: jax.Array,
     n: int | None = None,
 ) -> jax.Array:
-  """Computes the matrix product of two lower-triangular Toeplitz matrices.
+  r"""Computes the matrix product of two lower-triangular Toeplitz matrices.
 
   Args:
-    lhs_coef: The nonzero coefficients of a lower-triangular Toeplitz matrix L,
-      that is, `lhs_coef` are the leading nonzero entries of L[:, 0]. L is of
-      size n x n; if len(lhs_coef) < n, the remaining coefficients are assumed
-      to be zero. If len(lhs_coef) > n, then only the first n coefficients are
-      used.
-    rhs_coef: The nonzero coefficients of a lower-triangular Toeplitz matrix R,
-      under the same conventions as `lhs_coef`.
-    n: Optional, the size of the matrices L and R (see `coef` above). If None,
-      the size of the matrices is equal to the number of coefficients.
+    lhs_coef: The nonzero coefficients of a lower-triangular Toeplitz matrix
+      :math:`L`, that is, ``lhs_coef`` are the leading nonzero entries of
+      :math:`L[:, 0]`. :math:`L` is of size :math:`n \times n`; if
+      ``len(lhs_coef) < n``, the remaining coefficients are assumed to be zero.
+      If ``len(lhs_coef) > n``, then only the first ``n`` coefficients are used.
+    rhs_coef: The nonzero coefficients of a lower-triangular Toeplitz matrix
+      :math:`R`, under the same conventions as ``lhs_coef``.
+    n: Optional, the size of the matrices :math:`L` and :math:`R` (see ``coef``
+      above). If ``None``, the size of the matrices is equal to the number of
+      coefficients.
 
   Returns:
-    The coefficients of the lower-triangular Toeplitz matrix L @ R where
-    L = materialize_lower_triangular(lhs_coef, n) and
-    R = materialize_lower_triangular(rhs_coef, n).
+    The coefficients of the lower-triangular Toeplitz matrix :math:`LR` where
+    :math:`L = \text{materialize\_lower\_triangular}(\text{lhs\_coef}, n)` and
+    :math:`R = \text{materialize\_lower\_triangular}(\text{rhs\_coef}, n)`.
   """
   if n is None and len(lhs_coef) != len(rhs_coef):
     raise ValueError(
@@ -272,22 +280,22 @@ def multiply(
 
 
 def inverse_coef(coef: jax.Array, n: int | None = None) -> jax.Array:
-  """Finds the inverse coefficients of a lower-triangular Toeplitz matrix.
+  r"""Finds the inverse coefficients of a lower-triangular Toeplitz matrix.
 
-  If C is a lower-triangular Toeplitz matrix, then so is C^{-1}; this function
-  returns the Toeplitz coefficients of this inverse.
-
+  If :math:`C` is a lower-triangular Toeplitz matrix, then so is :math:`C^{-1}`;
+  this function returns the Toeplitz coefficients of this inverse.
 
   Args:
-    coef: The nonzero coefficients of a lower-triangular Toeplitz matrix C, that
-      is, `coef` are the leading nonzero entries of C[:, 0]. C is of size n x n;
-      if len(coef) < n, the remaining coefficients are assumed to be zero. If
-      len(coef) > n, then only the first n coefficients are used.
-    n: Optional, the size of the matrix C (see `coef` above). If None, the size
-      of the matrix is equal to the number of coefficients.
+    coef: The nonzero coefficients of a lower-triangular Toeplitz matrix
+      :math:`C`, that is, ``coef`` are the leading nonzero entries of
+      :math:`C[:, 0]`. :math:`C` is of size :math:`n \times n`; if ``len(coef) <
+      n``, the remaining coefficients are assumed to be zero. If ``len(coef) >
+      n``, then only the first ``n`` coefficients are used.
+    n: Optional, the size of the matrix :math:`C` (see ``coef`` above). If
+      ``None``, the size of the matrix is equal to the number of coefficients.
 
   Returns:
-    The Toeplitz coefficients of C^{-1}, of length n.
+    The Toeplitz coefficients of :math:`C^{-1}`, of length n.
   """
   coef, n = _reconcile(coef, n)
   return solve_banded(coef, jnp.zeros(n).at[0].set(1))
@@ -306,7 +314,7 @@ def minsep_sensitivity_squared(
     n: int,
     max_participations: int | None = None,
 ) -> jax.Array:
-  """Returns the sensitivity of the Toeplitz matrix.
+  r"""Returns the sensitivity of the Toeplitz matrix.
 
   With max_participations = 1 (and any min_sep, say min_sep = 1), this is the
   same as single participation.
@@ -321,23 +329,24 @@ def minsep_sensitivity_squared(
   published in https://arxiv.org/pdf/2405.13763, Theorem 2.
 
   Args:
-    strategy_coef: The nonzero coefficients of the Toeplitz matrix C used in the
-      matrix mechanism with factorization A = B C. That is, `coef` are the
-      leading nonzero entries of C[:, 0]. C is of size n x n; if len(coef) < n,
-      the remaining coefficients are assumed to be zero. If len(coef) > n, then
-      only the first n coefficients are used.
+    strategy_coef: The nonzero coefficients of the Toeplitz matrix :math:`C`
+      used in the matrix mechanism with factorization :math:`A = BC`. That is,
+      ``coef`` are the leading nonzero entries of :math:`C[:, 0]`. :math:`C` is
+      of size :math:`n \times n`; if ``len(coef) < n``, the remaining
+      coefficients are assumed to be zero. If ``len(coef) > n``, then only the
+      first ``n`` coefficients are used.
     min_sep: The minimum separation between two participation of a worst-case
-      client/sample. Note that we use the definition in [(Amplified) Banded
-      Matrix Factorization: A unified approach to private
-      training](https://arxiv.org/abs/2306.08153). For a user participating on
-      iteration $i$ and then again on iteration $j$,  the separation is $j -i$;
-      that is, a min_sep of 1 allows participation on every iteration.
-    n: The size of the matrix C (see `coef` above).
+      client/sample. Note that we use the definition in `Choquette-Choo et al.
+      (2023) <https://arxiv.org/abs/2306.08153>`_. For a user participating on
+      iteration :math:`i` and then again on iteration :math:`j`, the separation
+      is :math:`j - i`; that is, a ``min_sep`` of 1 allows participation on
+      every iteration.
+    n: The size of the matrix :math:`C` (see ``coef`` above).
     max_participations: The maximum participation of a worst-case user.
 
   Returns:
-    The sensitivity squared. This is exact when `strategy_coef` is non-negative
-    and non-increasing, and an upper bound otherwise.
+    The sensitivity squared. This is exact when ``strategy_coef`` is
+    non-negative and non-increasing, and an upper bound otherwise.
   """
   coef, n = _reconcile(strategy_coef, n)
 
@@ -380,7 +389,7 @@ def per_query_error(
   squared error is equal to the last iterate squared error, and might be more
   efficient to compute under jax transformations.
 
-  Exactly one of `strategy_coef` and `noising_coef` should be provided.
+  Exactly one of ``strategy_coef`` and ``noising_coef`` should be provided.
 
   Args:
     strategy_coef: Toeplitz coefficients of the strategy matrix.
@@ -389,8 +398,8 @@ def per_query_error(
       coefficient array).
     workload_coef: Toeplitz coefficients of the workload matrix. Defaults to the
       vector of 1s, corresponding to the prefix matrix. If this is longer than
-      `n`, the extra entries are ignored (even if `n` is inferred from the
-      length of the `strategy_coef` or `noising_coef`).
+      ``n``, the extra entries are ignored (even if ``n`` is inferred from the
+      length of the ``strategy_coef`` or ``noising_coef``).
 
   Returns:
     The expected per-query squared error, an array of length n.
@@ -423,25 +432,28 @@ def loss(
     n: int | None = None,
     reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
 ) -> jax.Array:
-  """Error of C on prefix workload under single participation.
+  r"""Error of :math:`C` on prefix workload under single participation.
 
   See Scaling up the Amplified Banded Matrix Factorization Mechanism for
-  Differentially Private ML (https://arxiv.org/abs/2405.15913) for details.
+  Differentially Private ML (`McKenna (2024)
+  <https://arxiv.org/abs/2405.15913>`_) for details.
 
   Args:
-    strategy_coef: The nonzero coefficients of the Toeplitz matrix C used in the
-      matrix mechanism with factorization A = B C. That is, `coef` are the
-      leading nonzero entries of C[:, 0]. C is of size n x n; if len(coef) < n,
-      the remaining coefficients are assumed to be zero. If len(coef) > n, then
-      only the first n coefficients are used.
-    n: Optional, the size of the matrix C (see `coef` above). If None, the size
-      of the matrix is equal to the number of coefficients.
+    strategy_coef: The nonzero coefficients of the Toeplitz matrix :math:`C`
+      used in the matrix mechanism with factorization :math:`A = BC`. That is,
+      ``coef`` are the leading nonzero entries of :math:`C[:, 0]`. :math:`C` is
+      of size :math:`n \times n`; if ``len(coef) < n``, the remaining
+      coefficients are assumed to be zero. If ``len(coef) > n``, then only the
+      first ``n`` coefficients are used.
+    n: Optional, the size of the matrix :math:`C` (see ``coef`` above). If
+      ``None``, the size of the matrix is equal to the number of coefficients.
     reduction_fn: A function that converts per query squared errors to a scalar.
-      Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
-      squared error (which is equivalent toor lambda v: v[-1] in this case).
+      Use ``jnp.mean`` to optimize mean-squared-error, ``jnp.max`` to optimize
+      max squared error (which is equivalent to ``lambda v: v[-1]`` in this
+      case).
 
   Returns:
-    The total squared error times sensitivity of the toeplitz C on the
+    The total squared error times sensitivity of the toeplitz :math:`C` on the
     prefix-sum workload under single participation.
   """
   # Special property of Toeplitz matrices: max error occurs on last iterate.
@@ -465,16 +477,18 @@ def optimize_banded_toeplitz(
 
   The banded toeplitz strategies produced by this function can be used for
   both the single-participation setting and the multi-participation setting,
-  (including both the `fixed_epoch_order` and `min_sep` participation schemas;
-  see README.md) as long as the (minimum) separation between contributions from
-  the same user is at least the number of bands provided.
-  See https://arxiv.org/abs/2306.08153 for more details.
+  (including both the ``fixed_epoch_order`` and ``min_sep`` participation
+  schemas; see README.md) as long as the (minimum) separation between
+  contributions from the same user is at least the number of bands provided.
+  See `Choquette-Choo et al. (2023) <https://arxiv.org/abs/2306.08153>`_ for
+  more details.
 
   If used with a different participation pattern (e.g., (k, b)-minsep where
   b is less than the number of bands, sensitivity can be computed post-hoc
-  using e.g. `toeplitz.minsep_sensitivity_squared`.  This should not be
-  necessary in centralized training regimes where the exact participation
-  pattern should be known in advance, however.
+  using e.g.
+  :func:`~jax_privacy.matrix_factorization.toeplitz.minsep_sensitivity_squared`.
+  This should not be necessary in centralized training regimes where the exact
+  participation pattern should be known in advance, however.
 
   Args:
     n: the number of iterations that defines the workload.
@@ -517,7 +531,7 @@ class _AmplifiedBandMFHelper:
   """A convenience class for building an amplified BandMF mechanism.
 
   This class is primarily used to implement
-  `optimize_banded_toeplitz_for_amplifications` below.
+  ``optimize_banded_toeplitz_for_amplifications`` below.
   """
 
   n: int
@@ -575,11 +589,15 @@ class _AmplifiedBandMFHelper:
     )
 
   def required_stddev(self, coef: jax.Array):
+    # pylint: disable=line-too-long
     """The stddev of the uncorrelated noise Z required.
 
     That is, passing this stddev to
-    `distributed_noise_generation.streaming_matrix_to_single_machine_privatizer`
-    should achieve the (epsilon, delta)-DP guarantee.
+    :func:`~jax_privacy.noise_addition.streaming_matrix_to_single_machine_privatizer`
+    in
+    :mod:`~jax_privacy.distributed_noise_generation` should achieve the
+    (epsilon, delta)-DP
+    guarantee.
 
     Args:
       coef: The coefficients of the banded Toeplitz matrix C.
@@ -609,23 +627,24 @@ class _AmplifiedBandMFHelper:
       max_workers: int | None = None,
       **optimizer_kwargs,
   ) -> list[dict[str, Any]]:
+    # pylint: disable=line-too-long
     """Computes the loss for each value in a list of possible bands.
 
     Args:
       bands_list: The list of possible bands to compute the loss for. If None,
-        all factors of `n` less than the maximum number of possible bands are
+        all factors of ``n`` less than the maximum number of possible bands are
         considered.
       max_workers: The maximum number of workers to use, passed to the
         ThreadPoolExecutor.
       **optimizer_kwargs: Keyword arguments passed to
-        `optimize_banded_toeplitz`.
+        :func:`~jax_privacy.matrix_factorization.toeplitz.optimize_banded_toeplitz`.
 
     Returns:
-      A list of dictionaries, one for each value in `bands_list`. Each
+      A list of dictionaries, one for each value in ``bands_list``. Each
       dictionary contains the following keys:
-        - `bands`: The number of bands.
-        - `coef`: The coefficients of the banded Toeplitz matrix C.
-        - `loss`: The loss of the estimate of the *average* prefix sum.
+        - ``bands``: The number of bands.
+        - ``coef``: The coefficients of the banded Toeplitz matrix C.
+        - ``loss``: The loss of the estimate of the *average* prefix sum.
     """
     assert 1 <= self.batch_size <= self.dataset_size
     if bands_list is None:
@@ -669,46 +688,51 @@ def optimize_coefs_for_amplifications(
     max_optimizer_steps: int = 250,
     reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
 ) -> tuple[jax.Array, float]:
+  # pylint: disable=line-too-long
   """Select num_bands (and coefs) to minimize loss subject to a privacy target.
 
-  Following Theorem 4 of https://arxiv.org/abs/2306.08153, this function
+  Following Theorem 4 of `Choquette-Choo et al. (2023)
+  <https://arxiv.org/abs/2306.08153>`_, this function
   (approximately) minimizes the loss_fn assuming privacy amplification under
   block-cyclic Poisson sampling (Algorithm 2 of
-  https://arxiv.org/abs/2306.08153). A smaller number of bands allows more
+  `Choquette-Choo et al. (2023)
+  <https://arxiv.org/abs/2306.08153>`_). A smaller
+  number of bands allows more
   benefit from amplification, while a larger number of bands allows more benefit
   from correlated noise.
 
   Notes:
-   - This function only optimizes over numbers of bands that evenly divide `n`,
-      as this is generally preferable. Hence, it is recommended to choose `n` so
-      it has well spaced factors; powers of 2 are particularly useful.
-   - This function delegates to `optimize_banded_toeplitz` to actually
-      optimize for the coefficients at a given number of bands. Hence, column
-      normalization is not directly supported, but the final returned strategy
-      can always be used with column normalization.
+   - This function only optimizes over numbers of bands that evenly divide
+     ``n``, as this is generally preferable. Hence, it is recommended to choose
+     ``n`` so it has well spaced factors; powers of 2 are particularly useful.
+   - This function delegates to
+     :func:`~jax_privacy.matrix_factorization.toeplitz.optimize_banded_toeplitz`
+     to actually optimize for the coefficients at a given number of bands.
+     Hence, column normalization is not directly supported, but the final
+     returned strategy can always be used with column normalization.
 
   Args:
     n: the number of iterations that defines the workload.
     dataset_size: The size of the dataset.
     expected_batch_size: The target batch size (so for example if we were
       Poisson sampling from the whole dataset, the sampling probability would be
-      `expected_batch_size / dataset_size`).
+      ``expected_batch_size / dataset_size``).
     epsilon: The privacy target is (epsilon, delta)-DP.
     delta: The privacy target is (epsilon, delta)-DP.
     max_optimizer_steps: The maximum number of LBFGS iterations, passed to
-      `optimize_banded_toeplitz`.
+      :func:`~jax_privacy.matrix_factorization.toeplitz.optimize_banded_toeplitz`.
     reduction_fn: A function that converts per query squared errors to a scalar.
       Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
       squared error, or lambda v: v[-1] to optimize last iterate squared error.
 
   Returns:
-    A tuple `(coefs, stddev)` where:
-      - `coefs` are the coefficients of a banded Toeplitz strategy; the number
+    A tuple ``(coefs, stddev)`` where:
+      - ``coefs`` are the coefficients of a banded Toeplitz strategy; the number
          of bands chosen is simply the length of the returned coefficients.
-      - `stddev` is the stddev of the uncorrelated noise Z required to achieve
+      - ``stddev`` is the stddev of the uncorrelated noise Z required to achieve
         the privacy target (that, is, passing this stddev to
-        `streaming_matrix_to_single_machine_privatizer` in
-        `distributed_noise_generation` should achieve the (epsilon, delta)-DP
+        ``streaming_matrix_to_single_machine_privatizer`` in
+        ``distributed_noise_generation`` should achieve the (epsilon, delta)-DP
         guarantee).
   """
   helper = _AmplifiedBandMFHelper(
@@ -723,17 +747,17 @@ def banded_inverse_square_root_noising_coefs(
     num_bands: int,
     workload_coef: jax.Array | None = None,
 ) -> jax.Array:
-  """Returns Toeplitz noising coefficients for the BISR factorization.
+  r"""Returns Toeplitz noising coefficients for the BISR factorization.
 
-  This computes the first `num_bands` coefficients of the lower-triangular
-  Toeplitz noising matrix $C^{-1}$ for the Banded Inverse Square Root (BISR)
-  factorization introduced in https://arxiv.org/pdf/2505.12128. If
-  `workload_coef` is not provided, this uses the default prefix-sum workload
-  with all-ones Toeplitz coefficients. If `workload_coef` is provided, then it
+  This computes the first ``num_bands`` coefficients of the lower-triangular
+  Toeplitz noising matrix :math:`C^{-1}` for the Banded Inverse Square Root
+  (BISR) factorization introduced in https://arxiv.org/pdf/2505.12128. If
+  ``workload_coef`` is not provided, this uses the default prefix-sum workload
+  with all-ones Toeplitz coefficients. If ``workload_coef`` is provided, then it
   is treated as the Toeplitz coefficients of the workload; this can encode
   workload families such as those induced by SGD with momentum and weight
   decay. In that case, this function computes Toeplitz coefficients of the
-  square root of the workload and then returns the first `num_bands`
+  square root of the workload and then returns the first ``num_bands``
   coefficients of its inverse.
 
   Args:
@@ -741,7 +765,8 @@ def banded_inverse_square_root_noising_coefs(
     workload_coef: Optional Toeplitz coefficients of the workload.
 
   Returns:
-    The coefficients of the lower-triangular Toeplitz noising matrix $C^{-1}$.
+    The coefficients of the lower-triangular Toeplitz noising matrix
+    :math:`C^{-1}`.
   """
   if workload_coef is None:
     return optimal_max_error_noising_coefs(num_bands)
@@ -764,34 +789,36 @@ def compute_banded_inverse_sensitivity_squared(
     max_participations: int | None = None,
     use_matrix_upper_bound: bool = False,
 ) -> jax.Array:
-  """Returns squared sensitivity for a banded inverse Toeplitz noising matrix.
+  r"""Returns squared sensitivity for a banded inverse Toeplitz noising matrix.
 
   This function takes Toeplitz coefficients of a lower-triangular noising
-  matrix $C^{-1}$, computes the implied strategy coefficients for $C$, and then
-  estimates the min-separation sensitivity of $C$.
+  matrix :math:`C^{-1}`, computes the implied strategy coefficients for
+  :math:`C`, and then estimates the min-separation sensitivity of :math:`C`.
 
   Tightness depends on the sign and monotonicity of the implied strategy
   coefficients. If the strategy coefficients are positive and
   non-increasing, this uses the closed-form Toeplitz sensitivity computation in
-  `minsep_sensitivity_squared`, which is exact.
+  :func:`~jax_privacy.matrix_factorization.toeplitz.minsep_sensitivity_squared`,
+  which is exact.
 
-  Otherwise, the behavior depends on `use_matrix_upper_bound`:
+  Otherwise, the behavior depends on ``use_matrix_upper_bound``:
 
-  - If False, the absolute strategy coefficients are projected onto the
+  - If ``False``, the absolute strategy coefficients are projected onto the
     smallest non-increasing majorant, and the resulting sequence is used to
     compute an upper bound. This bound is exact when the strategy coefficients
     are positive and decreasing, but may be looser when they are not
     non-increasing.
 
-  - If True, the Toeplitz matrix formed from the absolute strategy
+  - If ``True``, the Toeplitz matrix formed from the absolute strategy
     coefficients is materialized, and the generic sensitivity upper bound from
-    `sensitivity.py` is used instead. This is more computationally expensive,
-    but gives a tighter bound when the sequence is not non-increasing, and is
-    exact when the strategy coefficients are positive.
+    :mod:`~jax_privacy.matrix_factorization.sensitivity` is used instead. This
+    is more computationally expensive, but gives a tighter bound when the
+    sequence is not non-increasing, and is exact when the strategy coefficients
+    are positive.
 
   Args:
     n: Size of the implied Toeplitz matrix.
-    noising_coef: Toeplitz coefficients of the noising matrix $C^{-1}$.
+    noising_coef: Toeplitz coefficients of the noising matrix :math:`C^{-1}`.
     min_sep: Minimum separation between participations.
     max_participations: Optional cap on the number of participations.
     use_matrix_upper_bound: Whether to use the generic matrix-based upper bound
@@ -799,7 +826,8 @@ def compute_banded_inverse_sensitivity_squared(
       strategy coefficients are not non-increasing.
 
   Returns:
-    The squared b-min-separated sensitivity of the implied strategy matrix $C$.
+    The squared b-min-separated sensitivity of the implied strategy matrix
+    :math:`C`.
   """
   strategy_coef = inverse_coef(noising_coef, n)
 
@@ -834,14 +862,15 @@ def optimize_banded_inverse_toeplitz(
     max_optimizer_steps: int = 1000,
     reduction_fn: Callable[[jax.Array], jax.Array] = jnp.mean,
 ) -> jax.Array:
-  """Optimize over banded inverse Toeplitz noising matrices for BandInvMF.
+  # pylint: disable=line-too-long
+  r"""Optimize over banded inverse Toeplitz noising matrices for BandInvMF.
 
   This function optimizes directly over the Toeplitz coefficients of the
-  lower-triangular noising matrix $C^{-1}$ for a Toeplitz workload, following
-  the BandInvMF construction introduced in
+  lower-triangular noising matrix :math:`C^{-1}` for a Toeplitz workload,
+  following the BandInvMF construction introduced in
   https://arxiv.org/pdf/2505.12128. The objective is the reduced per-query
-  squared error on the induced workload times the squared `min_sep`
-  sensitivity of the implied strategy matrix $C$.
+  squared error on the induced workload times the squared ``min_sep``
+  sensitivity of the implied strategy matrix :math:`C`.
 
   Args:
     n: The number of iterations that defines the workload.
@@ -849,24 +878,24 @@ def optimize_banded_inverse_toeplitz(
     num_bands: The number of Toeplitz coefficients of the noising matrix to
       optimize, including the diagonal.
     noising_coef: Optional initialization for the noising coefficients. If not
-      provided, initializes from `strategy_coef` if given, otherwise from
-      `banded_inverse_square_root_noising_coefs(workload_coef=...)`. If longer
-      than `num_bands`, the extra coefficients are ignored.
+      provided, initializes from ``strategy_coef`` if given, otherwise from
+      :func:`~jax_privacy.matrix_factorization.toeplitz.banded_inverse_square_root_noising_coefs`.
+      If longer than ``num_bands``, the extra coefficients are ignored.
     strategy_coef: Optional initialization for the strategy coefficients. If
       provided, the corresponding noising coefficients are computed via
-      `inverse_coef`.
+      :func:`~jax_privacy.matrix_factorization.toeplitz.inverse_coef`.
     workload_coef: Optional Toeplitz coefficients of the workload. If not
       provided, the default prefix-sum workload of all ones is used.
     max_participations: Optional cap on the number of participations.
     max_optimizer_steps: The maximum number of L-BFGS iterations.
     reduction_fn: A function that converts per query squared errors to a scalar.
-      Use jnp.mean to optimize mean-squared-error, jnp.max to optimize max
-      squared error, or lambda v: v[-1] to optimize last iterate squared error.
-      Defaults to jnp.mean.
+      Use ``jnp.mean`` to optimize mean-squared-error, ``jnp.max`` to optimize
+      max squared error, or ``lambda v: v[-1]`` to optimize last iterate squared
+      error. Defaults to ``jnp.mean``.
 
   Returns:
     The optimized Toeplitz coefficients of the lower-triangular noising
-    matrix $C^{-1}$.
+    matrix :math:`C^{-1}`.
   """
   if workload_coef is None:
     workload_coef = jnp.ones(n)

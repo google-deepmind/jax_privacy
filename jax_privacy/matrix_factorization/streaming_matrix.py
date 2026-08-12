@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Definition of streamin matrix interface."""
+"""Definition of streaming matrix interface."""
 
 from __future__ import annotations
 
@@ -36,13 +36,15 @@ ShapePyTree = Any
 
 @dataclasses.dataclass(frozen=True)
 class StreamingMatrix(Generic[State]):
-  """A linear mapping x -> A x for a lower-triangular (streaming) A matrix.
+  # pylint: disable-next=line-too-long
+  r"""A linear mapping :math:`x \to Ax` for a lower-triangular (streaming) matrix :math:`A`.
 
-  Via the attributes / member functions `init_multiply` and `multiply_next`,
-  this class allows you to efficiently compute a linear mapping x -> A x
-  in streaming fashion (one element at a time). The precise meaning of the term
-  `efficiently` is implementation-dependent, with examples including constant
-  memory overhead, and / or without fully materializing A or x.
+  Via the attributes / member functions ``init_multiply`` and ``multiply_next``,
+  this class allows you to efficiently compute a linear mapping
+  :math:`x \to Ax` in streaming fashion (one element at a time). The precise
+  meaning of the term "efficiently" is implementation-dependent, with examples
+  including constant memory overhead, and / or without fully materializing
+  :math:`A` or :math:`x`.
 
   Example Usage:
     >>> A = prefix_sum()
@@ -58,16 +60,17 @@ class StreamingMatrix(Generic[State]):
     >>> print(jnp.cumsum(x))
     [ 1.  3.  6. 10.]
 
-  See the constructor docstring for a full description of `init_multiply` and
-  `multiply_next`.
+  See the constructor docstring for a full description of ``init_multiply`` and
+  ``multiply_next``.
 
-  Importantly, this design encodes the fact that Ax[i] may only depend on
-  x[i] and state captured from computing Ax[0], ..., Ax[i-1]. This is equivalent
-  to `A` having a lower-triangular matrix representation in the standard basis.
+  Importantly, this design encodes the fact that ``Ax[i]`` may only depend on
+  ``x[i]`` and state captured from computing ``Ax[0], ..., Ax[i-1]``. This is
+  equivalent to :math:`A` having a lower-triangular matrix representation in the
+  standard basis.
 
-  In general, `A` and `x` may both be infinite; thus we sidestep the
-  question of how many elements of `A x` one wishes to compute by assuming the
-  user provides a range.
+  In general, :math:`A` and :math:`x` may both be infinite; thus we sidestep the
+  question of how many elements of :math:`A x` one wishes to compute by
+  assuming the user provides a range.
 
   Attributes:
     init_multiply: A function that returns the initial state given the expected
@@ -89,9 +92,9 @@ class StreamingMatrix(Generic[State]):
   ) -> StreamingMatrix:
     """Construct a StreamingMatrix object from an implementation of init/next.
 
-    This class method expects the `init_multiply_fn` and `multiply_next_fn` to
-    be defined w.r.t. a single `jax.Array` input.  These implementations will
-    be "lifted" to operate on pytrees of arrays.
+    This class method expects the ``init_multiply_fn`` and ``multiply_next_fn``
+    to be defined w.r.t. a single ``jax.Array`` input. These implementations
+    will be "lifted" to operate on pytrees of arrays.
 
     Args:
       init_multiply_fn: a function that returns the initial state given the
@@ -100,7 +103,7 @@ class StreamingMatrix(Generic[State]):
         (next_input, current_state).
 
     Returns:
-      A StreamingMatrix that operates over PyTrees of `jax.Array` objects.
+      A StreamingMatrix that operates over PyTrees of ``jax.Array`` objects.
     """
 
     def tree_unzip(tree, treedef):
@@ -121,7 +124,8 @@ class StreamingMatrix(Generic[State]):
   def materialize(self, n: int) -> jax.Array:
     """A utility method to materialize this matrix as an n x n ndarray.
 
-    Note `n` needs to be a parameter, because a general `StreamingMatrix`
+    Note ``n`` needs to be a parameter, because a general
+    :class:`StreamingMatrix`
     can represent an infinite-dimensional matrix.
 
     NOTE: Primarily for debugging and testing implementations of init and next.
@@ -135,12 +139,13 @@ class StreamingMatrix(Generic[State]):
     return self @ jnp.eye(n)
 
   def row_norms_squared(self, n: int, scan_fn=jax.lax.scan) -> jax.Array:
-    """Computes the row-wise L2^2 norm of the matrix.
+    r"""Computes the row-wise :math:`L_2^2` norm of the matrix.
 
-    Given a StreamingMatrix B = A C^{-1}, this function computes the per-query
-    expected squared error of the factorization A = BC.  The expected total
-    squared error and the maximum expected squared error can be computed from
-    this vector via jnp.sum and jnp.max respectively.
+    Given a StreamingMatrix :math:`B = A C^{-1}`, this function computes the
+    per-query expected squared error of the factorization :math:`A = BC`. The
+    expected total squared error and the maximum expected squared error can be
+    computed from this vector via :func:`jax.numpy.sum` and
+    :func:`jax.numpy.max` respectively.
 
     This function consumes an optional scan_fn argument, which is primarily
     useful if you need to backpropagate through this function, in which case
@@ -163,7 +168,8 @@ class StreamingMatrix(Generic[State]):
       scan_fn: A function with the same signature as jax.lax.scan.
 
     Returns:
-      A vector of length n containing the row-wise L2^2 norm of the matrix.
+      A vector of length n containing the row-wise :math:`L_2^2` norm of the
+      matrix.
     """
     zero = jnp.zeros(n)
 
@@ -185,21 +191,21 @@ def scale_rows_and_columns(
     row_scale: jax.Array | None = None,
     col_scale: jax.Array | None = None,
 ) -> StreamingMatrix:
-  """Returns a new `StreamingMatrix` with scaled rows and/or cols.
+  """Returns a new :class:`StreamingMatrix` with scaled rows and/or cols.
 
   Assumes row_scale and col_scale can be indexed into for as many outputs
-  are generated from matrix. If `jax.Array` objects are used, note
+  are generated from matrix. If ``jax.Array`` objects are used, note
   row_scale[i] for i > len(row_scale) will return row_scale[-1].
 
   Args:
     matrix: The matrix to wrap.
-    row_scale: Multipliers to apply to the rows of `matrix`, equivalent to
-      jnp.diag(row_scale) @ matrix.
-    col_scale: Multipliers to apply to the columns of `matrix`, equivalent to
-      matrix @ jnp.diag(col_scale).
+    row_scale: Multipliers to apply to the rows of ``matrix``, equivalent to
+      ``jnp.diag(row_scale) @ matrix``.
+    col_scale: Multipliers to apply to the columns of ``matrix``, equivalent to
+      ``matrix @ jnp.diag(col_scale)``.
 
   Returns:
-    The wrapped `StreamingMatrix`.
+    The wrapped :class:`StreamingMatrix`.
   """
   result = matrix
   if row_scale is not None:
@@ -210,7 +216,7 @@ def scale_rows_and_columns(
 
 
 def multiply_array(A: StreamingMatrix, x: jax.Array) -> jax.Array:
-  """Computes the matrix-vector product A x."""
+  r"""Computes the matrix-vector product :math:`Ax`."""
 
   # Reverse (value, state) -> (state, value) for scan.
   def f(state, value):
@@ -225,14 +231,14 @@ def multiply_streaming_matrices(
     A: StreamingMatrix,
     B: StreamingMatrix,
 ) -> StreamingMatrix:
-  """Multiply a StreamingMatrix by another StreamingMatrix.
+  r"""Multiply a StreamingMatrix by another StreamingMatrix.
 
   Args:
     A: The left hand side matrix
     B: The right hand side matrix
 
   Returns:
-    A B, represented as another StreamingMatrix.
+    :math:`AB`, represented as another StreamingMatrix.
   """
 
   def init_multiply(abstract_value):
@@ -269,7 +275,7 @@ def diagonal(diag: jax.Array) -> StreamingMatrix:
   """An implicit representation of a diagonal matrix.
 
   The returned StreamingMatrix represents an infinitely large diagonal matrix.
-  The diagonal elements are taken from the provided array `diag` up to row
+  The diagonal elements are taken from the provided array ``diag`` up to row
   n = diag.size, and is equal to diag[-1] beyond that point.
 
   Args:

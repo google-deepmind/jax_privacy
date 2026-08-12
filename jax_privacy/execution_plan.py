@@ -16,12 +16,13 @@
 
 # Writing General-Purpose DP Training Loops via DPExecutionPlan
 
-This module introduces the `DPExecutionPlan`, an object designed to encapsulate
-the core components of a differentially private (DP) mechanism. The primary aim
-is to simplify the process of constructing and applying DP mechanisms by
-packaging these components cohesively. A key benefit is the assurance that, when
-used correctly, the combination of these components will achieve the stated DP
-properties.
+This module introduces the :class:`~jax_privacy.execution_plan.DPExecutionPlan`,
+an object designed to encapsulate the core components of a differentially
+private (DP) mechanism.
+The primary aim is to simplify the process of constructing and applying DP
+mechanisms by packaging these components cohesively. A key benefit is the
+assurance that, when used correctly, the combination of these components will
+achieve the stated DP properties.
 
 The design is framework-agnostic, specifying the essential pillars of a DP
 mechanism—such as batch selection and noise addition—without tightly coupling
@@ -36,7 +37,7 @@ used selectively. For instance, a researcher might choose to use only the noise
 addition component if their dataset doesn't support the efficient random access
 required by the batch selection strategy. Though this might invalidate the
 formal DP guarantee, it can still be valuable for research or when a heuristic
-quantification of privacy is acceptable. Ultimately, `DPExecutionPlan` aims to
+quantification of privacy is acceptable. Ultimately, ``DPExecutionPlan`` aims to
 free users to concentrate on their training pipeline setup, rather than on the
 intricacies of correctly assembling DP components to achieve a desired privacy
 guarantee.
@@ -45,8 +46,9 @@ guarantee.
 
 Constructors for these plans are highly configurable, offering access to the
 full capabilities of the underlying components while also providing sensible
-defaults. Our primary entry point is currently `BandMFConfig`, although more
-will become available in the future.
+defaults. Our primary entry point is currently
+:class:`~jax_privacy.execution_plan.BandMFConfig`, although more will become
+available in the future.
 """
 
 from __future__ import annotations
@@ -109,7 +111,7 @@ class DPExecutionPlan:
   A DP execution plan consists of a collection of components which when used
   together in the expected manner determine the DP guarantee, along with a
   DpEvent which precisely quantifies it. If constructed via one of the
-  ExecutionPlanConfig classes defined in this module, then the `dp_event` can
+  ExecutionPlanConfig classes defined in this module, then the ``dp_event`` can
   be trusted as having been formally verified by the JAX Privacy authors.
 
   In pseudo-code, the components of this dataclass should roughly be used as
@@ -135,14 +137,15 @@ class DPExecutionPlan:
   If possible, we recommend coupling the batch selection, clipped aggregation,
   and noise addition components as tightly as possible to ensure sensitive
   objects are not intercepted and used unintentionally. For example, it is
-  critical that no modification is applied to the `clipped_grad_sum` (such as
+  critical that no modification is applied to the ``clipped_grad_sum`` (such as
   scaling) before the noise_addition_transform is applied, as such a
-  modifications could invalidate the DP guarantee because the noise is
-  calibrated based on the sensivity of the clipped_grad_sum.
+  modification could invalidate the DP guarantee because the noise is
+  calibrated based on the sensitivity of the clipped_grad_sum.
 
   Attributes:
-    clipped_grad: A function with a similar signature to jax.value_and_grad, but
-      computes a sum of per-example clipped gradients.
+    clipped_grad: A function with a similar signature to
+      :func:`jax.value_and_grad`, but computes a sum of per-example clipped
+      gradients.
     batch_selection_strategy: Determines how batches are formed in each
       iteration.
     noise_addition_transform: Stateful transformation that adds noise to clipped
@@ -162,12 +165,15 @@ class DPExecutionPlan:
 class ExecutionPlanConfig(Protocol):
   """Protocol for configs that build a ``DPExecutionPlan``.
 
-  Any config that produces a :class:`DPExecutionPlan` from
-  :class:`PerformanceFlags` satisfies this protocol (e.g.
-  :class:`BandMFConfig`).
+  Any config that produces a
+  :class:`~jax_privacy.execution_plan.DPExecutionPlan` from
+  :class:`~jax_privacy.execution_plan.PerformanceFlags` satisfies this protocol
+  (e.g.
+  :class:`~jax_privacy.execution_plan.BandMFConfig`).
   Consuming a config rather than a pre-built plan lets callers read
   performance-only settings (such as the aggregation ``dtype``) directly from
-  the :class:`PerformanceFlags` without materializing the plan.
+  the :class:`~jax_privacy.execution_plan.PerformanceFlags` without
+  materializing the plan.
   """
 
   def make(
@@ -181,9 +187,9 @@ class BandMFConfig:
   """Configuration for an Amplified BandMF-based DPExecutionPlan.
 
   This config is designed to be fully serializable, defined in terms of simple
-  types. The config can be created with or without a noise_multiplier. If
-  created without one, call `calibrate()` to obtain a new config with a
-  noise_multiplier calibrated to a target (epsilon, delta) guarantee.
+  types. The config can be created with or without a ``noise_multiplier``. If
+  created without one, call ``calibrate()`` to obtain a new config with a
+  ``noise_multiplier`` calibrated to a target (epsilon, delta) guarantee.
 
   Example Usage (Calibrate from epsilon/delta):
     >>> config = BandMFConfig.default(  # doctest: +SKIP
@@ -202,34 +208,37 @@ class BandMFConfig:
     ...   iterations=1000, expected_participations=400,
     ... ).calibrate(epsilon=1.0, delta=1e-5)
 
-  References: https://arxiv.org/abs/2306.08153 and
-  https://arxiv.org/abs/2405.15913
+  References: `Choquette-Choo et al. (2023) <https://arxiv.org/abs/2306.08153>`_
+  and `McKenna (2024) <https://arxiv.org/abs/2405.15913>`_.
 
   Attributes:
     iterations: The number of iterations the mechanism is defined for. Tip: Set
-      this to be a multiple of num_bands for the best utility.
+      this to be a multiple of ``num_bands`` for the best utility.
     expected_participations: The expected number of times each example
       participates across all iterations. The Poisson sampling probability is
-      derived as `expected_participations * num_bands / iterations`.
+      derived as ``expected_participations * num_bands / iterations``.
     strategy: The Toeplitz coefficients of the BandMF strategy matrix.
     noise_multiplier: The ratio of noise standard deviation to the query
       sensitivity. The actual noise stddev is determined by this value, the
       query sensitivity, and the strategy matrix column norm. If not set, use
-      `calibrate()` to automatically determine it from target (epsilon, delta)
+      ``calibrate()`` to automatically determine it from target (epsilon, delta)
       privacy parameters.
     l2_clip_norm: The maximum L2 norm of the per-example gradients.
-    rescale_to_unit_norm: Divide the clipped gradient by the l2_clip_norm.
+    rescale_to_unit_norm: Divide the clipped gradient by the ``l2_clip_norm``.
     normalize_by: Divide the sum-of-clipped gradients by this value.
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
-      size to truncate to. If set, the plan.batch_selection_strategy will always
-      return batches of size at most truncated_batch_size, and accounting will
-      be based on truncated Poisson sampling (http://arxiv.org/html/2508.15089).
+      size to truncate to. If set, the ``plan.batch_selection_strategy`` will
+      always return batches of size at most ``truncated_batch_size``, and
+      accounting will be based on truncated Poisson sampling (`Choquette-Choo et
+      al. (2025) <https://arxiv.org/abs/2508.15089>`_).
     num_examples: The number of examples in the dataset. Required when
-      truncated_batch_size is set. Only set when the dataset size is considered
-      public, non-sensitive information (e.g., when using zero-out adjacency
-      rather than add-remove). If specified, the dataset will be partitioned
-      using `batch_selection.PartitionType.EQUAL_SPLIT`, and otherwise it will
-      be partitioned using `batch_selection.PartitionType.INDEPENDENT`.
+      ``truncated_batch_size`` is set. Only set when the dataset size is
+      considered public, non-sensitive information (e.g., when using zero-out
+      adjacency rather than add-remove). If specified, the dataset will be
+      partitioned using
+      :attr:`~jax_privacy.batch_selection.PartitionType.EQUAL_SPLIT`, and
+      otherwise it will be partitioned using
+      :attr:`~jax_privacy.batch_selection.PartitionType.INDEPENDENT`.
     column_normalize: Whether to column-normalize the strategy matrix.
   """
 
@@ -274,10 +283,10 @@ class BandMFConfig:
   def rmse(self) -> float:
     """Root mean squared error of the mechanism on the prefix-sum workload.
 
-    Requires the config to be calibrated (noise_multiplier must be set).
-    The strategy's column norm is already accounted for via noise_multiplier
-    (the actual noise stddev is noise_multiplier * column_norm), so we do not
-    normalize here. This method normalizes by ``expected_participations``
+    Requires the config to be calibrated (``noise_multiplier`` must be set).
+    The strategy's column norm is already accounted for via ``noise_multiplier``
+    (the actual noise stddev is ``noise_multiplier * column_norm``), so we do
+    not normalize here. This method normalizes by ``expected_participations``
     so that you can fairly compare RMSE across instances with different
     expected participations.
 
@@ -285,7 +294,7 @@ class BandMFConfig:
       The RMSE per query, in units of the clipped gradient.
 
     Raises:
-      ValueError: If noise_multiplier has not been set.
+      ValueError: If ``noise_multiplier`` has not been set.
     """
     self._check_calibrated()
     strategy = np.asarray(self.strategy)
@@ -346,18 +355,19 @@ class BandMFConfig:
       tol: float | None = None,
       accountant_fn: AccountantFn = dp_accounting.pld.PLDAccountant,
   ) -> BandMFConfig:
-    """Returns a new config with a calibrated noise_multiplier.
+    """Returns a new config with a calibrated ``noise_multiplier``.
 
     Args:
       epsilon: The target privacy budget.
       delta: The target privacy failure probability.
-      tol: The tolerance in noise_multiplier space for the calibration binary
-        search. Defaults to 1e-6 if not specified.
+      tol: The tolerance in ``noise_multiplier`` space for the calibration
+        binary search. Defaults to 1e-6 if not specified.
       accountant_fn: A function that returns a fresh privacy accountant used for
-        calibration given a neighboring relation. Defaults to PLDAccountant.
+        calibration given a neighboring relation. Defaults to
+        :class:`~dp_accounting.pld.PLDAccountant`.
 
     Returns:
-      A new BandMFConfig with calibrated noise_multiplier.
+      A new BandMFConfig with calibrated ``noise_multiplier``.
     """
     noise_multiplier = dp_accounting.calibrate_dp_mechanism(
         make_fresh_accountant=lambda: accountant_fn(self._neighboring_relation),
@@ -379,7 +389,7 @@ class BandMFConfig:
   ) -> BandMFConfig:
     """Returns a BandMFConfig with an RMSE-optimized strategy.
 
-    See BandMFConfig for the full list of keyword arguments.
+    See ``BandMFConfig`` for the full list of keyword arguments.
 
     Args:
       num_bands: The number of bands in the strategy matrix.
@@ -388,7 +398,7 @@ class BandMFConfig:
         participates across all iterations.
       strategy_optimization_steps: The number of optimization steps to use for
         the strategy matrix.
-      **kwargs: Keyword arguments to pass to BandMFConfig.
+      **kwargs: Keyword arguments to pass to ``BandMFConfig``.
 
     Returns:
       A BandMFConfig with an RMSE-optimized strategy.
@@ -413,15 +423,15 @@ class BandMFConfig:
 
     Args:
       performance_flags: Optional performance flags that control implementation
-        details such as dtype, sharding, and microbatching. If None, default
-        values are used for all performance flags.
+        details such as ``dtype``, ``sharding``, and ``microbatching``. If
+        ``None``, default values are used for all performance flags.
 
     Returns:
       A DPExecutionPlan configured from this config and the given performance
       flags.
 
     Raises:
-      ValueError: If noise_multiplier has not been set.
+      ValueError: If ``noise_multiplier`` has not been set.
     """
     self._check_calibrated()
     if performance_flags is None:

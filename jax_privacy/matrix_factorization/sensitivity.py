@@ -45,12 +45,12 @@ def minsep_true_max_participations(
 ) -> int:
   """Returns the maximum number of participations for a min_sep pattern.
 
-  This might be less than the `max_participations` limit (if it is given)
-  because `n` is too small.
+  This might be less than the ``max_participations`` limit (if it is given)
+  because ``n`` is too small.
 
   Args:
     n: The number of rounds.
-    min_sep: The minimum separation between participations, where min_sep=1
+    min_sep: The minimum separation between participations, where ``min_sep=1``
       means adjacent indices can be selected.
     max_participations: The maximum number of participations.
 
@@ -71,26 +71,29 @@ def minsep_true_max_participations(
 
 def max_participation_for_linear_fn(
     x: jnp.ndarray, min_sep: int = 1, max_participations: int | None = None
-) -> float:
-  r"""Returns max_u <x, u>, where u respects the given participation pattern.
+) -> jnp.ndarray:
+  # pylint: disable-next=line-too-long
+  r"""Returns :math:`\max_u \langle x, u \rangle`, where u respects the given participation pattern.
 
-  The vector `u` is represented by a set of indices that satisfy min_sep
-  and max_participations. Note that the signs of the entries in x matter
-  as we find max_u np.dot(u, x). Because the optimization is in
-  one dimension, we can solve using a dynamic program with running time
-  O(len(x) * (max_participations + 1)).
+  The vector ``u`` is represented by a set of indices that satisfy ``min_sep``
+  and ``max_participations``. Note that the signs of the entries in ``x`` matter
+  as we find :math:`\max_u \langle u, x \rangle`. Because the optimization is
+  in one dimension, we can solve using a dynamic program with running time
+  :math:`O(\operatorname{len}(x) \cdot (\text{max\_participations} + 1))`.
 
-  Reference: See
-  [(Amplified) Banded Matrix Factorization: A unified approach to private
-  training](https://arxiv.org/abs/2306.08153), Algorithm  3 (VecSens).
+  Reference: See `(Amplified) Banded Matrix Factorization: A unified approach
+  to private training <https://arxiv.org/abs/2306.08153>`_, Algorithm 3
+  (VecSens).
 
   Arguments:
     x: A vector of values to optimize over.
-    min_sep: Minimum separation between selected indices, e.g., if i and j are
-      selected we must have :math:`|i - j| \ge` min_sep, so e.g. min_sep=1 means
-      adjacent indices can be selected.
-    max_participations: Optional, the maximum number of participations. If None,
-      then max_participations is determined from len(x) and min_sep.
+    min_sep: Minimum separation between selected indices, e.g., if :math:`i` and
+      :math:`j` are selected we must have :math:`|i - j| \ge
+      \text{min}_\text{sep}`, so e.g. ``min_sep=1`` means adjacent indices can
+      be selected.
+    max_participations: Optional, the maximum number of participations. If
+      ``None``, then ``max_participations`` is determined from ``len(x)`` and
+      ``min_sep``.
 
   Returns:
     The optimal value.
@@ -116,7 +119,7 @@ def max_participation_for_linear_fn(
     # Accumulate max right-to-left: instead of choosing i, we can
     # always elect to choose some value > i.
     f = jax.lax.cummax(f, reverse=True)
-  return f[0]  # pytype: disable=bad-return-type  # jnp-type
+  return f[0]
 
 
 def banded_lower_triangular_mask(n: int, num_bands: int) -> jnp.ndarray:
@@ -162,21 +165,20 @@ def get_min_sep_sensitivity_upper_bound_for_X(
   get_sensitivity_banded_for_X, but this function requires O(n^2 k) time while
   get_sensitivity_banded_for_X requires O(n^2 + n k) time.
 
-  Reference: See
-  [(Amplified) Banded Matrix Factorization: A unified approach to private
-  training](https://arxiv.org/abs/2306.08153), Algorithm 4 (Efficient
-  sensitivity upper bound for b-min-sep-participation).
+  Reference: See `Choquette-Choo et al. (2023)
+  <https://arxiv.org/abs/2306.08153>`_.
 
   Args:
     X: The Gram matrix of the encoder matrix, C.T @ C.
     min_sep: Minimum separation between the participations of the same user. For
-      example, min_sep = 1 means the same user could participate on two
+      example, ``min_sep = 1`` means the same user could participate on two
       consecutive rounds.
-    max_participations: Optional, the maximum number of participations. If None,
-      then max_participations is determined from n.shape[0] and min_sep.
+    max_participations: Optional, the maximum number of participations. If
+      ``None``, then ``max_participations`` is determined from ``n.shape[0]``
+      and ``min_sep``.
 
   Returns:
-    The L2 sensitivity of C satisfying C^T C = X.
+    The L2 sensitivity of :math:`C` satisfying :math:`C^T C = X`.
   """
   checks.check(X=X)
   row_max = jax.vmap(
@@ -205,28 +207,30 @@ def get_sensitivity_banded_for_X(
     min_sep: int = 1,
     max_participations: int | None = None,
 ) -> float:
-  """Computes the sensitivity of an X.
+  r"""Computes the sensitivity of an X.
 
   This method requires (and checks) that the number of bands is less than
-  or equal to min_sep + 1.
+  or equal to ``min_sep + 1``.
 
-  Note: The C from which x is derived being lower-triangular with at most
-  min_sep non-zero bands including the main diagonal is a sufficient but not
-  necessary condition for this calculation to hold. All that is necessary is
-  that for two columns i and j with :math:`|i - j| >` min_sep are orthogonal,
-  np.dot(h[:, i], h[:, j]) == 0.
+  Note: The :math:`C` from which :math:`X` is derived being lower-triangular
+  with at most ``min_sep`` non-zero bands including the main diagonal is a
+  sufficient but not necessary condition for this calculation to hold. All that
+  is necessary is that for two columns :math:`i` and :math:`j` with
+  :math:`|i - j| > \text{min}_\text{sep}` are orthogonal,
+  ``np.dot(h[:, i], h[:, j]) == 0``.
 
   Args:
     X: The Gram matrix of the encoder matrix, C.T @ C, which must be
       min_sep-banded (see README.md).
     min_sep: Minimum separation between the participations of the same user. For
-      example, min_sep = 1 means the same user could participate on two
+      example, ``min_sep = 1`` means the same user could participate on two
       consecutive rounds.
-    max_participations: Optional, the maximum number of participations. If None,
-      then max_participations is determined from n.shape[0] and min_sep.
+    max_participations: Optional, the maximum number of participations. If
+      ``None``, then ``max_participations`` is determined from ``n.shape[0]``
+      and ``min_sep``.
 
   Returns:
-    The L2 sensitivity of C satisfying C^T C = X.
+    The L2 sensitivity of :math:`C` satisfying :math:`C^T C = X`.
   """
   checks.check(X=X)
   n = X.shape[0]
@@ -264,12 +268,11 @@ def fixed_epoch_sensitivity_for_X(X: jnp.ndarray, epochs: int) -> float:
   Note that X can contain negative entries, which are handled essentially
   by taking an absolute value of the necessary entries.
 
-  Reference: See [Multi-Epoch Matrix Factorization Mechanisms for Private
-  Machine Learning](https://arxiv.org/abs/2211.06530), Section 2, and
-  [(Amplified) Banded Matrix Factorization: A unified approach to private
-  training](https://arxiv.org/abs/2306.08153), Eq. (5) for the absolute-value
-  trick. Essentially, this implementation applies Eq. (5) to the `b = n / k`
-  possible participation patterns under (k, b)-fixed-epoch participation.
+  Reference: See `Choquette-Choo et al. (2022)
+  <https://arxiv.org/abs/2211.06530>`_, and `Choquette-Choo et al. (2023)
+  <https://arxiv.org/abs/2306.08153>`_ for the absolute-value trick.
+  Essentially, this implementation applies Eq. (5) to the ``b = n / k`` possible
+  participation patterns under (k, b)-fixed-epoch participation.
 
   Args:
     X: the Gram matrix of the encoder, which may contain negative entries.
@@ -289,7 +292,7 @@ def fixed_epoch_sensitivity_for_X(X: jnp.ndarray, epochs: int) -> float:
   rounds_per_epoch = X.shape[0] // epochs
   submatrix_size = int(X.shape[0] // rounds_per_epoch)
 
-  # The below is a peculiar way of indexing into into an array. However, this is
+  # The below is a peculiar way of indexing into an array. However, this is
   # needed because we require a static shape of X[x, y] to be known at all times
   # inside the function `submatrix_squared_sensitivity` below.
   all_indices = jnp.arange(0, X.shape[0], dtype=jnp.int64)

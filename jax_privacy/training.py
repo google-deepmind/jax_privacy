@@ -14,10 +14,10 @@
 
 """End-to-end training loop for differentially private training.
 
-This module provides :class:`DPTrainer`, a class that encapsulates the
-static configuration for a DP training loop (execution plan, loss function,
-optimizer) and exposes a reusable ``train_step`` that can be independently
-JIT-compiled or ahead-of-time compiled.
+This module provides :class:`~jax_privacy.training.DPTrainer`, a class that
+encapsulates the static configuration for a DP training loop (execution plan,
+loss function, optimizer) and exposes a reusable ``train_step`` that can be
+independently JIT-compiled or ahead-of-time compiled.
 """
 
 from collections.abc import Callable
@@ -67,7 +67,7 @@ class LossFn(Protocol):
 
   Any additional context the loss function needs — frozen parameters,
   model configuration, label smoothing constants, etc. — should be closed
-  over before passing the function to :class:`DPTrainer`::
+  over before passing the function to :class:`~jax_privacy.training.DPTrainer`::
 
       frozen = model.freeze(some_params)
       def my_loss(params, data, prng):
@@ -153,18 +153,22 @@ class DPTrainer:
   should reshard its inputs using sharding-in-types.
 
   Attributes:
-    config: An :class:`ExecutionPlanConfig` (e.g. ``BandMFConfig``) specifying
-      the DP mechanism.
+    config: An :class:`~jax_privacy.execution_plan.ExecutionPlanConfig` (e.g.
+      :class:`~jax_privacy.execution_plan.BandMFConfig`) specifying the DP
+      mechanism.
     performance_flags: Performance-only flags (numerical precision, sharding,
       memory/compute trade-offs) that do not affect the privacy guarantee.
-    loss_fn: The per-example loss function.  See :class:`LossFn`.
-    optimizer: An ``AugmentedGradientTransformation`` or a plain
-      ``optax.GradientTransformation``.
+    loss_fn: The per-example loss function.  See
+      :class:`~jax_privacy.training.LossFn`.
+    optimizer: An
+      :class:`~jax_privacy.optimizers.AugmentedGradientTransformation` or a
+      plain :class:`optax.GradientTransformation`.
     compilation_strategy: Selects which ``train_step`` programs are compiled for
-      training. ``PadToMultiple(multiple)`` (default) pads batches to a multiple
-      to bound recompilations; ``AutotuneMicrobatch`` picks the largest
+      training. :class:`~jax_privacy.training.PadToMultiple` (default) pads
+      batches to a multiple to bound recompilations;
+      :class:`~jax_privacy.training.AutotuneMicrobatch` picks the largest
       microbatch size that fits device memory and compiles once. See
-      :class:`CompilationStrategy`.
+      :class:`~jax_privacy.training.CompilationStrategy`.
   """
 
   config: execution_plan.ExecutionPlanConfig
@@ -289,7 +293,8 @@ class DPTrainer:
       rng_or_seed: Optional random seed or ``numpy.random.Generator``, used for
         sampling batches (impacting privacy) and initializing the loss PRNG key
         (potentially impacting utility). Does not influence the noise addition
-        transform, which is configured via the DPExecutionPlan.
+        transform, which is configured via the
+        :class:`~jax_privacy.execution_plan.DPExecutionPlan`.
       precompile: A boolean indicating whether to asynchronously precompile
         ``train_step`` for the batch sizes encountered, instead of just-in-time
         compiling on the fly, which can idle accelerators during training.
@@ -312,7 +317,7 @@ class DPTrainer:
     assert isinstance(trainer.compilation_strategy, PadToMultiple)
     warn_on_cache_miss = bool(futures)
 
-    # We need tight alignement between how rng is used here and in precompile().
+    # We need tight alignment between how rng is used here and in precompile().
     rng = np.random.default_rng(rng_or_seed)
     prng_key = jax.random.key(int(rng.integers(2**63)))
 
