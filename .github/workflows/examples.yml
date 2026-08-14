@@ -31,12 +31,12 @@ jobs:
       - uses: "actions/setup-python@v6"
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: pyproject.toml
+      - uses: "astral-sh/setup-uv@v5"
+        with:
+          enable-cache: true
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[examples]"
+          uv pip install --system -r pylock.toml
       - name: Run Examples
         run: |
           echo "::group::keras_api_example"

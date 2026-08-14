@@ -124,6 +124,45 @@ conventions depending on what is being contributed.
         -   **Internal Callables:** `grad_fn`, `update_fn`, `scan_fn`, `map_fn`,
             `partition_fn`.
 
+## Development Setup
+
+We use [uv](https://docs.astral.sh/uv/) for managing your development
+environment. It provides better support for managing `pylock.toml` style lock
+files and as an added advantage is also faster than `pip`.
+
+```{note}
+The `pylock.toml` file is generated using `uv`, but it follows standard
+specifications as per PEP 751 and should work with most modern package managers
+that support it.
+```
+
+1.  **Install uv:** Follow the [official instructions](https://docs.astral.sh/uv/getting-started/installation/).
+2.  **Create an environment and install dependencies:**
+
+    ```bash
+    # Create a virtual environment
+    uv venv
+    # Activate it (Linux/macOS)
+    source .venv/bin/activate
+    # Install all dependencies (including dev, test, lint) from the lockfile
+    uv pip install -r pylock.toml
+    ```
+
+3.  **Updating `pylock.toml`:** Regenerate `pylock.toml` using `uv` periodically
+    (to pick more recent downstream dependencies for all packages)
+    or when modifying dependencies in `pyproject.toml` (such as adding new core
+    or optional dependencies):
+
+    ```bash
+    uv export --format pylock.toml --all-extras --default-index https://pypi.org/simple -o pylock.toml
+    ```
+
+    Commit the updated `pylock.toml` to ensure CI and contributors remain in
+    sync.
+
+    Note that any update to `pyproject.toml` must be accompanied by a
+    regeneration of `pylock.toml`.
+
 (documentation-guide)=
 ## Documentation guide
 
