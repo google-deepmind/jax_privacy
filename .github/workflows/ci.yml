@@ -25,6 +25,9 @@ on:
     branches: ["main"]
     paths-ignore: ["README.md"]
 
+permissions:
+  contents: read
+
 jobs:
   check_rebase:
     name: "Check Branch Sync"
@@ -32,9 +35,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout code
-        uses: "actions/checkout@v6"
+        uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Check if PR is up to date
         run: |
@@ -59,23 +63,71 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: "actions/checkout@v6"
+      - uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" # v4.2.2
+        with:
+          persist-credentials: false
       # Enforce the 80-column line limit (MD013); see .markdownlint-cli2.jsonc.
       - name: Lint Markdown line length
-        uses: "DavidAnson/markdownlint-cli2-action@v24"
+        uses: "DavidAnson/markdownlint-cli2-action@b847b0e2798e09594353ac3d92f6222621a4d870" # v24.0.0
         with:
           globs: "**/*.md"
+
+  check-lockfile:
+    name: "Check: pylock.toml Sync"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check if pyproject.toml was modified
+        id: check_pyproject
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$GH_EVENT_NAME" = "pull_request" ]; then
+            git fetch origin "$GH_BASE_REF" --depth=1
+            BASE_REF="origin/$GH_BASE_REF"
+          else
+            BASE_REF="HEAD~1"
+          fi
+          if git diff --name-only "$BASE_REF" HEAD | grep -q '^pyproject.toml$'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "pyproject.toml was modified. Validating pylock.toml sync..."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "pyproject.toml was not modified. Skipping lockfile sync check."
+          fi
+      - uses: "astral-sh/setup-uv@1edb52594c857e2b5b13128931090f0640537287" # v5.3.0
+        if: steps.check_pyproject.outputs.changed == 'true'
+        with:
+          enable-cache: true
+      - name: Verify pylock.toml is up to date with pyproject.toml
+        if: steps.check_pyproject.outputs.changed == 'true'
+        run: |
+          uv export --format pylock.toml --all-extras --default-index https://pypi.org/simple -o pylock_generated.toml
+          grep -v '^#' pylock.toml > pylock_current_clean.toml
+          grep -v '^#' pylock_generated.toml > pylock_new_clean.toml
+          diff -u pylock_current_clean.toml pylock_new_clean.toml || {
+            echo -e "\n---> pylock.toml is out of sync with pyproject.toml." >&2
+            echo -e "---> Run 'uv export --format pylock.toml --all-extras --default-index https://pypi.org/simple -o pylock.toml' locally and commit the changes." >&2
+            exit 1
+          }
 
   lint:
     name: "Lint: Python 3.11"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: "actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38" # v5.4.0
         with:
           python-version: "3.11"
-      - uses: "astral-sh/setup-uv@v5"
+      - uses: "astral-sh/setup-uv@1edb52594c857e2b5b13128931090f0640537287" # v5.3.0
         with:
           enable-cache: true
       - name: Install Dependencies
@@ -110,11 +162,13 @@ jobs:
         python-version: ["3.11"]
         os: [ubuntu-latest]
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: "actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38" # v5.4.0
         with:
           python-version: ${{ matrix.python-version }}
-      - uses: "astral-sh/setup-uv@v5"
+      - uses: "astral-sh/setup-uv@1edb52594c857e2b5b13128931090f0640537287" # v5.3.0
         with:
           enable-cache: true
       - name: Install Dependencies
@@ -139,11 +193,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: "actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38" # v5.4.0
         with:
           python-version: "3.11"
-      - uses: "astral-sh/setup-uv@v5"
+      - uses: "astral-sh/setup-uv@1edb52594c857e2b5b13128931090f0640537287" # v5.3.0
         with:
           enable-cache: true
       - name: Install Dependencies
@@ -164,11 +220,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: "actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38" # v5.4.0
         with:
           python-version: "3.11"
-      - uses: "astral-sh/setup-uv@v5"
+      - uses: "astral-sh/setup-uv@1edb52594c857e2b5b13128931090f0640537287" # v5.3.0
         with:
           enable-cache: true
       - name: Install Dependencies
