@@ -66,6 +66,49 @@ jobs:
         with:
           globs: "**/*.md"
 
+  check-lockfile:
+    name: "Check: pylock.toml Sync"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: "actions/checkout@v6"
+        with:
+          fetch-depth: 0
+      - name: Check if pyproject.toml was modified
+        id: check_pyproject
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$GH_EVENT_NAME" = "pull_request" ]; then
+            git fetch origin "$GH_BASE_REF" --depth=1
+            BASE_REF="origin/$GH_BASE_REF"
+          else
+            BASE_REF="HEAD~1"
+          fi
+          if git diff --name-only "$BASE_REF" HEAD | grep -q '^pyproject.toml$'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "pyproject.toml was modified. Validating pylock.toml sync..."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "pyproject.toml was not modified. Skipping lockfile sync check."
+          fi
+      - uses: "astral-sh/setup-uv@v5"
+        if: steps.check_pyproject.outputs.changed == 'true'
+        with:
+          enable-cache: true
+      - name: Verify pylock.toml is up to date with pyproject.toml
+        if: steps.check_pyproject.outputs.changed == 'true'
+        run: |
+          uv export --format pylock.toml --all-extras --default-index https://pypi.org/simple -o pylock_generated.toml
+          grep -v '^#' pylock.toml > pylock_current_clean.toml
+          grep -v '^#' pylock_generated.toml > pylock_new_clean.toml
+          diff -u pylock_current_clean.toml pylock_new_clean.toml || {
+            echo -e "\n---> pylock.toml is out of sync with pyproject.toml." >&2
+            echo -e "---> Run 'uv export --format pylock.toml --all-extras --default-index https://pypi.org/simple -o pylock.toml' locally and commit the changes." >&2
+            exit 1
+          }
+
   lint:
     name: "Lint: Python 3.11"
     runs-on: ubuntu-latest
