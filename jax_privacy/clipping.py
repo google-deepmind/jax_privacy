@@ -20,7 +20,7 @@ import dataclasses
 import functools
 import math
 import numbers
-from typing import Any, Callable, TypeAlias
+from typing import Any, Callable, NamedTuple, TypeAlias
 
 import dp_accounting
 import jax
@@ -35,6 +35,68 @@ ClippedTreeAndNorm = collections.namedtuple(
     '_ClippedTreeAndNorm', ['clipped', 'norm']
 )
 _REPLACE_SPECIAL = dp_accounting.NeighboringRelation.REPLACE_SPECIAL
+
+
+class ClippedGradOutput(NamedTuple):
+  """Gradient and slack fields forming a single primary query.
+
+  Both fields must be privatized together before ``slack`` is released.
+  """
+
+  gradient: PyTree
+  slack: jax.Array
+
+
+def _validate_slack_config(
+    slack: int | None,
+    l2_clip_norm: float | PyTree,
+    grid_scale: int | None,
+) -> None:
+  """Validate the clipping configurations supported by slack outputs."""
+  if slack is None:
+    return
+  if isinstance(slack, bool) or not isinstance(slack, int):
+    raise TypeError('slack must be a Python integer or None.')
+  if slack <= 0:
+    raise ValueError('slack must be positive.')
+  if grid_scale is not None:
+    raise ValueError('slack is not supported with discrete grid clipping.')
+  # TODO: Support one slack vector per clipping-bound leaf.
+  if not jnp.isscalar(l2_clip_norm):
+    raise ValueError('slack requires scalar global clipping.')
+
+
+def _slack_from_norm(
+    gradient_norm: jax.Array,
+    clipping_bound: jax.typing.ArrayLike,
+    slack: int,
+    rescale_to_unit_norm: bool,
+) -> jax.Array:
+  """Construct prefix-filled slack from an already-computed norm."""
+  gradient_norm = jnp.asarray(gradient_norm, dtype=jnp.float32)
+  clip_norm = jnp.asarray(clipping_bound, dtype=jnp.float32)
+  valid_clip_norm = jnp.isfinite(clip_norm) & (clip_norm > 0)
+  safe_clip_norm = jnp.where(valid_clip_norm, clip_norm, 1.0)
+  unused_fraction = jnp.where(
+      valid_clip_norm,
+      jnp.clip(1.0 - gradient_norm / safe_clip_norm, 0.0, 1.0),
+      0.0,
+  )
+  unused_fraction = jnp.nan_to_num(unused_fraction, nan=0.0)
+  k = jnp.asarray(slack, dtype=jnp.float32)
+  fill = jnp.clip(
+      k * unused_fraction - jnp.arange(slack, dtype=jnp.float32),
+      0.0,
+      1.0,
+  )
+  # sum(fill**2) <= sum(fill) = k * unused_fraction, which preserves
+  # the joint gradient-and-slack L2 bound.
+  output_bound = (
+      1.0
+      if rescale_to_unit_norm
+      else jnp.where(valid_clip_norm, clip_norm, 0.0)
+  )
+  return fill * output_bound / jnp.sqrt(k)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -431,6 +493,7 @@ def clipped_fun(
     prng_argnum: int | None = None,
     spmd_axis_name: str | None = None,
     grid_scale: int | None = None,
+    slack: int | None = None,
 ) -> BoundedSensitivityCallable:
   """Transforms a function to clip its output and sum across a batch.
 
@@ -507,6 +570,11 @@ def clipped_fun(
       Gaussian mechanism.  Incompatible with ``rescale_to_unit_norm=True`` and
       ``normalize_by != 1.0``.  When set, ``dtype`` is ignored (output is always
       ``jnp.int64``).
+    slack: Optional number of SlaClip slack coordinates. Must be a positive
+      Python integer. When set, the returned value is a
+      :class:`ClippedGradOutput` whose fields must be privatized together.
+      Slack coordinates have float32 dtype. Only scalar global clipping is
+      currently supported.
 
   Returns:
     A :class:`~jax_privacy.clipping.BoundedSensitivityCallable`
@@ -539,6 +607,7 @@ def clipped_fun(
   """
   if isinstance(batch_argnums, int):
     batch_argnums = (batch_argnums,)
+  _validate_slack_config(slack, l2_clip_norm, grid_scale)
   if grid_scale is not None:
     _validate.discrete_clipping(
         grid_scale,
@@ -563,6 +632,11 @@ def clipped_fun(
         clipped, norm = clip_and_round_to_grid(value, l2_clip_norm, grid_scale)
       else:
         clipped, norm = clip_pytree(value, l2_clip_norm, rescale_to_unit_norm)
+      if slack is not None:
+        slack_vector = _slack_from_norm(
+            norm, l2_clip_norm, slack, rescale_to_unit_norm
+        )
+        clipped = ClippedGradOutput(clipped, slack_vector)
       clipped = _maybe_zero(clipped, norm, is_padding_example, nan_safe)
       return clipped, aux, norm
 
@@ -673,6 +747,7 @@ def clipped_grad(
     prng_argnum: int | None = None,
     spmd_axis_name: str | None = None,
     grid_scale: int | None = None,
+    slack: int | None = None,
 ) -> BoundedSensitivityCallable:
   """Create a function to compute the sum of clipped gradients of fun.
 
@@ -719,7 +794,10 @@ def clipped_grad(
     Array(5.5, dtype=float32)
 
   Formal Guarantees:
-    For the gradient output:
+    For the primary output:
+      When ``slack`` is set, the primary output contains both the gradient
+      and slack fields of :class:`ClippedGradOutput`; otherwise it is the
+      gradient PyTree.
       The L2 sensitivity of the returned callable is a complex function of
       the input parameters (``l2_clip_norm``, ``rescale_to_unit_norm``,
       ``grid_scale``, per-layer clipping settings, etc.) and may change as
@@ -814,6 +892,12 @@ def clipped_grad(
       Gaussian mechanism.  Incompatible with ``rescale_to_unit_norm=True`` and
       ``normalize_by != 1.0``.  When set, ``dtype`` is ignored (output is always
       ``jnp.int64``).
+    slack: Optional number of SlaClip slack coordinates. Must be a positive
+      Python integer. When set, the sensitivity-bounded primary output is a
+      :class:`ClippedGradOutput`. Its gradient and slack fields must be
+      privatized together. The float32 slack is built from the same norm used
+      for clipping after ``pre_clipping_transform``. Only scalar global
+      clipping is currently supported.
 
   Returns:
     A :class:`~jax_privacy.clipping.BoundedSensitivityCallable`
@@ -835,6 +919,9 @@ def clipped_grad(
     ``return_grad_norms=True``, and ``aux`` is ``None`` unless
     ``has_aux=True``.  When present, these outputs are per-example
     (i.e., they retain a batch axis).
+
+    When ``slack`` is set, `grad` is a :class:`ClippedGradOutput`;
+    otherwise it retains the original gradient structure.
   """
   _validate_static_args(argnums, batch_argnums, normalize_by)
   fun = _normalize_fun_to_return_aux(fun, has_aux)
@@ -869,4 +956,5 @@ def clipped_grad(
       prng_argnum=prng_argnum,
       spmd_axis_name=spmd_axis_name,
       grid_scale=grid_scale,
+      slack=slack,
   )
