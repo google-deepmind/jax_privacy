@@ -491,6 +491,23 @@ class BatchSelectionTest(parameterized.TestCase):
     np.testing.assert_array_equal(batch[1], np.array([0, 1]))
     np.testing.assert_array_equal(batch[2], np.array([2, 3]))
 
+  @parameterized.named_parameters(
+      ('empty_sample', np.array([0, 1])),
+      ('empty_dataset', np.array([], dtype=np.int64)),
+  )
+  def test_user_selection_returns_typed_2d_empty_batch(self, user_ids):
+    base_strategy = batch_selection.CyclicPoissonSampling(
+        sampling_prob=0, iterations=1
+    )
+    strategy = batch_selection.UserSelectionStrategy(
+        base_strategy, examples_per_user_per_batch=2
+    )
+
+    batch = next(strategy.batch_iterator(user_ids, rng=0))
+
+    self.assertEqual(batch.shape, (0, 2))
+    self.assertTrue(np.issubdtype(batch.dtype, np.signedinteger))
+
   def test_fixed_batch_sampling(self):
     """Tests for FixedBatchSampling."""
     strategy = batch_selection.FixedBatchSampling(
