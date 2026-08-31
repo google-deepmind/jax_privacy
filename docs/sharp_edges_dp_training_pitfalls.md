@@ -16,7 +16,7 @@ limitations under the License. -->
 
 *Design decisions JAX Privacy makes to prevent them*
 
-*Authors: Ryan McKenna and H. Brendan McMahan*
+*Authors: Ryan McKenna, H. Brendan McMahan, and Tudor Cebere*
 
 Building a correct differentially private training pipeline is hard. A single
 misplaced operation — dividing by the wrong constant, using the wrong batch
@@ -129,26 +129,32 @@ Every pitfall below is tagged with its severity class in the summary table.
 
 ## Common Pitfalls at a Glance
 
-| Pitfall | Severity | How JAX Privacy Handles It |
-| :--------- | :--- | :------------------------- |
-| [Division by batch size](#division-by-batch-size) | Critical | Computes a sum, not a mean; optional `normalize_by` reflected in sensitivity |
-| [Sensitivity alignment](#sensitivity-alignment) | Critical | Returned callable exposes `.sensitivity()` — calibrate noise against it |
-| [Accounting and batch selection mismatch](#accounting-and-batch-selection-mismatch) | Critical | `DPExecutionPlan` couples these by construction |
-| [Public vs. private metadata](#public-vs-private-metadata) | Critical | Dataclass fields are public config; sensitive values are method arguments |
-| [Neighboring relation clarity](#neighboring-relation-clarity) | Critical | Explicit `NeighboringRelation` enum; `.sensitivity()` parameterized by it |
-| [Zero-sized batches and non-finite gradients](#zero-sized-batches-and-non-finite-gradients) | Critical | Robust edge-case handling that preserves DP, not just utility |
-| [Gradient accumulation](#gradient-accumulation) | Critical | No manual accumulation needed — on-device microbatching instead |
-| [Cross-example operations (incl. batch norm and MoE)](#cross-example-operations-incl-batch-normalization-and-moe-routing) | Critical | `vmap` isolates examples automatically, but this silently changes model semantics — a utility pitfall |
-| [Auxiliary information](#auxiliary-information) | Critical | Per-example returns; aggregation is the caller's responsibility |
-| [Randomness and RNG injection](#randomness-and-rng-injection) | Theoretical | Explicit RNG parameters; supports cryptographically secure sources |
-| [Floating point robustness](#floating-point-robustness) | Theoretical | Opt-in discrete Gaussian mechanism with integer-domain clipping |
-| [Finite-precision numerical error](#finite-precision-numerical-error) | Negligible | Inherent and negligible in the default path; discrete Gaussian path removes it entirely |
+Pitfall                                                                                                                   | Severity                    | How JAX Privacy Handles It
+:------------------------------------------------------------------------------------------------------------------------ | :-------------------------- | :-------------------------
+[Division by batch size](#division-by-batch-size)                                                                         | Critical                    | Computes a sum, not a mean; optional `normalize_by` reflected in sensitivity
+[Sensitivity alignment](#sensitivity-alignment)                                                                           | Critical                    | Returned callable exposes `.sensitivity()` — calibrate noise against it
+[Accounting and batch selection mismatch](#accounting-and-batch-selection-mismatch)                                       | Critical                    | `DPExecutionPlan` couples these by construction
+[Public vs. private metadata](#public-vs-private-metadata)                                                                | Critical                    | Dataclass fields are public config; sensitive values are method arguments
+[Neighboring relation clarity](#neighboring-relation-clarity)                                                             | Critical                    | Explicit `NeighboringRelation` enum; `.sensitivity()` parameterized by it
+[Error handling and data-dependent failures](#zero-sized-batches-and-non-finite-gradients)                                | Critical                    | Handles empty batches and non-finite per-example gradients; arbitrary user-code and runtime failures remain the caller's responsibility
+[Gradient accumulation](#gradient-accumulation)                                                                           | Critical                    | No manual accumulation needed — on-device microbatching instead
+[Cross-example operations (incl. batch norm and MoE)](#cross-example-operations-incl-batch-normalization-and-moe-routing) | Critical                    | `vmap` isolates examples automatically, but this silently changes model semantics — a utility pitfall
+[Data augmentation](#data-augmentation-and-the-privacy-unit)                                                              | Critical                    | Augment inside a per-unit composite loss and clip once per original privacy unit
+[Auxiliary information](#auxiliary-information)                                                                           | Critical                    | Per-example returns; aggregation is the caller's responsibility
+[Randomness and RNG injection](#randomness-and-rng-injection)                                                             | Theoretical                 | Explicit RNG parameters; supports cryptographically secure sources
+[Floating point robustness](#floating-point-robustness)                                                                   | Theoretical                 | Opt-in discrete Gaussian mechanism with integer-domain clipping
+[Finite-precision numerical error](#finite-precision-numerical-error)                                                     | Negligible                  | Inherent and negligible in the default path; discrete Gaussian path removes it entirely
+[Privacy auditing: canary sampling](#privacy-auditing-experimental-design-sharp-edges)                                    | Critical for audit validity | Caller must use IID or exchangeable canaries
+[Privacy auditing: multi-run vs. one-run bounds](#privacy-auditing-one-run-vs-multi-run)                                  | Critical for audit validity | Provides one-run auditing methods only
+[Privacy auditing: threshold selection](#privacy-auditing-threshold-selection)                                            | Critical for audit validity | Provides explicit, Bonferroni, split, and multi-split strategies
 
 *Severity key:* **Critical** = the released outputs do not satisfy the DP
 guarantee you intended to claim; **Theoretical** = a formal break only under an
 adversarial, largely theoretical threat model; **Negligible** = bounded,
 negligible degradation ($\epsilon' = \epsilon + \text{tiny}$). See
 [How severe is each pitfall?](#how-severe-is-each-pitfall) for definitions.
+**Critical for audit validity** means the reported empirical lower bound may be
+invalid; it does not weaken the trained mechanism's DP guarantee.
 
 Beyond these failure modes, JAX Privacy follows several cross-cutting design
 principles, and there are related concerns that fall outside its scope. See
@@ -444,11 +450,17 @@ the API avoids baking in assumptions about the neighboring relation.
 ---
 
 (zero-sized-batches-and-non-finite-gradients)=
-### Zero-Sized Batches and Non-Finite Gradients
+### Error Handling and Data-Dependent Failures
 
 **Severity: Critical.**
 
-**The pitfall.** These are two edge cases that break DP, not just utility:
+**The pitfall.** A DP mechanism's output does not traditionally account for
+crashes or errors that occur during execution. If neighboring datasets exhibit
+different failure behavior, this can create a distinguishing event and break the
+theoretical guarantees. This is unlikely to create meaningful additional leakage
+in most deployments, but it remains a formal correctness issue.
+
+Two important examples are:
 
 - **Zero-sized batches.** With Poisson sampling, it is possible (though
   unlikely) for a batch to have zero examples. If a training step *fails* on a
@@ -461,28 +473,16 @@ the API avoids baking in assumptions about the neighboring relation.
   corrupt the clipped sum. If one example produces NaN and another does not,
   the presence or absence of NaN in the output leaks per-example information.
 
-Both cases require the training step to produce a well-defined, bounded output
-*regardless* of the input, to preserve the formal DP guarantee.
-
 **How JAX Privacy handles it.** The {func}`~jax_privacy.clipping.clipped_grad`
-and {func}`~jax_privacy.clipping.clipped_fun` functions handle both cases
-correctly, regardless of how you structure your batches:
+and {func}`~jax_privacy.clipping.clipped_fun` functions support empty and padded
+batches. With `nan_safe=True` (the default), contributions with non-finite
+gradient norms are zeroed before aggregation.
 
-- **Zero-sized batches work directly.**
-  {func}`~jax_privacy.clipping.clipped_grad` produces the correct result even
-  when passed a batch with zero examples — no special handling or padding is
-  required. You can also pad batches to a fixed size and use the
-  `is_padding_example` argument to mark padding examples, whose contributions
-  are zeroed out before aggregation. Either approach works; JAX Privacy
-  produces the correct result in both cases.
+Data-dependent failures in user-provided losses, input pipelines, runtimes, or
+recovery logic remain the caller's responsibility. Keep the per-unit loss
+defined on all allowed inputs and use data-independent failure handling.
 
-- **Non-finite gradients are handled by default.** When `nan_safe=True` (the
-  default), per-example outputs with non-finite L2 norms are zeroed out before
-  aggregation. This ensures that numerical instability in any single example
-  cannot corrupt the aggregate or leak information.
-
-See also
-[Handling Variable Batch Sizes](sharp_edges_variable_batch_sizes) for
+See also [Handling Variable Batch Sizes](sharp_edges_variable_batch_sizes) for
 strategies to handle variable batch sizes efficiently.
 
 ---
@@ -618,6 +618,57 @@ guarantee holds for *any* JAX-traceable loss function, because per-example
 isolation is enforced at the computation level rather than the layer level. The
 flip side is that the responsibility for preserving model semantics under
 per-example execution rests with you.
+
+--------------------------------------------------------------------------------
+
+(data-augmentation-and-the-privacy-unit)=
+### Data Augmentation
+
+**Severity: Critical.**
+
+**The pitfall.** A faulty design is to create several augmentations of one
+private record and insert them back into the dataset as separate examples, or to
+mix multiple private records into one example, as in Mixup or CutMix.
+Per-example clipping then need not bound each original record's total
+contribution, invalidating a per-record sensitivity analysis.
+
+**How JAX Privacy handles it.** Generate and combine the views inside the
+per-record loss, then use {func}`~jax_privacy.clipping.clipped_grad` to clip
+once for the original record:
+
+```python
+NUM_AUGMENTATIONS = 8
+
+def loss_for_record(params, record, rng):
+    augmentation_keys = jax.random.split(rng, NUM_AUGMENTATIONS)
+
+    def loss_for_view(key):
+        augmented_x = augment(key, record["x"])
+        logits = model.apply(params, augmented_x)
+        return cross_entropy(logits, record["y"])
+
+    losses = jax.vmap(loss_for_view)(augmentation_keys)
+    return jnp.mean(losses)
+
+
+private_grad = jax_privacy.clipped_grad(
+    loss_for_record,
+    l2_clip_norm=1.0,
+    batch_argnums=1,
+    keep_batch_dim=False,
+    prng_argnum=2,
+)
+```
+
+Here the outer batch axis still ranges over original records. `prng_argnum`
+supplies one key per record, and the augmentation losses are averaged before
+clipping. For user-level DP, combine all examples and augmentations for one user
+before clipping. Cross-record transformations such as MixUp or CutMix require
+clipping each coupled group as one privacy unit or a separate sensitivity
+analysis.
+
+This is the augmentation-multiplicity pattern used in the original
+[JAX Privacy research](https://arxiv.org/abs/2204.13650).
 
 ---
 
@@ -1007,6 +1058,108 @@ Apache 2.0 license. The codebase is designed for auditability:
   any training framework, eliminating an entire category of auditability
   concerns.
 
+--------------------------------------------------------------------------------
+
+(privacy-auditing-experimental-design-sharp-edges)=
+### Privacy Auditing: Canary Sampling
+
+**Severity: Critical for audit validity.** A faulty audit does not weaken the
+privacy guarantee of the trained mechanism, but it can invalidate the empirical
+privacy lower bound reported by the audit.
+
+**The pitfall.** Member and non-member canaries must be IID or otherwise
+exchangeable. Informally, before membership is randomized, swapping the labels
+"held in" and "held out" should not change the distribution of the experiment.
+It is not enough for the two groups to have the same size or similar summary
+statistics.
+
+A common failure mode is to obtain held-in canaries from one source, generator,
+time period, or preprocessing pipeline and held-out canaries from another. The
+audit may then distinguish the two groups because of this distribution shift,
+not because training on a canary changed the released model. Since the analysis
+interprets score separation as evidence of membership leakage, the resulting
+privacy lower bound can be spuriously large.
+
+Canaries need not be literally independent if the experimental design provides a
+defensible exchangeability argument and the statistical bound matches that
+design. But when the groups are hand-selected, generated under different
+conditions, or filtered using group-specific rules, the standard membership
+interpretation no longer follows automatically. Any unavoidable shift must be
+modeled or corrected explicitly rather than treated as membership signal.
+
+**How JAX Privacy handles it.** JAX Privacy accepts held-in and held-out canary
+scores, but cannot enforce how the canaries were sampled. A robust workflow is
+to construct one candidate pool using a common generation and preprocessing
+pipeline, randomize membership assignments only afterward, and apply the same
+scoring procedure to both groups. You are responsible for documenting this
+assignment procedure and for ensuring that the canaries are IID or otherwise
+exchangeable; the library cannot detect source, preprocessing, or selection bias
+from the score arrays alone.
+
+--------------------------------------------------------------------------------
+
+(privacy-auditing-one-run-vs-multi-run)=
+### Privacy Auditing: Multi-Run vs. One-Run Bounds
+
+**Severity: Critical for audit validity.** Using a bound for the wrong audit
+design can invalidate the empirical privacy lower bound.
+
+**The pitfall.** Multi-run bounds assume independent executions on neighboring
+datasets: each observation comes from a fresh training run with fresh mechanism
+randomness. Scores from many canaries obtained from one trained model do not
+satisfy that assumption. They share the same learned parameters, minibatch
+history, optimizer trajectory, injected noise, and other run-level randomness,
+so their errors can move together.
+
+Treating those scores as though they came from independent retrainings can make
+the audit appear to have far more independent evidence than it actually has.
+This typically produces an overconfident statistical bound and may inflate the
+reported empirical privacy lower bound. The number of canaries in a one-run
+audit is the number of randomized membership probes within one execution, not
+the number of independent executions of the mechanism.
+
+**How JAX Privacy handles it.** JAX Privacy is concerned only with one-run
+auditing. The {meth}`~jax_privacy.auditing.CanaryScoreAuditor.epsilon_one_run`
+and {meth}`~jax_privacy.auditing.CanaryScoreAuditor.epsilon_one_run_fdp` methods
+are designed for randomized multi-canary, single-training-run audits and account
+for the shared-run design. JAX Privacy does not provide a multi-run auditing
+workflow; if you perform independent retrainings, you must use a multi-run
+analysis whose assumptions match that experiment.
+
+--------------------------------------------------------------------------------
+
+(privacy-auditing-threshold-selection)=
+### Privacy Auditing: Threshold Selection
+
+**Severity: Critical for audit validity.** A faulty threshold-selection
+procedure can invalidate the empirical privacy lower bound reported by the
+audit.
+
+**The pitfall.** A threshold converts a continuous canary score into a
+membership attack: scores on one side are predicted to be members and scores on
+the other side are predicted to be non-members. If you try many thresholds and
+report the one producing the largest lower bound on the same data, ordinary
+random fluctuations are selected along with genuine attack signal. The nominal
+significance level then no longer applies unless the search is corrected.
+
+**How JAX Privacy handles it.** JAX Privacy provides four threshold-selection
+strategies:
+
+-   {class}`~jax_privacy.auditing.Explicit` evaluates a threshold fixed
+    independently of the audit scores.
+-   {class}`~jax_privacy.auditing.Bonferroni`, the default, corrects for
+    searching all candidate thresholds. It is simple and robust, but can be
+    conservative when many thresholds are considered.
+-   {class}`~jax_privacy.auditing.Split` uses one random partition to select the
+    threshold and a disjoint partition to evaluate the bound. This avoids
+    reusing the same observations for selection and evaluation, at the cost of
+    less data in each stage.
+-   {class}`~jax_privacy.auditing.MultiSplit` repeats the random split,
+    evaluates each split at significance level $\alpha/2$, and reports the
+    median lower bound. Repetition reduces dependence on one fortunate or
+    unfortunate split, but it is still a controlled sample-splitting procedure
+    rather than free reuse of the data.
+
 ---
 
 ### Other Potential Issues (Out of Scope)
@@ -1025,8 +1178,8 @@ cost.
 
 ## References
 
-Many (though not all) of the pitfalls above are discussed in more depth in the
-DP practitioner literature. In particular:
+Many (though not all) of the pitfalls and auditing considerations above are
+discussed in more depth in the DP practitioner literature. In particular:
 
 - N. Ponomareva, H. Hazimeh, A. Kurakin, Z. Xu, C. Denison, H. B. McMahan,
   S. Vassilvitskii, S. Chien, and A. Thakurta.
@@ -1036,6 +1189,22 @@ DP practitioner literature. In particular:
   sharp edges, including sensitivity calibration, the relationship between
   accounting and batch selection, hyperparameter tuning (Section 5.3.3), and
   guarantee reporting.
+-   S. De, L. Berrada, J. Hayes, S. L. Smith, and B. Balle.
+    [*Unlocking High-Accuracy Differentially Private Image Classification through Scale*](https://arxiv.org/abs/2204.13650). 2022.
+    Introduces augmentation multiplicity, which averages gradients across
+    several augmentations of one example before clipping.
+-   T. Steinke, M. Nasr, and M. Jagielski.
+    [*Privacy Auditing with One (1) Training Run*](https://arxiv.org/abs/2305.08846). 2023.
+    Introduces the randomized multi-canary, single-training-run auditing
+    procedure.
+-   T. Cebere, M. Even, L. Bleistein, and A. Bellet.
+    [*Privacy Auditing with Zero (0) Training Run*](https://arxiv.org/pdf/2605.14591). 2026.
+    Shows how distribution shift between member and non-member data can confound
+    privacy audits and proposes corrections for this setting.
+-   N. Meinshausen, L. Meier, and P. Bühlmann.
+    [*P-values for high-dimensional regression*](https://arxiv.org/abs/0811.2177). 2009.
+    Develops the repeated sample-splitting aggregation underlying the
+    `MultiSplit` threshold strategy.
 - T. Cebere, D. Erb, D. Desfontaines, A. Bellet, and J. Fitzsimons.
   [*Privacy in Theory, Bugs in Practice: Grey-Box Auditing of Differential
   Privacy Libraries*](https://arxiv.org/pdf/2602.17454). 2026. A gray-box
@@ -1054,7 +1223,7 @@ If you find this guide useful, you can cite it as:
 ```text
 @misc{mckenna2026pitfalls,
   title        = {Common Pitfalls in DP Training},
-  author       = {McKenna, Ryan and McMahan, H. Brendan},
+  author       = {McKenna, Ryan and McMahan, H. Brendan and Cebere, Tudor},
   year         = {2026},
   howpublished = {JAX Privacy documentation},
   url          = {https://github.com/google-deepmind/jax_privacy},
