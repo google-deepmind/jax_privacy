@@ -25,6 +25,9 @@ on:
     branches: ["main"]
     paths-ignore: ["README.md"]
 
+permissions:
+  contents: read
+
 jobs:
   check_rebase:
     name: "Check Branch Sync"
@@ -32,9 +35,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout code
-        uses: "actions/checkout@v6"
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Check if PR is up to date
         run: |
@@ -59,10 +63,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: "actions/checkout@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       # Enforce the 80-column line limit (MD013); see .markdownlint-cli2.jsonc.
       - name: Lint Markdown line length
-        uses: "DavidAnson/markdownlint-cli2-action@v24"
+        uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24
         with:
           globs: "**/*.md"
 
@@ -71,9 +77,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: "actions/checkout@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Check if pyproject.toml was modified
         id: check_pyproject
         env:
@@ -93,7 +100,7 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "pyproject.toml was not modified. Skipping lockfile sync check."
           fi
-      - uses: "astral-sh/setup-uv@v5"
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         if: steps.check_pyproject.outputs.changed == 'true'
         with:
           enable-cache: true
@@ -114,11 +121,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
-      - uses: "astral-sh/setup-uv@v5"
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
       - name: Install Dependencies
@@ -153,11 +162,13 @@ jobs:
         python-version: ["3.11"]
         os: [ubuntu-latest]
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
-      - uses: "astral-sh/setup-uv@v5"
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
       - name: Install Dependencies
@@ -182,11 +193,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
-      - uses: "astral-sh/setup-uv@v5"
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
       - name: Install Dependencies
@@ -207,11 +220,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
-      - uses: "astral-sh/setup-uv@v5"
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
       - name: Install Dependencies
