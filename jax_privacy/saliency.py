@@ -19,6 +19,16 @@ Implements the discrete top-k voting probe of DP-SAPF (Gong, Li, Lin, Wang,
 Differentially Private Image Synthesis", USENIX Security 2026,
 https://arxiv.org/abs/2605.30312).
 
+This helper is an LLM-oriented top-k voting adaptation of DP-SAPF rather than
+a verbatim implementation of the paper's image-synthesis method. Prefer the
+probe when a public pretrained model has many candidate parameter leaves and
+saliency is expected to be concentrated in a small, stable subset, so the
+one-time probe cost can be offset by a smaller downstream trainable set. A
+standard all-candidate or default-LoRA baseline may be preferable when the
+candidate set is already small, saliency is diffuse or unstable, or the
+additional privacy and computation cost of the probe cannot be amortized.
+Utility comparisons should use the same total privacy budget.
+
 Per training sample:
   * compute the per-sample gradient (via `jax_privacy.clipped_grad`)
   * restrict to a caller-provided set of candidate pytree leaves
