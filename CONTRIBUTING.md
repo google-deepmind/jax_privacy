@@ -155,7 +155,7 @@ that support it.
 
     ```bash
     uv export --format pylock.toml --all-extras --default-index https://pypi.org/simple -o pylock.toml
-    go run github.com/google/addlicense@v1.1.1 -c "DeepMind Technologies Limited" -y "2026" -l apache pylock.toml
+    go run github.com/google/addlicense@v1.2.0 -c "DeepMind Technologies Limited" -y "2026" -l apache pylock.toml
     ```
 
     Commit the updated `pylock.toml` to ensure CI and contributors remain in

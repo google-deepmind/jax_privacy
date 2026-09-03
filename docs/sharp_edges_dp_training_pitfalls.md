@@ -1189,22 +1189,24 @@ discussed in more depth in the DP practitioner literature. In particular:
   sharp edges, including sensitivity calibration, the relationship between
   accounting and batch selection, hyperparameter tuning (Section 5.3.3), and
   guarantee reporting.
--   S. De, L. Berrada, J. Hayes, S. L. Smith, and B. Balle.
-    [*Unlocking High-Accuracy Differentially Private Image Classification through Scale*](https://arxiv.org/abs/2204.13650). 2022.
-    Introduces augmentation multiplicity, which averages gradients across
-    several augmentations of one example before clipping.
--   T. Steinke, M. Nasr, and M. Jagielski.
-    [*Privacy Auditing with One (1) Training Run*](https://arxiv.org/abs/2305.08846). 2023.
-    Introduces the randomized multi-canary, single-training-run auditing
-    procedure.
--   T. Cebere, M. Even, L. Bleistein, and A. Bellet.
-    [*Privacy Auditing with Zero (0) Training Run*](https://arxiv.org/pdf/2605.14591). 2026.
-    Shows how distribution shift between member and non-member data can confound
-    privacy audits and proposes corrections for this setting.
--   N. Meinshausen, L. Meier, and P. Bühlmann.
-    [*P-values for high-dimensional regression*](https://arxiv.org/abs/0811.2177). 2009.
-    Develops the repeated sample-splitting aggregation underlying the
-    `MultiSplit` threshold strategy.
+- S. De, L. Berrada, J. Hayes, S. L. Smith, and B. Balle.
+  [*Unlocking High-Accuracy Differentially Private Image Classification
+  through Scale*](https://arxiv.org/abs/2204.13650). 2022. Introduces
+  augmentation multiplicity, which averages gradients across several
+  augmentations of one example before clipping.
+- T. Steinke, M. Nasr, and M. Jagielski.
+  [*Privacy Auditing with One (1) Training
+  Run*](https://arxiv.org/abs/2305.08846). 2023. Introduces the randomized
+  multi-canary, single-training-run auditing procedure.
+- T. Cebere, M. Even, L. Bleistein, and A. Bellet.
+  [*Privacy Auditing with Zero (0) Training
+  Run*](https://arxiv.org/pdf/2605.14591). 2026. Shows how distribution shift
+  between member and non-member data can confound privacy audits and proposes
+  corrections for this setting.
+- N. Meinshausen, L. Meier, and P. Bühlmann.
+  [*P-values for high-dimensional
+  regression*](https://arxiv.org/abs/0811.2177). 2009. Develops the repeated
+  sample-splitting aggregation underlying the `MultiSplit` threshold strategy.
 - T. Cebere, D. Erb, D. Desfontaines, A. Bellet, and J. Fitzsimons.
   [*Privacy in Theory, Bugs in Practice: Grey-Box Auditing of Differential
   Privacy Libraries*](https://arxiv.org/pdf/2602.17454). 2026. A gray-box
