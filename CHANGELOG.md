@@ -22,6 +22,11 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ### Fixed
 
+-   **Keras DP state indexing**: `make_private()` now records the indices of
+    ``_rng`` / ``_optimizer_steps`` by name and updates those slots in
+    ``train_step``. Hard-coded ``[0]`` / ``[1]`` broke whenever the model
+    already had non-trainable weights (for example a prior ``add_weight``),
+    treating user state as the noise PRNG key.
 -   **`clipped_fun` Formal Guarantees**: Replaced the incorrect claim that
     sensitivity is always `1.0` / `l2_clip_norm` with guidance to use
     ``.sensitivity()`` / ``.l2_norm_bound``, matching `clipped_grad`. The old
