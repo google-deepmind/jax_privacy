@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
-# Copyright 2026 The Authors.
+# Copyright 2026 DeepMind Technologies Limited.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Validate that `jax_privacy.saliency.topk_vote_probe` produces useful masks.
 
 Runs two DP-SGD fine-tunes of Gemma3 under matched (eps, delta):
 
-  (1) baseline: LoRA on every candidate attention projection (~ the
-      keras_hub `enable_lora()` default of query+value everywhere, but
-      extended to all attention leaves for a fairer 'adapt everything'
-      reference)
+  (1) baseline: the default LoRA layers selected by keras_hub's
+      `enable_lora()` policy (typically query+value projections)
   (2) DP-SAPF: LoRA on the top-`--top_k_percent`% attention layers selected
       by the DP probe
 
-Reports ROUGE-1/2/L for both and the delta. `dp_sgd_keras_gemma3_dpsapf.ipynb`
-demonstrates the full mechanism; this script exists so you can iterate on
-the probe implementation without a Jupyter round-trip.
+Reports ROUGE-1/2/L for both and the delta. This script provides an end-to-end
+validation path for iterating on the probe implementation.
 
 Typical run (single-GPU, ~10-20 min per config on 1B):
   python examples/dpsapf_validate.py \\
@@ -209,12 +212,26 @@ def parse_args():
   p.add_argument("--test_batch_size", type=int, default=4)
   p.add_argument("--lora_rank", type=int, default=64)
   p.add_argument("--learning_rate", type=float, default=3e-3)
-  p.add_argument("--seed", type=int, default=0)
+  p.add_argument(
+      "--seed",
+      type=int,
+      default=None,
+      help=(
+          "Optional reproducibility seed. Leave unset for private randomness; "
+          "a public or predictable seed invalidates the DP guarantee."
+      ),
+  )
   # Probe
-  p.add_argument("--probe_samples", type=int, default=50000)
+  p.add_argument(
+      "--probe_samples",
+      type=int,
+      default=50000,
+      help="Expected Poisson probe size (capped at the training-set size).",
+  )
   p.add_argument("--probe_topk", type=int, default=8)
   p.add_argument("--probe_noise_multiplier", type=float, default=20.0)
   p.add_argument("--probe_microbatch_size", type=int, default=4)
+  p.add_argument("--probe_preprocessing_batch_size", type=int, default=128)
   p.add_argument("--top_k_percent", type=float, default=5.0)
   # DP
   p.add_argument("--total_epsilon", type=float, default=4.0)
@@ -251,7 +268,10 @@ def main():
   import jax
   import keras
   import keras_hub  # pytype: disable=import-error
+  import numpy as np
+  import tensorflow as tf
 
+  from jax_privacy import batch_selection
   from jax_privacy import saliency
 
   print(f"Dataset: {args.dataset}   Model: {args.model}")
@@ -268,6 +288,32 @@ def main():
 
   train_size = int(train_ds.cardinality().numpy())
   print(f"train_size={train_size}")
+  if train_size <= 0:
+    raise ValueError("The training split must contain at least one record.")
+  if args.probe_samples <= 0:
+    raise ValueError("--probe_samples must be positive.")
+  if args.probe_preprocessing_batch_size <= 0:
+    raise ValueError("--probe_preprocessing_batch_size must be positive.")
+
+  expected_probe_size = min(args.probe_samples, train_size)
+  probe_sampling_probability = expected_probe_size / train_size
+  probe_sampling = batch_selection.CyclicPoissonSampling(
+      sampling_prob=probe_sampling_probability,
+      iterations=1,
+      partition_type=batch_selection.PartitionType.INDEPENDENT,
+  )
+  sampling_seed, probe_noise_seed_sequence = np.random.SeedSequence(
+      args.seed
+  ).spawn(2)
+  sampling_rng = np.random.default_rng(sampling_seed)
+  probe_indices = next(
+      probe_sampling.batch_iterator(train_size, rng=sampling_rng)
+  )
+  print(
+      "probe Poisson sampling: "
+      f"q={probe_sampling_probability:.6f}, "
+      f"expected_size={expected_probe_size}"
+  )
 
   train_ds_batched = train_ds.shuffle(2048).batch(
       args.batch_size, drop_remainder=True
@@ -315,45 +361,72 @@ def main():
 
   preproc = gemma_lm.preprocessor
 
-  def probe_batches():
-    """Yields microbatches (dict) shaped for `loss_fn`."""
-    src = (
-        train_ds_batched.unbatch()
-        .take(args.probe_samples)
-        .batch(args.probe_microbatch_size, drop_remainder=True)
-    )
-    for chunk in src:
-      x, y, sw = preproc(chunk)
-      # convert to jax arrays
-      x = {
-          k: jax.numpy.asarray(v.numpy() if hasattr(v, "numpy") else v)
-          for k, v in x.items()
-      }
-      y = jax.numpy.asarray(y.numpy() if hasattr(y, "numpy") else y)
-      sw = (
-          jax.numpy.asarray(sw.numpy() if hasattr(sw, "numpy") else sw)
-          if sw is not None
-          else jax.numpy.ones_like(y, dtype=jax.numpy.float32)
+  # Select each member of the full population independently with probability
+  # q. Keeping the same `probe_sampling` object for the probe call below ties
+  # the implemented sampling mechanism to the emitted DpEvent.
+  selection_mask = np.zeros(train_size, dtype=np.bool_)
+  selection_mask[probe_indices] = True
+  selection_mask = tf.convert_to_tensor(selection_mask)
+
+  def keep_probe_example(index, unused_example):
+    del unused_example
+    return tf.gather(selection_mask, index)
+
+  def drop_example_index(unused_index, example):
+    del unused_index
+    return example
+
+  selected_probe_ds = (
+      train_ds.enumerate().filter(keep_probe_example).map(drop_example_index)
+  )
+
+  def preprocess_probe_chunk(chunk):
+    """Preprocesses one host chunk into the batched loss-function pytree."""
+    x, y, sw = preproc(chunk)
+    y = np.asarray(y)
+    if sw is None:
+      sw = np.ones_like(y, dtype=np.float32)
+    return jax.tree.map(np.asarray, {"x": x, "y": y, "sw": sw})
+
+  probe_chunks = [
+      preprocess_probe_chunk(chunk)
+      for chunk in selected_probe_ds.batch(
+          args.probe_preprocessing_batch_size, drop_remainder=False
       )
-      yield {"x": x, "y": y, "sw": sw}
+  ]
+  if probe_chunks:
+    probe_batch = jax.tree.map(
+        lambda *chunks: np.concatenate(chunks, axis=0), *probe_chunks
+    )
+  else:
+    # A Poisson draw may be empty. Use one record only to obtain shapes; the
+    # empty batch is handled without evaluating `loss_fn` in the probe.
+    shape_chunk = next(iter(train_ds.take(1).batch(1)))
+    probe_batch = jax.tree.map(
+        lambda x: x[:0], preprocess_probe_chunk(shape_chunk)
+    )
+
+  materialized_probe_size = jax.tree.leaves(probe_batch)[0].shape[0]
+  if materialized_probe_size != len(probe_indices):
+    raise RuntimeError(
+        "Poisson sample materialization did not preserve the sampled size."
+    )
+
+  probe_noise_seed = int(probe_noise_seed_sequence.generate_state(1)[0])
 
   probe_result = saliency.topk_vote_probe(
       loss_fn=loss_fn,
-      dataset=probe_batches(),
+      dataset=probe_batch,
       params=[v.value for v in trainable_vars],
-      num_samples=args.probe_samples,
       vote_top_k=args.probe_topk,
       select_top_k=select_top_k,
       noise_multiplier=args.probe_noise_multiplier,
       candidate_mask=candidate_mask,
-      prng_key=jax.random.PRNGKey(args.seed),
-      sampling_probability=args.probe_samples / train_size,
+      prng_key=jax.random.PRNGKey(probe_noise_seed),
+      sampling_strategy=probe_sampling,
       microbatch_size=args.probe_microbatch_size,
   )
-  print(
-      f"probe: {probe_result.n_seen} samples, "
-      f"kept {select_top_k}/{num_candidates} layers."
-  )
+  print(f"probe complete: kept {select_top_k}/{num_candidates} layers.")
   # Translate the boolean pytree back to the set of `.path` strings that
   # `_enable_lora_on_paths` expects.
   probe_selected_paths = _mask_to_paths(
@@ -390,7 +463,10 @@ def main():
   trainable_vars = None
   ntvars = None
   loss_fn = None
-  probe_batches = None
+  probe_batch = None
+  probe_chunks = None
+  probe_indices = None
+  selection_mask = None
   gc.collect()
   jax.clear_caches()
 

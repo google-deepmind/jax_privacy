@@ -53,6 +53,27 @@ def equal(expected, **kwargs):
       )
 
 
+def instance(expected_type, **kwargs):
+  """Validates that all values are instances of ``expected_type``."""
+  for name, value in kwargs.items():
+    if not isinstance(value, expected_type):
+      raise ValueError(
+          f'Expected {name} to be a {expected_type.__name__}, got '
+          f'{type(value).__name__}.'
+      )
+
+
+def tree_structure(reference, **kwargs):
+  """Validates that all values have the same PyTree structure as reference."""
+  expected = jax.tree.structure(reference)
+  for name, value in kwargs.items():
+    actual = jax.tree.structure(value)
+    if actual != expected:
+      raise ValueError(
+          f'Expected {name} to have PyTree structure {expected}, got {actual}.'
+      )
+
+
 def batch(pytree) -> int:
   """Validates a batch pytree and returns the batch size.
 
