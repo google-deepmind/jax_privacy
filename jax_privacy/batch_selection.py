@@ -638,7 +638,7 @@ class UserSelectionStrategy:
     unique, inverse = np.unique(user_ids, return_inverse=True)
     num_users = unique.size
     num_examples = user_ids.size
-    dtype = np.min_scalar_type(-num_examples)
+    dtype = np.min_scalar_type(-max(num_examples, 1))
 
     # Group example indices by user once to avoid an O(n) scan per user.
     order = np.argsort(inverse, kind='stable').astype(dtype, copy=False)
@@ -659,10 +659,11 @@ class UserSelectionStrategy:
     def get_user_batch(user_id):
       generator = user_generators[user_id]
       sample = itertools.islice(generator, examples_per_user)
-      return np.array(list(sample))
+      return np.array(list(sample), dtype=dtype)
 
     for user_batch in self.base_strategy.batch_iterator(num_users, rng):
-      yield np.array([get_user_batch(uid) for uid in user_batch])
+      batch = np.array([get_user_batch(uid) for uid in user_batch], dtype=dtype)
+      yield batch.reshape((-1, examples_per_user))
 
 
 # Re-export multi-owner functionality from _multi_owner submodule.
