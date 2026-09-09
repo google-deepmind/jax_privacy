@@ -53,9 +53,10 @@ available in the future.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 import dataclasses
 import functools
-from typing import Callable, Protocol
+from typing import Protocol
 
 import dp_accounting
 import jax
@@ -204,7 +205,7 @@ class BandMFConfig:
 
   Example Usage (BandMF with custom strategy):
     >>> config = BandMFConfig(  # doctest: +SKIP
-    ...   strategy=np.array([1.0, 0.5, 0.2]),
+    ...   strategy=[1.0, 0.5, 0.2],
     ...   iterations=1000, expected_participations=400,
     ... ).calibrate(epsilon=1.0, delta=1e-5)
 
@@ -246,7 +247,10 @@ class BandMFConfig:
 
   iterations: int
   expected_participations: float
-  strategy: np.typing.ArrayLike
+  # Sequence[float] (e.g. list or tuple) rather than ArrayLike / np.ndarray
+  # enables standard serialization (e.g. via YAML / cattrs / JSON) without
+  # custom NumPy array hooks.
+  strategy: Sequence[float]
   noise_multiplier: float | None = None
   l2_clip_norm: float = 1.0
   rescale_to_unit_norm: bool = True
@@ -429,7 +433,7 @@ class BandMFConfig:
     return BandMFConfig(
         iterations=iterations,
         expected_participations=expected_participations,
-        strategy=strategy,
+        strategy=strategy.tolist(),
         **kwargs,
     )
 
@@ -480,10 +484,11 @@ class BandMFConfig:
         partition_type=self._partition_type,
     )
 
+    strategy = np.asarray(self.strategy)
     max_column_norm = self._max_column_norm
     column_normalize_for_n = self.iterations if self.column_normalize else None
     noising_matrix = toeplitz.inverse_as_streaming_matrix(
-        self.strategy, column_normalize_for_n
+        strategy, column_normalize_for_n
     )
 
     query_sensitivity = clipped_grad_transform(lambda: None).sensitivity()
