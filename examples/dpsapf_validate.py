@@ -271,6 +271,7 @@ def main():
   import numpy as np
   import tensorflow as tf
 
+  from jax_privacy import accounting
   from jax_privacy import batch_selection
   from jax_privacy import saliency
 
@@ -301,6 +302,11 @@ def main():
       sampling_prob=probe_sampling_probability,
       iterations=1,
       partition_type=batch_selection.PartitionType.INDEPENDENT,
+  )
+  probe_dp_event = accounting.dpsgd_event(
+      noise_multiplier=args.probe_noise_multiplier,
+      iterations=1,
+      sampling_prob=probe_sampling.sampling_prob,
   )
   sampling_seed, probe_noise_seed_sequence = np.random.SeedSequence(
       args.seed
@@ -362,8 +368,8 @@ def main():
   preproc = gemma_lm.preprocessor
 
   # Select each member of the full population independently with probability
-  # q. Keeping the same `probe_sampling` object for the probe call below ties
-  # the implemented sampling mechanism to the emitted DpEvent.
+  # q. The caller-owned event above uses the same sampling strategy's public
+  # probability, tying the implemented mechanism to its accounting.
   selection_mask = np.zeros(train_size, dtype=np.bool_)
   selection_mask[probe_indices] = True
   selection_mask = tf.convert_to_tensor(selection_mask)
@@ -423,7 +429,6 @@ def main():
       noise_multiplier=args.probe_noise_multiplier,
       candidate_mask=candidate_mask,
       prng_key=jax.random.PRNGKey(probe_noise_seed),
-      sampling_strategy=probe_sampling,
       microbatch_size=args.probe_microbatch_size,
   )
   print(f"probe complete: kept {select_top_k}/{num_candidates} layers.")
@@ -491,7 +496,7 @@ def main():
         train_ds_batched,
         val_ds_batched,
         test_ds_batched,
-        probe_result,
+        probe_dp_event,
     )
     results[label] = rouge
     print(f"{label} ROUGE: {rouge}")
@@ -519,7 +524,7 @@ def _run_one_config(
     train_ds_batched,
     val_ds_batched,
     test_ds_batched,
-    probe_result,
+    probe_dp_event,
 ):
   """Runs one full DP-SGD fine-tune + ROUGE eval for the given mask.
 
@@ -549,13 +554,16 @@ def _run_one_config(
   effective_batch_size = args.batch_size * args.gradient_accumulation_steps
 
   # Calibrate sigma_train so composed (probe + training) matches target eps.
+  # These remain separate events because their sampling probabilities and
+  # noise multipliers differ; incrementing the training iterations is not
+  # equivalent in this case.
   def composed_eps(sigma_train):
     train_event = accounting.dpsgd_event(
         noise_multiplier=sigma_train,
         iterations=total_train_steps,
         sampling_prob=effective_batch_size / train_size,
     )
-    total = dp_accounting.ComposedDpEvent([probe_result.dp_event, train_event])
+    total = dp_accounting.ComposedDpEvent([probe_dp_event, train_event])
     acc = dp_accounting.rdp.RdpAccountant()
     acc.compose(total)
     return acc.get_epsilon(args.delta)

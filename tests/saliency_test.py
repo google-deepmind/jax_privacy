@@ -20,6 +20,7 @@ import chex
 import dp_accounting
 import jax
 import jax.numpy as jnp
+from jax_privacy import accounting
 from jax_privacy import batch_selection
 from jax_privacy import saliency
 
@@ -36,10 +37,8 @@ def _linear_loss(params, batch):
   return sum(param * jnp.sum(batch[..., i]) for i, param in enumerate(params))
 
 
-def _run_probe(dataset, *, microbatch_size=1, sampling=None, **kwargs):
+def _run_probe(dataset, *, microbatch_size=1, **kwargs):
   num_candidates = dataset.shape[-1]
-  if sampling is None:
-    sampling = _sampling(1.0)
   defaults = dict(
       loss_fn=_linear_loss,
       dataset=dataset,
@@ -49,7 +48,6 @@ def _run_probe(dataset, *, microbatch_size=1, sampling=None, **kwargs):
       noise_multiplier=0.0,
       candidate_mask=(True,) * num_candidates,
       prng_key=jax.random.key(0),
-      sampling_strategy=sampling,
       microbatch_size=microbatch_size,
   )
   defaults.update(kwargs)
@@ -58,7 +56,7 @@ def _run_probe(dataset, *, microbatch_size=1, sampling=None, **kwargs):
 
 class SaliencyTest(parameterized.TestCase):
 
-  def test_poisson_sample_and_dp_event_share_strategy(self):
+  def test_caller_ties_poisson_sample_to_accounting(self):
     population_size = 8
     probability = 0.5
     sampling = _sampling(probability)
@@ -67,18 +65,29 @@ class SaliencyTest(parameterized.TestCase):
 
     result = _run_probe(
         dataset,
-        sampling=sampling,
         select_top_k=2,
         microbatch_size=3,
+    )
+    probe_event = accounting.dpsgd_event(
+        noise_multiplier=0.0,
+        iterations=1,
+        sampling_prob=sampling.sampling_prob,
     )
 
     scores = dict(result.ranked_scores)
     expected_scores = {i: float(i in indices) for i in range(population_size)}
     self.assertEqual(scores, expected_scores)
-    self.assertIsInstance(result.dp_event, dp_accounting.PoissonSampledDpEvent)
-    self.assertEqual(result.dp_event.sampling_probability, probability)
-    self.assertIsInstance(result.dp_event.event, dp_accounting.GaussianDpEvent)
-    self.assertEqual(result.dp_event.event.noise_multiplier, 0.0)
+    self.assertFalse(hasattr(result, 'dp_event'))
+    self.assertIsInstance(probe_event, dp_accounting.SelfComposedDpEvent)
+    self.assertEqual(probe_event.count, 1)
+    self.assertIsInstance(
+        probe_event.event, dp_accounting.PoissonSampledDpEvent
+    )
+    self.assertEqual(probe_event.event.sampling_probability, probability)
+    self.assertIsInstance(
+        probe_event.event.event, dp_accounting.GaussianDpEvent
+    )
+    self.assertEqual(probe_event.event.event.noise_multiplier, 0.0)
 
   @parameterized.parameters(None, 1, 2, 4)
   def test_internal_microbatching_matches_unmicrobatched(self, microbatch_size):
@@ -100,10 +109,9 @@ class SaliencyTest(parameterized.TestCase):
     self.assertEqual(result.ranked_scores, [(0, 3.0), (1, 2.0), (2, 1.0)])
     chex.assert_trees_all_equal(result.selected_mask, (True, True, False))
 
-  def test_empty_poisson_sample_is_supported(self):
+  def test_empty_sample_is_supported(self):
     result = _run_probe(
         jnp.empty((0, 3), dtype=jnp.float32),
-        sampling=_sampling(0.5),
         microbatch_size=4,
     )
 
@@ -120,27 +128,27 @@ class SaliencyTest(parameterized.TestCase):
 
     fake_grad_fn = FakeGradFn()
 
-    class NoNoisePrivatizer:
-
-      def init(self, unused_value):
-        return ()
-
-      def update(self, value, state):
-        return value, state
-
     with mock.patch.object(
         saliency.clipping, 'clipped_grad', return_value=fake_grad_fn
     ), mock.patch.object(
-        saliency.noise_addition,
-        'gaussian_privatizer',
-        return_value=NoNoisePrivatizer(),
-    ) as privatizer:
-      _run_probe(jnp.ones((2, 2)), noise_multiplier=2.0)
+        saliency.jax.random,
+        'normal',
+        return_value=jnp.array([1.0, -1.0]),
+    ) as normal:
+      result = _run_probe(jnp.ones((2, 2)), noise_multiplier=2.0)
 
-    fake_grad_fn.sensitivity.assert_called_once_with(
-        dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE
+    fake_grad_fn.sensitivity.assert_called_once_with()
+    normal.assert_called_once_with(mock.ANY, (2,), dtype=jnp.dtype(jnp.float32))
+    self.assertEqual(result.ranked_scores, [(0, 14.0), (1, -14.0)])
+
+  def test_interleaved_candidate_mask_maps_selection_to_full_tree(self):
+    result = _run_probe(
+        jnp.array([[0.0, 100.0, 1.0], [0.0, 100.0, 2.0]]),
+        candidate_mask=(True, False, True),
     )
-    self.assertEqual(privatizer.call_args.kwargs['stddev'], 14.0)
+
+    self.assertEqual(result.ranked_scores, [(1, 2.0), (0, 0.0)])
+    chex.assert_trees_all_equal(result.selected_mask, (False, False, True))
 
   def test_argument_validation(self):
     dataset = jnp.ones((2, 3))
@@ -154,7 +162,6 @@ class SaliencyTest(parameterized.TestCase):
         noise_multiplier=1.0,
         candidate_mask=(True, True, True),
         prng_key=jax.random.key(0),
-        sampling_strategy=_sampling(1.0),
         microbatch_size=1,
     )
     invalid_cases = (
@@ -163,7 +170,6 @@ class SaliencyTest(parameterized.TestCase):
         ('select_top_k', {'select_top_k': 4}),
         ('noise_multiplier', {'noise_multiplier': -1.0}),
         ('microbatch_size', {'microbatch_size': 0}),
-        ('sampling_probability', {'sampling_strategy': _sampling(0.0)}),
     )
     for message, overrides in invalid_cases:
       with self.subTest(message=message), self.assertRaisesRegex(
@@ -178,15 +184,6 @@ class SaliencyTest(parameterized.TestCase):
       saliency.topk_vote_probe(
           **(base | {'dataset': {'x': dataset, 'y': jnp.ones((3,))}})
       )
-
-  def test_rejects_nonstandard_poisson_strategy(self):
-    sampling = batch_selection.CyclicPoissonSampling(
-        sampling_prob=0.5,
-        iterations=1,
-        partition_type=batch_selection.PartitionType.EQUAL_SPLIT,
-    )
-    with self.assertRaisesRegex(ValueError, 'sampling_partition_type'):
-      _run_probe(jnp.ones((2, 2)), sampling=sampling)
 
 
 if __name__ == '__main__':
