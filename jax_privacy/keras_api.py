@@ -406,7 +406,10 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
     self._sample_weight = sample_weight
     self._train_size = _tree_batch_size(x)
     self._steps_per_epoch = steps_per_epoch
-    self._sampling_prob = dp_params.batch_size / float(self._train_size)
+    self._gradient_accumulation_steps = dp_params.gradient_accumulation_steps
+    self._sampling_prob = dp_params.effective_batch_size / float(
+        self._train_size
+    )
     self._padding_multiple = _get_poisson_padding_multiple(dp_params)
     seed = _get_random_int64() if dp_params.seed is None else dp_params.seed
     self._rng = np.random.default_rng(seed)
@@ -429,14 +432,19 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
 
   def on_epoch_end(self) -> None:
     """Precomputes one epoch of padded Poisson-sampled index batches."""
+    k = self._gradient_accumulation_steps
+    num_macro_steps = math.ceil(self._steps_per_epoch / k)
     strategy = batch_selection.CyclicPoissonSampling(
         sampling_prob=self._sampling_prob,
-        iterations=self._steps_per_epoch,
+        iterations=num_macro_steps,
     )
-    self._epoch_batches = [
-        _pad_batch_indices(np.asarray(indices), self._padding_multiple)
-        for indices in strategy.batch_iterator(self._train_size, rng=self._rng)
-    ]
+    epoch_batches = []
+    for indices in strategy.batch_iterator(self._train_size, rng=self._rng):
+      for slice_indices in np.array_split(np.asarray(indices), k):
+        epoch_batches.append(
+            _pad_batch_indices(slice_indices, self._padding_multiple)
+        )
+    self._epoch_batches = epoch_batches[: self._steps_per_epoch]
 
 
 def _is_var_keyword_parameter(parameter: inspect.Parameter) -> bool:
@@ -708,6 +716,7 @@ def _create_fit_fn_with_validation(
         epochs,
         initial_epoch,
         steps_per_epoch,
+        gradient_accumulation_steps=self._dp_params.gradient_accumulation_steps,  # pylint: disable=protected-access
     )
     if (
         performed_optimizer_steps + optimizer_steps_to_perform
@@ -727,13 +736,19 @@ def _create_fit_fn_with_validation(
           f' total_train_steps={self._dp_params.train_steps}.'  # pylint: disable=protected-access
       )
     if use_poisson_sampling_in_fit:
+      default_steps_per_epoch = (
+          _get_default_steps_per_epoch(
+              validated_train_size,
+              self._dp_params.effective_batch_size,  # pylint: disable=protected-access
+          )
+          * self._dp_params.gradient_accumulation_steps  # pylint: disable=protected-access
+      )
       poisson_dataset = _PoissonSampledTrainingDataset(
           x,
           y,
           sample_weight,
           dp_params=self._dp_params,  # pylint: disable=protected-access
-          steps_per_epoch=steps_per_epoch
-          or _get_default_steps_per_epoch(validated_train_size, batch_size),
+          steps_per_epoch=steps_per_epoch or default_steps_per_epoch,
       )
       _maybe_symbolically_build_private_model(self, poisson_dataset)
       fit_kwargs = _prepare_fit_kwargs_for_poisson_dataset(
@@ -1094,14 +1109,21 @@ def _calculate_optimizer_steps_to_perform_in_fit(
     batch_size: int,
     epochs: int,
     initial_epoch: int,
-    steps_per_epoch: int,
+    steps_per_epoch: int | None,
+    gradient_accumulation_steps: int = 1,
 ) -> int:
   """Returns the number of optimizer steps that will be performed by fit."""
   epochs_to_perform = epochs - initial_epoch
-  steps_per_epoch = steps_per_epoch or _get_default_steps_per_epoch(
-      train_size, batch_size
-  )
-  return steps_per_epoch * epochs_to_perform
+  if steps_per_epoch is None:
+    effective_batch_size = batch_size * gradient_accumulation_steps
+    optimizer_steps_per_epoch = _get_default_steps_per_epoch(
+        train_size, effective_batch_size
+    )
+  else:
+    optimizer_steps_per_epoch = math.ceil(
+        steps_per_epoch / gradient_accumulation_steps
+    )
+  return optimizer_steps_per_epoch * epochs_to_perform
 
 
 def _get_default_steps_per_epoch(train_size: int, batch_size: int) -> int:

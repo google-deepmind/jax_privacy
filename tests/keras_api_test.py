@@ -457,6 +457,244 @@ class KerasApiTest(parameterized.TestCase):
         (~np.asarray(is_padding_example)).astype(np.float32),
     )
 
+  def test_poisson_sampled_training_dataset_with_gradient_accumulation(self):
+    train_size = 60
+    batch_size = 4
+    gas = 3  # gradient_accumulation_steps
+    x = np.arange(train_size * 2).reshape(train_size, 2)
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gas,
+        train_steps=10,
+        train_size=train_size,
+        noise_multiplier=10.0,
+        seed=42,
+    )
+    steps_per_epoch = 6  # 2 macro-steps * 3 microbatches
+    with mock.patch.object(
+        keras_api.batch_selection,
+        "CyclicPoissonSampling",
+        wraps=keras_api.batch_selection.CyclicPoissonSampling,
+    ) as mock_sampling:
+      dataset = keras_api._PoissonSampledTrainingDataset(
+          x,
+          None,
+          None,
+          dp_params=dp_params,
+          steps_per_epoch=steps_per_epoch,
+      )
+      mock_sampling.assert_called_once_with(
+          sampling_prob=mock.ANY,
+          iterations=2,
+      )
+    self.assertLen(dataset, steps_per_epoch)
+
+    # For each macro-step (accumulation cycle of gas microbatches), verify that
+    # all valid (non-padding) indices are disjoint across the gas microbatches.
+    for step in range(0, steps_per_epoch, gas):
+      macro_indices = []
+      for offset in range(gas):
+        padded_indices = dataset._epoch_batches[step + offset]
+        self.assertEqual(padded_indices.shape[0] % dataset._padding_multiple, 0)
+        valid_indices = padded_indices[padded_indices >= 0]
+        self.assertTrue(np.all(valid_indices < train_size))
+        self.assertTrue(np.all(valid_indices >= 0))
+        # Ensure no duplicates within a single microbatch slice.
+        self.assertEqual(len(valid_indices), len(np.unique(valid_indices)))
+        macro_indices.extend(valid_indices.tolist())
+
+      # Ensure no duplicates across all microbatches in this accumulation step!
+      self.assertEqual(len(macro_indices), len(set(macro_indices)))
+
+    # When steps_per_epoch is not divisible by gas, ceil(7 / 3) = 3 macro steps.
+    with mock.patch.object(
+        keras_api.batch_selection,
+        "CyclicPoissonSampling",
+        wraps=keras_api.batch_selection.CyclicPoissonSampling,
+    ) as mock_sampling:
+      dataset_undivided = keras_api._PoissonSampledTrainingDataset(
+          x,
+          None,
+          None,
+          dp_params=dp_params,
+          steps_per_epoch=7,
+      )
+      mock_sampling.assert_called_once_with(
+          sampling_prob=mock.ANY,
+          iterations=3,
+      )
+    self.assertLen(dataset_undivided, 7)
+
+  def test_poisson_sampled_training_dataset_macro_steps_rng_progression(self):
+    train_size = 60
+    batch_size = 4
+    gas = 3
+    x = np.arange(train_size * 2).reshape(train_size, 2)
+    seed = 42
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gas,
+        train_steps=10,
+        train_size=train_size,
+        noise_multiplier=10.0,
+        seed=seed,
+    )
+    steps_per_epoch = 6  # 2 macro steps * 3 microbatches
+    dataset = keras_api._PoissonSampledTrainingDataset(
+        x,
+        None,
+        None,
+        dp_params=dp_params,
+        steps_per_epoch=steps_per_epoch,
+    )
+    # Epoch 0 was precomputed during __init__ (consuming 2 macro-steps from
+    # RNG). Trigger epoch 1 (should consume the next 2 macro-steps from RNG).
+    dataset.on_epoch_end()
+
+    # Reconstruct expected epoch 1 microbatches from an independent reference
+    # RNG.
+    ref_rng = np.random.default_rng(seed)
+    ref_strategy = keras_api.batch_selection.CyclicPoissonSampling(
+        sampling_prob=dataset._sampling_prob,
+        iterations=2,
+    )
+    # Drain epoch 0 (2 macro-steps):
+    list(ref_strategy.batch_iterator(train_size, rng=ref_rng))
+    # Epoch 1 (next 2 macro-steps):
+    ref_macro_batches = list(
+        ref_strategy.batch_iterator(train_size, rng=ref_rng)
+    )
+    expected_epoch_1_microbatches = []
+    for macro_indices in ref_macro_batches:
+      for slice_indices in np.array_split(np.asarray(macro_indices), gas):
+        expected_epoch_1_microbatches.append(
+            keras_api._pad_batch_indices(
+                slice_indices, dataset._padding_multiple
+            )
+        )
+
+    for i in range(steps_per_epoch):
+      np.testing.assert_array_equal(
+          dataset._epoch_batches[i],
+          expected_epoch_1_microbatches[i],
+      )
+
+  def test_calculate_optimizer_steps_to_perform_in_fit_with_gas(self):
+    train_size = 100
+    batch_size = 10
+    gas = 4
+    # With steps_per_epoch = None: effective_batch_size = 40.
+    # default_steps_per_epoch for optimizer steps = 100 // 40 = 2.
+    steps = keras_api._calculate_optimizer_steps_to_perform_in_fit(
+        train_size=train_size,
+        batch_size=batch_size,
+        epochs=3,
+        initial_epoch=0,
+        steps_per_epoch=None,
+        gradient_accumulation_steps=gas,
+    )
+    self.assertEqual(steps, 2 * 3)
+
+    # With explicit steps_per_epoch (e.g. 12 microbatches -> 3 optimizer steps)
+    steps_explicit = keras_api._calculate_optimizer_steps_to_perform_in_fit(
+        train_size=train_size,
+        batch_size=batch_size,
+        epochs=2,
+        initial_epoch=0,
+        steps_per_epoch=12,
+        gradient_accumulation_steps=gas,
+    )
+    self.assertEqual(steps_explicit, 3 * 2)
+
+  def test_fit_with_poisson_sampling_and_gradient_accumulation(self):
+    train_size = 40
+    batch_size = 4
+    gas = 2
+    epochs = 2
+    # effective_batch_size = 8, steps per epoch = 40 // 8 = 5 optimizer steps.
+    train_steps = epochs * (train_size // (batch_size * gas))
+    x = np.random.uniform(0, 1, (train_size, 4)).astype(np.float32)
+    y = np.random.uniform(0, 1, (train_size, 1)).astype(np.float32)
+
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gas,
+        train_steps=train_steps,
+        train_size=train_size,
+        noise_multiplier=1.0,
+        poisson_sampling_in_fit=True,
+        seed=123,
+    )
+    model = keras_api.make_private(model, dp_params)
+    optimizer = keras.optimizers.Adam(
+        learning_rate=0.01, gradient_accumulation_steps=gas
+    )
+    model.compile(loss="mse", optimizer=optimizer)
+
+    with mock.patch.object(
+        keras_api,
+        "_PoissonSampledTrainingDataset",
+        wraps=keras_api._PoissonSampledTrainingDataset,
+    ) as mock_dataset:
+      history = model.fit(  # pylint: disable=not-callable
+          x, y, batch_size=batch_size, epochs=epochs
+      )
+      mock_dataset.assert_called_once_with(
+          mock.ANY,
+          mock.ANY,
+          mock.ANY,
+          dp_params=dp_params,
+          steps_per_epoch=10,
+      )
+    self.assertIn("loss", history.history)
+    self.assertLen(history.history["loss"], epochs)
+    self.assertEqual(
+        keras_api._get_non_trainable_weight("_optimizer_steps", model)
+        .numpy()
+        .item(),
+        train_steps * gas,
+    )
+
+    # Test with explicit steps_per_epoch passed to fit()
+    model2 = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params2 = dataclasses.replace(dp_params, train_steps=6)
+    model2 = keras_api.make_private(model2, dp_params2)
+    optimizer2 = keras.optimizers.Adam(
+        learning_rate=0.01, gradient_accumulation_steps=gas
+    )
+    model2.compile(loss="mse", optimizer=optimizer2)
+    with mock.patch.object(
+        keras_api,
+        "_PoissonSampledTrainingDataset",
+        wraps=keras_api._PoissonSampledTrainingDataset,
+    ) as mock_dataset2:
+      model2.fit(  # pylint: disable=not-callable
+          x, y, batch_size=batch_size, epochs=1, steps_per_epoch=4
+      )
+      mock_dataset2.assert_called_once_with(
+          mock.ANY,
+          mock.ANY,
+          mock.ANY,
+          dp_params=dp_params2,
+          steps_per_epoch=4,
+      )
+    self.assertEqual(
+        keras_api._get_non_trainable_weight("_optimizer_steps", model2)
+        .numpy()
+        .item(),
+        4,
+    )
+
   def test_pad_batch_indices_reifies_empty_poisson_draw(self):
     padded_indices = keras_api._pad_batch_indices(
         np.array([], dtype=np.int32), multiple=4
