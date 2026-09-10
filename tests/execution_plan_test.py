@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Sequence
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
@@ -176,6 +177,35 @@ class ExecutionPlanTest(parameterized.TestCase):
     opt_state = plan.noise_addition_transform.init(dummy_grads)
     updates, _ = plan.noise_addition_transform.update(dummy_grads, opt_state)
     np.testing.assert_equal(updates, dummy_grads)
+
+  @parameterized.parameters(
+      {"strategy": [1.0, 0.5, 0.2]},
+      {"strategy": (1.0, 0.5, 0.2)},
+  )
+  def test_bandmf_sequence_strategy(self, strategy):
+    """Tests that BandMFConfig accepts lists and tuples."""
+    config = BandMFConfig(
+        strategy=strategy,
+        iterations=20,
+        expected_participations=2,
+        noise_multiplier=1.0,
+    )
+    self.assertIsInstance(config.strategy, Sequence)
+    self.assertEqual(config.num_bands, 3)
+    np.testing.assert_allclose(config.strategy, [1.0, 0.5, 0.2])
+    plan = config.make()
+    self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+
+  def test_bandmf_default_strategy_is_sequence(self):
+    """Tests that BandMFConfig.default produces a Sequence strategy."""
+    config = BandMFConfig.default(
+        num_bands=3,
+        iterations=20,
+        expected_participations=2,
+        noise_multiplier=1.0,
+    )
+    self.assertIsInstance(config.strategy, Sequence)
+    self.assertNotIsInstance(config.strategy, np.ndarray)
 
 
 if __name__ == "__main__":

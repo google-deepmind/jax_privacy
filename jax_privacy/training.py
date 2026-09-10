@@ -123,7 +123,9 @@ CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
 
 
 def _get_batch(
-    dataset: Dataset, indices: np.ndarray
+    dataset: Dataset,
+    indices: np.ndarray,
+    padding_example: optax.ArrayTree | None = None,
 ) -> tuple[Batch, jax.Array]:
   """Retrieves a batch from a PyTree or Grain dataset, zeroing padding examples.
 
@@ -131,6 +133,8 @@ def _get_batch(
     dataset: A PyTree of arrays or a PyGrain MapDataset.
     indices: A 1D array of indices. Entries equal to ``-1`` are treated as
       padding and the corresponding examples are zeroed out.
+    padding_example: Optional PyTree of zero arrays matching a single example's
+      structure and shape, used for padding Grain datasets.
 
   Returns:
     A tuple ``(batch, is_padding)`` where ``batch`` is the indexed and
@@ -140,9 +144,8 @@ def _get_batch(
   is_padding = indices == -1
 
   if _compilation.is_map_dataset(dataset):
-    template = jax.tree.map(np.zeros_like, dataset[0])
-    batch_elements = [template if i == -1 else dataset[i] for i in indices]
-    batch_elements = batch_elements or [template]
+    elements = [padding_example if i == -1 else dataset[i] for i in indices]
+    batch_elements = elements or [padding_example]
     batch = jax.tree.map(
         lambda *leaves: np.stack(leaves)[: len(indices)], *batch_elements
     )
@@ -358,6 +361,12 @@ class DPTrainer:
         else _validate.batch(dataset)
     )
 
+    padding_example = (
+        jax.tree.map(np.zeros_like, dataset[0])
+        if _compilation.is_map_dataset(dataset)
+        else None
+    )
+
     with _compilation.hoist_closed_over_constants():
       bss = trainer.plan.batch_selection_strategy
       batch_iterator = bss.batch_iterator(num_examples, rng=rng)
@@ -374,7 +383,9 @@ class DPTrainer:
             trainer.compilation_strategy.multiple,
             microbatch_size=trainer.performance_flags.microbatch_size,
         )
-        batch, is_padding_example = _get_batch(dataset, indices)
+        batch, is_padding_example = _get_batch(
+            dataset, indices, padding_example
+        )
         step_fn = trainer.train_step
         if indices.size in futures:
           step_fn = futures[indices.size].result()

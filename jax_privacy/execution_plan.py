@@ -53,9 +53,10 @@ available in the future.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 import dataclasses
 import functools
-from typing import Callable, Protocol
+from typing import Protocol
 
 import dp_accounting
 import jax
@@ -204,7 +205,7 @@ class BandMFConfig:
 
   Example Usage (BandMF with custom strategy):
     >>> config = BandMFConfig(  # doctest: +SKIP
-    ...   strategy=np.array([1.0, 0.5, 0.2]),
+    ...   strategy=[1.0, 0.5, 0.2],
     ...   iterations=1000, expected_participations=400,
     ... ).calibrate(epsilon=1.0, delta=1e-5)
 
@@ -217,7 +218,8 @@ class BandMFConfig:
     expected_participations: The expected number of times each example
       participates across all iterations. The Poisson sampling probability is
       derived as ``expected_participations * num_bands / iterations``.
-    strategy: The Toeplitz coefficients of the BandMF strategy matrix.
+    strategy: The Toeplitz coefficients of the BandMF strategy matrix as a
+      sequence of floats.
     noise_multiplier: The ratio of noise standard deviation to the query
       sensitivity. The actual noise stddev is determined by this value, the
       query sensitivity, and the strategy matrix column norm. If not set, use
@@ -244,7 +246,7 @@ class BandMFConfig:
 
   iterations: int
   expected_participations: float
-  strategy: np.typing.ArrayLike
+  strategy: Sequence[float]
   noise_multiplier: float | None = None
   l2_clip_norm: float = 1.0
   rescale_to_unit_norm: bool = True
@@ -411,7 +413,7 @@ class BandMFConfig:
     return BandMFConfig(
         iterations=iterations,
         expected_participations=expected_participations,
-        strategy=strategy,
+        strategy=strategy.tolist(),
         **kwargs,
     )
 
@@ -462,10 +464,11 @@ class BandMFConfig:
         partition_type=self._partition_type,
     )
 
-    max_column_norm = np.linalg.norm(self.strategy)
+    strategy = np.asarray(self.strategy)
+    max_column_norm = np.linalg.norm(strategy)
     column_normalize_for_n = self.iterations if self.column_normalize else None
     noising_matrix = toeplitz.inverse_as_streaming_matrix(
-        self.strategy, column_normalize_for_n
+        strategy, column_normalize_for_n
     )
 
     query_sensitivity = clipped_grad_transform(lambda: None).sensitivity()
