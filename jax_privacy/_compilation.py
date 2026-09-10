@@ -88,15 +88,21 @@ class AutotuneMicrobatch:
 CompilationStrategy: TypeAlias = PadToMultiple | AutotuneMicrobatch
 
 
+# TODO: b/545641734 - Add a "Design Philosophy" tab to ReadTheDocs.
 def is_map_dataset(dataset: Any) -> bool:
   """Returns whether ``dataset`` is a PyGrain MapDataset.
 
-  This function does not import Grain.
+  Note: JAX Privacy deliberately avoids importing Grain as a hard dependency.
+  Instead, we inspect the MRO class names via duck typing to detect Grain
+  datasets without requiring grain to be installed or imported at module load
+  time.
 
   Args:
-    dataset: the dataset which is to be queried.
-  """
+    dataset: The dataset instance to check.
 
+  Returns:
+    True if dataset is a Grain MapDataset, False otherwise.
+  """
   names = [c.__name__ for c in type(dataset).__mro__]
   return any(x in ("MapDataset", "RandomAccessDataSource") for x in names)
 
