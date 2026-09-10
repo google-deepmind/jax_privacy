@@ -34,7 +34,7 @@ injection through the callback_fn option.
 from collections.abc import Callable
 import dataclasses
 import functools
-from typing import Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
 from absl import logging
 import jax
@@ -57,7 +57,7 @@ Loss: TypeAlias = jax.Array
 Aux: TypeAlias = optax.ArrayTree
 PerExampleAux: TypeAlias = jax_privacy.clipping.AuxiliaryOutput
 Batch: TypeAlias = optax.ArrayTree
-Dataset: TypeAlias = optax.ArrayTree
+Dataset: TypeAlias = optax.ArrayTree | Any
 Params: TypeAlias = optax.ArrayTree
 OptState: TypeAlias = optax.ArrayTree
 NoiseState: TypeAlias = optax.ArrayTree
@@ -122,11 +122,13 @@ class TrainingState:
 CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
 
 
-def _get_batch(dataset: Batch, indices: np.ndarray) -> tuple[Batch, jax.Array]:
-  """Retrieves a batch from a PyTree dataset, zeroing padding examples.
+def _get_batch(
+    dataset: Dataset, indices: np.ndarray
+) -> tuple[Batch, jax.Array]:
+  """Retrieves a batch from a PyTree or Grain dataset, zeroing padding examples.
 
   Args:
-    dataset: A PyTree of arrays.
+    dataset: A PyTree of arrays or a PyGrain MapDataset.
     indices: A 1D array of indices. Entries equal to ``-1`` are treated as
       padding and the corresponding examples are zeroed out.
 
@@ -136,6 +138,15 @@ def _get_batch(dataset: Batch, indices: np.ndarray) -> tuple[Batch, jax.Array]:
     which examples are padding.
   """
   is_padding = indices == -1
+
+  if _compilation.is_map_dataset(dataset):
+    template = jax.tree.map(np.zeros_like, dataset[0])
+    batch_elements = [template if i == -1 else dataset[i] for i in indices]
+    batch_elements = batch_elements or [template]
+    batch = jax.tree.map(
+        lambda *leaves: np.stack(leaves)[: len(indices)], *batch_elements
+    )
+    return batch, jax.device_put(is_padding)
 
   def _index_and_zero(x):
     mask = np.expand_dims(is_padding, tuple(range(1, x.ndim)))
@@ -296,8 +307,9 @@ class DPTrainer:
     """Runs an end-to-end differentially private training loop.
 
     Args:
-      dataset: The training dataset, as a PyTree of arrays where the first axis
-        of each leaf is the batch / example dimension.
+      dataset: The training dataset, either as a PyTree of arrays where the
+        first axis of each leaf is the batch / example dimension, or as a
+        ``grain.MapDataset``.
       state: Initial parameter PyTree or a resumable ``TrainingState``. If a
         ``TrainingState`` is provided, training continues from the step recorded
         in the state, and the batch selection iterator safely fast-forwards to
@@ -340,7 +352,11 @@ class DPTrainer:
     rng = np.random.default_rng(rng_or_seed)
     prng_key = jax.random.key(int(rng.integers(2**63)))
 
-    num_examples = _validate.batch(dataset)
+    num_examples = (
+        len(dataset)
+        if _compilation.is_map_dataset(dataset)
+        else _validate.batch(dataset)
+    )
 
     with _compilation.hoist_closed_over_constants():
       bss = trainer.plan.batch_selection_strategy
