@@ -699,8 +699,16 @@ def _create_fit_fn_with_validation(
         train_size=validated_train_size,
     )
 
-    performed_optimizer_steps = (
+    # `_optimizer_steps` increments once per Keras train_step (micro-batch).
+    # DPKerasConfig.train_steps and the accountant count optimizer updates.
+    performed_microbatch_steps = (
         _get_non_trainable_weight('_optimizer_steps', self).numpy().item()
+    )
+    gradient_accumulation_steps = (
+        self._dp_params.gradient_accumulation_steps  # pylint: disable=protected-access
+    )
+    performed_optimizer_steps = math.ceil(
+        performed_microbatch_steps / gradient_accumulation_steps
     )
     optimizer_steps_to_perform = _calculate_optimizer_steps_to_perform_in_fit(
         self._dp_params.train_size,  # pylint: disable=protected-access
@@ -708,6 +716,7 @@ def _create_fit_fn_with_validation(
         epochs,
         initial_epoch,
         steps_per_epoch,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
     if (
         performed_optimizer_steps + optimizer_steps_to_perform
@@ -1094,14 +1103,27 @@ def _calculate_optimizer_steps_to_perform_in_fit(
     batch_size: int,
     epochs: int,
     initial_epoch: int,
-    steps_per_epoch: int,
+    steps_per_epoch: int | None,
+    gradient_accumulation_steps: int = 1,
 ) -> int:
-  """Returns the number of optimizer steps that will be performed by fit."""
+  """Returns the number of optimizer updates that will be performed by fit.
+
+  ``DPKerasConfig.train_steps`` and the privacy accountant count optimizer
+  updates, not micro-batches. When ``steps_per_epoch`` is omitted, this uses
+  ``effective_batch_size = batch_size * gradient_accumulation_steps`` so the
+  result matches ``epochs * (train_size // effective_batch_size)``.
+  """
   epochs_to_perform = epochs - initial_epoch
-  steps_per_epoch = steps_per_epoch or _get_default_steps_per_epoch(
-      train_size, batch_size
-  )
-  return steps_per_epoch * epochs_to_perform
+  if steps_per_epoch is None:
+    effective_batch_size = batch_size * gradient_accumulation_steps
+    optimizer_steps_per_epoch = _get_default_steps_per_epoch(
+        train_size, effective_batch_size
+    )
+  else:
+    optimizer_steps_per_epoch = math.ceil(
+        steps_per_epoch / gradient_accumulation_steps
+    )
+  return optimizer_steps_per_epoch * epochs_to_perform
 
 
 def _get_default_steps_per_epoch(train_size: int, batch_size: int) -> int:

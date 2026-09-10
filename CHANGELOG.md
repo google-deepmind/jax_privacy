@@ -22,6 +22,12 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ### Fixed
 
+-   **Keras `train_steps` with gradient accumulation**: `fit()` now budgets
+    privacy in optimizer-update units, matching `DPKerasConfig.train_steps` and
+    the accountant. Gemma Keras examples set
+    `train_steps = epochs * (train_size // effective_batch_size)`.
+    ([#234](https://github.com/google-deepmind/jax_privacy/issues/234),
+    [#288](https://github.com/google-deepmind/jax_privacy/issues/288))
 -   **`clipped_fun` Formal Guarantees**: Replaced the incorrect claim that
     sensitivity is always `1.0` / `l2_clip_norm` with guidance to use
     ``.sensitivity()`` / ``.l2_norm_bound``, matching `clipped_grad`. The old

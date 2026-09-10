@@ -162,6 +162,142 @@ class KerasApiTest(parameterized.TestCase):
 
     self.assertGreater(updated_params.noise_multiplier, 0.0)
 
+  def test_calibrated_noise_multiplier_invariant_to_gas_split(self):
+    # Same epsilon/delta, effective batch size, and optimizer-update count must
+    # yield the same noise multiplier regardless of how the effective batch is
+    # split into physical batch vs accumulation (#234).
+    train_size = 1024
+    epochs = 3
+    effective_batch_size = 64
+    train_steps = epochs * (train_size // effective_batch_size)
+    params1 = keras_api.DPKerasConfig(
+        epsilon=4.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=8,
+        gradient_accumulation_steps=8,
+        train_steps=train_steps,
+        train_size=train_size,
+    )
+    params2 = keras_api.DPKerasConfig(
+        epsilon=4.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=16,
+        gradient_accumulation_steps=4,
+        train_steps=train_steps,
+        train_size=train_size,
+    )
+    nm1 = params1.update_with_calibrated_noise_multiplier().noise_multiplier
+    nm2 = params2.update_with_calibrated_noise_multiplier().noise_multiplier
+    self.assertAlmostEqual(nm1, nm2)
+
+  def test_calculate_optimizer_steps_to_perform_in_fit_with_gas(self):
+    train_size = 100
+    batch_size = 10
+    gas = 4
+    # steps_per_epoch is None: effective_batch_size = 40, so 100 // 40 = 2
+    # optimizer updates per epoch.
+    steps = keras_api._calculate_optimizer_steps_to_perform_in_fit(
+        train_size=train_size,
+        batch_size=batch_size,
+        epochs=3,
+        initial_epoch=0,
+        steps_per_epoch=None,
+        gradient_accumulation_steps=gas,
+    )
+    self.assertEqual(steps, 2 * 3)
+
+    steps_explicit = keras_api._calculate_optimizer_steps_to_perform_in_fit(
+        train_size=train_size,
+        batch_size=batch_size,
+        epochs=2,
+        initial_epoch=0,
+        steps_per_epoch=12,
+        gradient_accumulation_steps=gas,
+    )
+    self.assertEqual(steps_explicit, 3 * 2)
+
+  def test_fit_budget_counts_optimizer_updates_when_gas_gt_1(self):
+    # Distinguishes micro-batch counting from optimizer-update counting.
+    # train_size=40, batch_size=4, gas=2, epochs=2 -> 10 optimizer updates,
+    # but 20 micro-batches. train_steps=15 must be allowed (old code rejected
+    # it because 20 > 15) and train_steps=9 must be rejected (10 > 9).
+    train_size = 40
+    batch_size = 4
+    gas = 2
+    epochs = 2
+    x = np.random.uniform(0, 1, (train_size, 4)).astype(np.float32)
+    y = np.random.uniform(0, 1, (train_size, 1)).astype(np.float32)
+
+    def _make_model(train_steps):
+      model = keras.Sequential(
+          [keras.Input(shape=(4,)), keras.layers.Dense(1)]
+      )
+      dp_params = keras_api.DPKerasConfig(
+          epsilon=100.0,
+          delta=1e-5,
+          clipping_norm=1.0,
+          batch_size=batch_size,
+          gradient_accumulation_steps=gas,
+          train_steps=train_steps,
+          train_size=train_size,
+          noise_multiplier=1.0,
+          seed=0,
+      )
+      model = keras_api.make_private(model, dp_params)
+      optimizer = keras.optimizers.Adam(
+          learning_rate=0.01, gradient_accumulation_steps=gas
+      )
+      model.compile(loss="mse", optimizer=optimizer)
+      return model
+
+    with self.assertRaisesRegex(
+        RuntimeError, "you will run out of privacy budget"
+    ):
+      _make_model(train_steps=9).fit(  # pylint: disable=not-callable
+          x, y, batch_size=batch_size, epochs=epochs
+      )
+
+    history = _make_model(train_steps=15).fit(  # pylint: disable=not-callable
+        x, y, batch_size=batch_size, epochs=epochs
+    )
+    self.assertIn("loss", history.history)
+    self.assertLen(history.history["loss"], epochs)
+
+  def test_subsequent_fit_budget_uses_optimizer_updates_with_gas(self):
+    # `_optimizer_steps` increments per micro-batch. After one epoch the
+    # remaining budget must still be measured in optimizer updates, or a
+    # second fit() would be rejected even when train_steps is sufficient.
+    train_size = 40
+    batch_size = 4
+    gas = 2
+    train_steps = 10  # two epochs of 5 optimizer updates
+    x = np.random.uniform(0, 1, (train_size, 4)).astype(np.float32)
+    y = np.random.uniform(0, 1, (train_size, 1)).astype(np.float32)
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gas,
+        train_steps=train_steps,
+        train_size=train_size,
+        noise_multiplier=1.0,
+        seed=0,
+    )
+    model = keras_api.make_private(model, dp_params)
+    optimizer = keras.optimizers.Adam(
+        learning_rate=0.01, gradient_accumulation_steps=gas
+    )
+    model.compile(loss="mse", optimizer=optimizer)
+    model.fit(x, y, batch_size=batch_size, epochs=1)  # pylint: disable=not-callable
+    history = model.fit(  # pylint: disable=not-callable
+        x, y, batch_size=batch_size, epochs=1
+    )
+    self.assertIn("loss", history.history)
+
   def test_add_dp_sgd_attributes(self):
     model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
     params = keras_api.DPKerasConfig(
