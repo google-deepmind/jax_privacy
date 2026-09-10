@@ -162,6 +162,36 @@ class KerasApiTest(parameterized.TestCase):
 
     self.assertGreater(updated_params.noise_multiplier, 0.0)
 
+  def test_calibrated_noise_multiplier_invariant_to_gas_split(self):
+    # Same epsilon/delta, effective batch size, and optimizer-update count must
+    # yield the same noise multiplier regardless of how the effective batch is
+    # split into physical batch vs accumulation (#234).
+    train_size = 1024
+    epochs = 3
+    effective_batch_size = 64
+    train_steps = epochs * (train_size // effective_batch_size)
+    params1 = keras_api.DPKerasConfig(
+        epsilon=4.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=8,
+        gradient_accumulation_steps=8,
+        train_steps=train_steps,
+        train_size=train_size,
+    )
+    params2 = keras_api.DPKerasConfig(
+        epsilon=4.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=16,
+        gradient_accumulation_steps=4,
+        train_steps=train_steps,
+        train_size=train_size,
+    )
+    nm1 = params1.update_with_calibrated_noise_multiplier().noise_multiplier
+    nm2 = params2.update_with_calibrated_noise_multiplier().noise_multiplier
+    self.assertAlmostEqual(nm1, nm2)
+
   def test_add_dp_sgd_attributes(self):
     model = keras.Sequential([keras.layers.Dense(10, input_shape=(784,))])
     params = keras_api.DPKerasConfig(

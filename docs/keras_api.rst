@@ -48,6 +48,20 @@ Poisson-sampled batches internally from those arrays.
    :start-after: [START example]
    :end-before: [END example]
 
+.. note::
+
+   :attr:`~jax_privacy.keras_api.DPKerasConfig.train_steps` counts
+   **optimizer updates**, not micro-batches. When
+   ``gradient_accumulation_steps > 1``, set
+
+   .. code-block:: python
+
+      train_steps = epochs * (train_size // effective_batch_size)
+
+   where ``effective_batch_size = batch_size * gradient_accumulation_steps``.
+   The privacy accountant uses ``train_steps`` directly as the composition
+   count; it does not divide by ``gradient_accumulation_steps``.
+
 ***************
  API Reference
 ***************

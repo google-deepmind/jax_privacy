@@ -139,7 +139,9 @@ mixed-precision training, enabling DP via
 {class}`~jax_privacy.keras_api.DPKerasConfig`, and ROUGE evaluation.
 
 **Correctness status:** Research / demonstration. Does not enable
-`poisson_sampling_in_fit` in the Keras API configuration.
+`poisson_sampling_in_fit` in the Keras API configuration. Sets `train_steps`
+to optimizer updates:
+`epochs * (train_size // (batch_size * gradient_accumulation_steps))`.
 
 ### `dp_sgd_keras_gemma3_synthetic_data.ipynb` (notebook)
 
@@ -149,7 +151,9 @@ from the tuned model. Includes MAUVE-based evaluation of synthetic data
 quality.
 
 **Correctness status:** Research / demonstration. Does not enable
-`poisson_sampling_in_fit` in the Keras API configuration.
+`poisson_sampling_in_fit` in the Keras API configuration. Sets `train_steps`
+to optimizer updates:
+`epochs * (train_size // (batch_size * gradient_accumulation_steps))`.
 
 ---
 
