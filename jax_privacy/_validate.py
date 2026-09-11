@@ -53,6 +53,20 @@ def equal(expected, **kwargs):
       )
 
 
+def is_int(context: str = '', **kwargs):
+  """Validates that all values are integers."""
+  for name, value in kwargs.items():
+    if value != int(value):
+      raise ValueError(f'Expected {name}={value} to be an integer. {context}')
+
+
+def is_none(context: str = '', **kwargs):
+  """Validates that all values are None."""
+  for name, value in kwargs.items():
+    if value is not None:
+      raise ValueError(f'Expected {name}={value} to be None. {context}')
+
+
 def batch(pytree) -> int:
   """Validates a batch pytree and returns the batch size.
 
