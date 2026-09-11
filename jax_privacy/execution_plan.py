@@ -561,3 +561,172 @@ class NonPrivateConfig:
         dp_event=dp_accounting.NonPrivateDpEvent(),
         neighboring_relation=NeighboringRelation.ADD_OR_REMOVE_ONE,
     )
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class RandomAllocationConfig:
+  """Configuration for a Random Allocation DP-SGD execution plan.
+
+  This config creates a DP execution plan using k-out-of-t random allocation
+  (balanced-iteration sampling) with standard DP-SGD (Gaussian noise).
+  Privacy accounting uses the exact PLD algorithm of Feldman & Shenfeld (2026).
+
+  Example Usage (Calibrate from epsilon/delta):
+    >>> config = RandomAllocationConfig(  # doctest: +SKIP
+    ...   iterations=1000, total_participations=100,
+    ... ).calibrate(epsilon=1.0, delta=1e-5)
+
+  Example Usage (Direct noise_multiplier):
+    >>> config = RandomAllocationConfig(
+    ...   iterations=1000, total_participations=100, noise_multiplier=1.0,
+    ... )
+
+  References:
+    * `Feldman & Shenfeld (2025) <https://arxiv.org/abs/2502.08202>`_
+    * `Feldman & Shenfeld (2026) <https://arxiv.org/abs/2602.17284>`_
+
+  Attributes:
+    iterations: The total number of iterations / batches to generate (t).
+    total_participations: The number of steps each example participates in (k).
+    noise_multiplier: The ratio of noise standard deviation to the query
+      sensitivity. If not set, use ``calibrate()`` to determine it from target
+      (epsilon, delta) privacy parameters.
+    l2_clip_norm: The maximum L2 norm of the per-example gradients.
+    rescale_to_unit_norm: Divide the clipped gradient by the ``l2_clip_norm``.
+    normalize_by: Divide the sum-of-clipped gradients by this value.
+  """
+
+  iterations: int
+  total_participations: int
+  noise_multiplier: float | None = None
+  l2_clip_norm: float = 1.0
+  rescale_to_unit_norm: bool = True
+  normalize_by: float = 1.0
+
+  def __post_init__(self):
+    _validate.non_negative(
+        iterations=self.iterations,
+        total_participations=self.total_participations,
+        l2_clip_norm=self.l2_clip_norm,
+        normalize_by=self.normalize_by,
+    )
+    if self.total_participations > self.iterations:
+      raise ValueError(
+          f'Expected total_participations={self.total_participations}'
+          f' <= iterations={self.iterations}.'
+      )
+    if self.noise_multiplier is not None:
+      _validate.non_negative(noise_multiplier=self.noise_multiplier)
+
+  @property
+  def _neighboring_relation(self) -> NeighboringRelation:
+    return NeighboringRelation.ADD_OR_REMOVE_ONE
+
+  def _get_dp_event(self, sigma: float) -> dp_accounting.DpEvent:
+    return accounting.random_allocation_dpsgd_event(
+        noise_multiplier=sigma,
+        iterations=self.iterations,
+        total_participations=self.total_participations,
+    )
+
+  def _check_calibrated(self) -> None:
+    if self.noise_multiplier is None:
+      raise ValueError(
+          'noise_multiplier is not set. Call calibrate() or provide'
+          ' noise_multiplier directly.'
+      )
+
+  def calibrate(
+      self,
+      *,
+      epsilon: float,
+      delta: float,
+      tol: float | None = None,
+      # PLD accounting for random allocation is slow and suffers less error from
+      # a larger value_discretization_interval.
+      accountant_fn: AccountantFn = lambda: dp_accounting.pld.PLDAccountant(
+          value_discretization_interval=1e-3
+      ),
+  ) -> RandomAllocationConfig:
+    """Returns a new config with a calibrated ``noise_multiplier``.
+
+    Args:
+      epsilon: The target privacy budget.
+      delta: The target privacy failure probability.
+      tol: The tolerance in ``noise_multiplier`` space for the calibration
+        binary search. Defaults to 1e-6 if not specified.
+      accountant_fn: A function that returns a fresh privacy accountant used for
+        calibration given a neighboring relation. Defaults to
+        :class:`~dp_accounting.pld.PLDAccountant`.
+
+    Returns:
+      A new RandomAllocationConfig with calibrated ``noise_multiplier``.
+    """
+    noise_multiplier = dp_accounting.calibrate_dp_mechanism(
+        make_fresh_accountant=lambda: accountant_fn(self._neighboring_relation),
+        make_event_from_param=self._get_dp_event,
+        target_epsilon=epsilon,
+        target_delta=delta,
+        tol=tol,
+    )
+    return dataclasses.replace(self, noise_multiplier=noise_multiplier)
+
+  def make(
+      self,
+      performance_flags: PerformanceFlags | None = None,
+  ) -> DPExecutionPlan:
+    """Returns a DP execution plan for random allocation DP-SGD.
+
+    Args:
+      performance_flags: Optional performance flags that control implementation
+        details such as ``dtype``, ``sharding``, and ``microbatching``. If
+        ``None``, default values are used for all performance flags.
+
+    Returns:
+      A DPExecutionPlan configured from this config and the given performance
+      flags.
+
+    Raises:
+      ValueError: If ``noise_multiplier`` has not been set.
+    """
+    self._check_calibrated()
+    if performance_flags is None:
+      performance_flags = PerformanceFlags()
+
+    @functools.wraps(clipping.clipped_grad)
+    def clipped_grad_transform(*args, **kwargs):
+      return clipping.clipped_grad(
+          *args,
+          **kwargs,
+          l2_clip_norm=self.l2_clip_norm,
+          normalize_by=self.normalize_by,
+          rescale_to_unit_norm=self.rescale_to_unit_norm,
+          dtype=performance_flags.dtype,
+          microbatch_size=performance_flags.microbatch_size,
+          spmd_axis_name=performance_flags.spmd_axis_name,
+          keep_batch_dim=performance_flags.keep_batch_dim,
+      )
+
+    batch_selection_strategy = batch_selection.RandomAllocationSampling(
+        total_participations=self.total_participations,
+        iterations=self.iterations,
+    )
+
+    query_sensitivity = clipped_grad_transform(lambda: None).sensitivity()
+
+    dp_event = self._get_dp_event(self.noise_multiplier)
+
+    privatizer = noise_addition.gaussian_privatizer(
+        stddev=float(self.noise_multiplier * query_sensitivity),
+        prng_key=performance_flags.noise_seed,
+        dtype=performance_flags.dtype,
+        intermediate_strategy=performance_flags.intermediate_strategy,
+    )
+
+    return DPExecutionPlan(
+        clipped_grad=clipped_grad_transform,
+        batch_selection_strategy=batch_selection_strategy,
+        noise_addition_transform=privatizer,
+        dp_event=dp_event,
+        neighboring_relation=self._neighboring_relation,
+    )
