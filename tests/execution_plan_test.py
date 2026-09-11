@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
@@ -127,6 +129,34 @@ class ExecutionPlanTest(parameterized.TestCase):
     )
     plan = config.make(flags)
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+
+  def test_rmse_invariant_to_strategy_scale(self):
+    # Scaling the strategy scales the noise stddev up and the noising matrix
+    # down, leaving the mechanism (and hence its rmse) unchanged.
+    config = BandMFConfig(
+        iterations=8,
+        expected_participations=2,
+        strategy=np.array([1.0, 0.5, 0.2]),
+        noise_multiplier=1.0,
+        column_normalize=False,
+    )
+    scaled = dataclasses.replace(
+        config, strategy=2 * np.asarray(config.strategy)
+    )
+    self.assertAlmostEqual(scaled._max_column_norm, 2 * config._max_column_norm)
+    self.assertAlmostEqual(config.rmse, scaled.rmse, places=6)
+
+  def test_rmse_raises_on_column_normalize(self):
+    config = BandMFConfig(
+        iterations=8,
+        expected_participations=2,
+        strategy=np.array([1.0, 0.5, 0.2]),
+        noise_multiplier=1.0,
+        column_normalize=True,
+    )
+    self.assertEqual(config._max_column_norm, 1.0)
+    with self.assertRaises(NotImplementedError):
+      _ = config.rmse
 
   def test_rmse_requires_calibration(self):
     config = BandMFConfig.default(
