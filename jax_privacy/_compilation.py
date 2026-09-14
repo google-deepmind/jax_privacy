@@ -89,7 +89,14 @@ CompilationStrategy: TypeAlias = PadToMultiple | AutotuneMicrobatch
 
 
 def is_map_dataset(dataset: Any) -> bool:
-  """Returns whether ``dataset`` is a PyGrain MapDataset without importing Grain."""
+  """Returns whether ``dataset`` is a PyGrain MapDataset.
+
+  This function does not import Grain.
+
+  Args:
+    dataset: the dataset which is to be queried.
+  """
+
   names = [c.__name__ for c in type(dataset).__mro__]
   return any(x in ("MapDataset", "RandomAccessDataSource") for x in names)
 
