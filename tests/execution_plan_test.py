@@ -207,6 +207,72 @@ class ExecutionPlanTest(parameterized.TestCase):
     updates, _ = plan.noise_addition_transform.update(dummy_grads, opt_state)
     np.testing.assert_equal(updates, dummy_grads)
 
+  def test_random_allocation_validation(self):
+    with self.assertRaises(ValueError):
+      execution_plan.RandomAllocationConfig(
+          iterations=10,
+          total_participations=15,  # k > t
+          noise_multiplier=1.0,
+      )
+
+  def test_random_allocation_uncalibrated_raises(self):
+    config = execution_plan.RandomAllocationConfig(
+        iterations=10,
+        total_participations=2,
+    )
+    with self.assertRaises(ValueError):
+      config.make()
+
+  def test_random_allocation_execution_plan_creation(self):
+    iterations = 20
+    total_participations = 4
+    config = execution_plan.RandomAllocationConfig(
+        iterations=iterations,
+        total_participations=total_participations,
+        noise_multiplier=1.5,
+    )
+    plan = config.make()
+    self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+    self.assertIsInstance(
+        plan.batch_selection_strategy,
+        batch_selection.RandomAllocationSampling,
+    )
+    self.assertEqual(
+        plan.batch_selection_strategy.total_participations, total_participations
+    )
+    self.assertEqual(plan.batch_selection_strategy.iterations, iterations)
+    self.assertIsInstance(
+        plan.dp_event, dp_accounting.dp_event.RandomAllocationDpEvent
+    )
+    self.assertEqual(plan.dp_event.num_selected, total_participations)
+    self.assertEqual(plan.dp_event.num_steps, iterations)
+    self.assertEqual(
+        plan.neighboring_relation,
+        dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE,
+    )
+
+  def test_random_allocation_calibrate(self):
+    accountant_fn = lambda rel: dp_accounting.pld.PLDAccountant(
+        neighboring_relation=rel, value_discretization_interval=1e-2
+    )
+    config = execution_plan.RandomAllocationConfig(
+        iterations=5,
+        total_participations=1,
+    ).calibrate(
+        epsilon=1.0,
+        delta=1e-03,
+        tol=1e-2,
+        accountant_fn=accountant_fn,
+    )
+
+    self.assertIsNotNone(config.noise_multiplier)
+    self.assertGreater(config.noise_multiplier, 0)
+    plan = config.make()
+    self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+    self.assertIsInstance(
+        plan.dp_event, dp_accounting.dp_event.RandomAllocationDpEvent
+    )
+
 
 if __name__ == "__main__":
   absltest.main()

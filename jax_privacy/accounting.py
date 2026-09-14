@@ -315,3 +315,46 @@ def truncated_amplified_bandmf_event(
       num_examples=largest_group_size,
       truncated_batch_size=truncated_batch_size,
   )
+
+
+def random_allocation_dpsgd_event(
+    noise_multiplier: float,
+    iterations: int,
+    *,
+    total_participations: int,
+) -> dp_accounting.DpEvent:
+  """Returns the DpEvent for DP-SGD with random allocation (k-out-of-t).
+
+  In random allocation (also known as balanced-iteration sampling), each example
+  independently participates in exactly ``total_participations`` (:math:`k`)
+  iterations chosen uniformly at random without replacement from ``iterations``
+  (:math:`t`) total steps. For :math:`k=1`, this participation pattern is
+  equivalent to single-epoch balls-in-bins sampling.
+
+  References:
+    * "Privacy Amplification by Random Allocation"
+      `Feldman & Shenfeld (2025) <https://arxiv.org/abs/2502.08202>`_
+    * "Efficient Privacy Loss Accounting for Subsampling and Random Allocation"
+      `Feldman & Shenfeld (2026) <https://arxiv.org/abs/2602.17284>`_
+
+  Args:
+    noise_multiplier: The noise multiplier of the Gaussian mechanism.
+    iterations: The total number of iterations/batches (t).
+    total_participations: The number of steps each example participates in (k).
+
+  Returns:
+    A DpEvent object.
+  """
+  _validate.non_negative(
+      noise_multiplier=noise_multiplier,
+      iterations=iterations,
+      total_participations=total_participations,
+  )
+  if total_participations > iterations:
+    raise ValueError(f'Expected {total_participations=} <= {iterations=}.')
+  gaussian = dp_accounting.GaussianDpEvent(noise_multiplier)
+  return dp_accounting.RandomAllocationDpEvent(
+      event=gaussian,
+      num_selected=total_participations,
+      num_steps=iterations,
+  )

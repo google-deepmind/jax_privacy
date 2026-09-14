@@ -126,8 +126,8 @@ For supported combinations, the accounting approach is noted as **PLD**,
 | Fixed-order + multi-epoch | {class}`~jax_privacy.batch_selection.CyclicPoissonSampling` (sampling_prob=1) | N/A | ✅ (Tier 2 via {class}`~jax_privacy.execution_plan.BandMFConfig`) | PLD via {func}`~jax_privacy.accounting.amplified_bandmf_event` | [Choquette-Choo+ 2022](#choquette-choo-2022) |
 | Fixed-size (with replacement) | {class}`~jax_privacy.batch_selection.FixedBatchSampling` (replace=True) | ✅ | ❓ | DpEvent created but no accountant support | [Balle+ 2018](#balle-2018) |
 | Fixed-size (without replacement) | {class}`~jax_privacy.batch_selection.FixedBatchSampling` (replace=False) | ✅ | ❓ | RDP via {func}`~jax_privacy.accounting.fixed_dpsgd_event` | [Balle+ 2018](#balle-2018) |
-| Balls-in-bins | {class}`~jax_privacy.batch_selection.BallsInBinsSampling` | 📄 | ✅ (MC) | MC via `balls_in_bins_accounting.py` example | [Choquette-Choo+ 2024](#choquette-choo-2024), [Chua+ 2024b](#chua-2024b) |
-| Random allocation ($k$-out-of-$t$), a.k.a. Balanced Iteration Subsampling (BIS) | {class}`~jax_privacy.batch_selection.RandomAllocationSampling` | 📄 | 📄 | None implemented | [Feldman+ 2025](#feldman-2025), [Dong+ 2025](#dong-2025), [Dong+ 2026b](#dong-2026b), [Schuchardt+ 2026](#schuchardt-2026), [Feldman+ 2026](#feldman-2026) |
+| Balls-in-bins | {class}`~jax_privacy.batch_selection.BallsInBinsSampling` | 📄 | ✅ (MC) | PLD for $k=1$ via {func}`~jax_privacy.accounting.random_allocation_dpsgd_event`; MC for DP-MF via `balls_in_bins_accounting.py` | [Choquette-Choo+ 2024](#choquette-choo-2024), [Chua+ 2024b](#chua-2024b) |
+| Random allocation ($k$-out-of-$t$), a.k.a. Balanced Iteration Subsampling (BIS) | {class}`~jax_privacy.batch_selection.RandomAllocationSampling` | 📄 | 📄 | PLD via {func}`~jax_privacy.accounting.random_allocation_dpsgd_event` | [Feldman+ 2025](#feldman-2025), [Dong+ 2025](#dong-2025), [Dong+ 2026b](#dong-2026b), [Schuchardt+ 2026](#schuchardt-2026), [Feldman+ 2026](#feldman-2026) |
 | $b$-min-sep ($b > 1$) | {class}`~jax_privacy.batch_selection.BMinSepSampling` | 📄 | ✅ (MC) | MC via {func}`experimental.monte_carlo <jax_privacy.experimental.monte_carlo.sample_generation.generate_sample>` | [Dong+ 2026a](#dong-2026a) |
 | User-level wrapper | {class}`~jax_privacy.batch_selection.UserSelectionStrategy` | ✅ | ✅ | Inherits from base strategy | — |
 | Shuffling | {class}`~jax_privacy.batch_selection.CyclicPoissonSampling` (partition_type=EQUAL_SPLIT) | 📄 | ❓ | No accounting support | [Chua+ 2024a](#chua-2024a) |
@@ -159,12 +159,13 @@ For supported combinations, the accounting approach is noted as **PLD**,
     support via {mod}`~jax_privacy.experimental.monte_carlo`
     ([Dong+ 2026a](#dong-2026a)).
 
-4.  **Random allocation** is implemented in jax_privacy but has no accounting
-    functions in {mod}`~jax_privacy.accounting`. Privacy analysis is available
-    in the literature ([Feldman+ 2025](#feldman-2025);
-    [Feldman+ 2026](#feldman-2026); [Schuchardt+ 2026](#schuchardt-2026)), and
-    `dp_accounting` support is
-    [being developed](https://github.com/google/differential-privacy/pull/414).
+4.  **Random allocation** is supported in `dp_accounting` via
+    `RandomAllocationDpEvent` (implementing [Feldman+ 2026](#feldman-2026)),
+    with exact PLD accounting via {class}`~dp_accounting.pld.PLDAccountant`.
+    In jax_privacy, it can be constructed via
+    {func}`~jax_privacy.accounting.random_allocation_dpsgd_event` for use with
+    {class}`~jax_privacy.batch_selection.RandomAllocationSampling` or configured
+    via {class}`~jax_privacy.execution_plan.RandomAllocationConfig`.
 
 5.  **Shuffling** is the most common batch selection strategy in practice but
     has a *strictly worse* privacy guarantee than Poisson subsampling
@@ -188,6 +189,7 @@ to accountant support and available privacy metrics.
 |---|---|---|---|---|---|---|
 | `PoissonSampledDpEvent(GaussianDpEvent)` | ✅ | ✅ | ADD_OR_REMOVE_ONE, REPLACE_SPECIAL | ✅ (both) | ✅ (PLD) | ✅ (PLD) |
 | `TruncatedSubsampledGaussianDpEvent` | ✅ | ❌ | REPLACE_ONE, REPLACE_SPECIAL | ✅ (PLD) | ✅ (PLD) | ✅ (PLD) |
+| `RandomAllocationDpEvent(GaussianDpEvent)` | ✅ | ❌ | ADD_OR_REMOVE_ONE | ✅ (PLD) | ✅ (PLD) | ✅ (PLD) |
 | `SampledWithoutReplacementDpEvent` | ❌ | ✅ | REPLACE_ONE only | ✅ (RDP) | ❌ | ❌ |
 | `SampledWithReplacementDpEvent` | ❌ | ❌ | — | ❌ | ❌ | ❌ |
 | `MixtureOfGaussiansDpEvent` | ✅ | ❌ | ADD_OR_REMOVE_ONE, REPLACE_SPECIAL | ✅ (PLD) | ✅ (PLD) | ✅ (PLD) |
@@ -635,10 +637,15 @@ to accountant support and available privacy metrics.
 
 *   **MF compatibility**: Not directly addressed.
 
-*   **dp_accounting support**: Not implemented.
+*   **dp_accounting support**: ✅ Supported via
+    `dp_accounting.dp_event.RandomAllocationDpEvent` and
+    {class}`~dp_accounting.pld.PLDAccountant`. Computes exact PLD bounds for
+    $k$-out-of-$t$ allocation with Gaussian noise based on Theorem 4.6.
 
-*   **jax_privacy support**: Batch selection supported via
-    {class}`~jax_privacy.batch_selection.RandomAllocationSampling` docstring.
+*   **jax_privacy support**: ✅ Batch selection supported via
+    {class}`~jax_privacy.batch_selection.RandomAllocationSampling`, accounting via
+    {func}`~jax_privacy.accounting.random_allocation_dpsgd_event`, and execution
+    plans via {class}`~jax_privacy.execution_plan.RandomAllocationConfig`.
 
 (dong-2026b)=
 ### Dong+ 2026b: Less Random, More Private: What is the Optimal Subsampling Scheme for DP-SGD?
@@ -670,13 +677,12 @@ The following combinations are analyzed in the academic literature but not yet
 fully supported in jax_privacy, and represent good candidates for future
 integration:
 
-*   **Random allocation ($k$-out-of-$t$) + PLD accounting**:
-    [Feldman+ 2025](#feldman-2025), [Schuchardt+ 2026](#schuchardt-2026), and
-    [Feldman+ 2026](#feldman-2026) provide efficient PLD computation techniques
-    for $k=1$, and a loose reduction from $k > 1$ to $k = 1$, that could be
-    integrated into dp_accounting, enabling `get_true_positive_rates` and
-    `get_gdp_parameter_estimate` for
-    {class}`~jax_privacy.batch_selection.RandomAllocationSampling`.
-    [Dong+ 2026b](#dong-2026b) provides an exact Monte Carlo accounting scheme
-    for $k \ge 1$ that could be added to jax_privacy's Monte Carlo estimation
+*   **Random allocation ($k$-out-of-$t$) + DP-MF / matrix mechanisms**:
+    `dp_accounting` supports $k$-out-of-$t$ random allocation for standard
+    DP-SGD (Gaussian noise) via `RandomAllocationDpEvent`. An open frontier is
+    integrating sampling-free accounting for random allocation combined with
+    non-identity matrix mechanisms (DP-MF / BandMF), as analyzed by
+    [Schuchardt+ 2026](#schuchardt-2026). In addition,
+    [Dong+ 2026b](#dong-2026b) provides a Monte Carlo accounting scheme for
+    $k \ge 1$ that could be added to jax_privacy's Monte Carlo estimation
     libraries.

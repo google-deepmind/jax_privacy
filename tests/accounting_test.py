@@ -55,6 +55,11 @@ PLD_EVENT_FNS = (
         largest_group_size=1000,
         truncated_batch_size=16,
     ),
+    functools.partial(
+        accounting.random_allocation_dpsgd_event,
+        iterations=100,
+        total_participations=4,
+    ),
 )
 
 RDP_REPLACE_EVENT_FNS = (
@@ -231,6 +236,26 @@ class AccountingTest(parameterized.TestCase):
     # The discrete Gaussian with rho=0.5/sigma^2 should give the same RDP
     # as the continuous Gaussian with the same sigma.
     self.assertAlmostEqual(eps_continuous, eps_discrete, places=4)
+
+  def test_random_allocation_dpsgd_event_structure(self):
+    event = accounting.random_allocation_dpsgd_event(
+        noise_multiplier=2.5,
+        iterations=50,
+        total_participations=5,
+    )
+    self.assertIsInstance(event, dp_accounting.dp_event.RandomAllocationDpEvent)
+    self.assertEqual(event.num_steps, 50)
+    self.assertEqual(event.num_selected, 5)
+    self.assertIsInstance(event.event, dp_accounting.dp_event.GaussianDpEvent)
+    self.assertEqual(event.event.noise_multiplier, 2.5)
+
+  def test_random_allocation_validation(self):
+    with self.assertRaises(ValueError):
+      accounting.random_allocation_dpsgd_event(
+          noise_multiplier=1.0,
+          iterations=10,
+          total_participations=15,
+      )
 
 
 if __name__ == "__main__":
