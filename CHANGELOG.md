@@ -20,6 +20,15 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+### Added
+
+-   **Matrix factorization notation page**: Moved the notation and
+    participation-schema tables from
+    `jax_privacy/matrix_factorization/README.md` to
+    [Matrix Factorization notation](docs/matrix_factorization.md), and
+    linked that page from the generated Public API docs.
+    ([#198](https://github.com/google-deepmind/jax_privacy/issues/198))
+
 ### Fixed
 
 -   **`clipped_fun` Formal Guarantees**: Replaced the incorrect claim that
