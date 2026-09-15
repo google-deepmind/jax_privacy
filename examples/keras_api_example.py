@@ -93,8 +93,9 @@ def main(_):
         clipping_norm=clipping_norm,
         batch_size=batch_size,
         # train_steps is optimizer updates, not micro-batches:
-        # epochs * (train_size // effective_batch_size). Accumulation is 1
-        # here, so effective_batch_size equals batch_size.
+        # (epochs * (train_size // batch_size)) // gradient_accumulation_steps.
+        # Accumulation is 1 here, so this equals epochs * (train_size //
+        # batch_size).
         train_steps=epochs * (train_size // batch_size),
         train_size=train_size,
         poisson_sampling_in_fit=True,

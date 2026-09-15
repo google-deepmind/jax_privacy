@@ -141,7 +141,7 @@ mixed-precision training, enabling DP via
 **Correctness status:** Research / demonstration. Does not enable
 `poisson_sampling_in_fit` in the Keras API configuration. Sets `train_steps`
 to optimizer updates:
-`epochs * (train_size // (batch_size * gradient_accumulation_steps))`.
+`(epochs * (train_size // batch_size)) // gradient_accumulation_steps`.
 
 ### `dp_sgd_keras_gemma3_synthetic_data.ipynb` (notebook)
 
@@ -153,7 +153,7 @@ quality.
 **Correctness status:** Research / demonstration. Does not enable
 `poisson_sampling_in_fit` in the Keras API configuration. Sets `train_steps`
 to optimizer updates:
-`epochs * (train_size // (batch_size * gradient_accumulation_steps))`.
+`(epochs * (train_size // batch_size)) // gradient_accumulation_steps`.
 
 ---
 

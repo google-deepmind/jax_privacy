@@ -23,9 +23,12 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 ### Fixed
 
 -   **Keras `train_steps` with gradient accumulation**: `fit()` now budgets
-    privacy in optimizer-update units, matching `DPKerasConfig.train_steps` and
-    the accountant. Gemma Keras examples set
-    `train_steps = epochs * (train_size // effective_batch_size)`.
+    privacy from the global micro-batch count. Keras carries leftover
+    accumulation across epochs, so updates are
+    `floor(total_microbatches / gas)`, not a per-epoch round. Gemma examples
+    set
+    `train_steps = (epochs * (train_size // batch_size)) //
+    gradient_accumulation_steps`.
     ([#234](https://github.com/google-deepmind/jax_privacy/issues/234),
     [#288](https://github.com/google-deepmind/jax_privacy/issues/288))
 -   **`clipped_fun` Formal Guarantees**: Replaced the incorrect claim that

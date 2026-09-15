@@ -102,13 +102,18 @@ class DPKerasConfig:
         try to train the model for more steps, it will fail. Because one
         optimizer update consumes ``gradient_accumulation_steps`` batches, this
         is the number of optimizer updates, not the number of (micro-)batches.
-        If you train by epochs, then it is epochs * (train_size //
-        effective_batch_size), where effective_batch_size = batch_size *
-        gradient_accumulation_steps (this reduces to epochs * (train_size //
-        batch_size) only when gradient_accumulation_steps == 1). If you train
-        while the dataset iterator is not over, then it is the number of
-        optimizer updates the iterator produces, i.e. its (micro-)batch length
-        // gradient_accumulation_steps.
+        Keras applies an update every ``gradient_accumulation_steps``
+        micro-batches and carries leftover accumulation across epoch and
+        ``fit()`` boundaries, so incomplete cycles are not counted. If you
+        train by epochs from a fresh optimizer, it is ``(epochs * (train_size
+        // batch_size)) // gradient_accumulation_steps`` (this reduces to
+        ``epochs * (train_size // batch_size)`` when
+        ``gradient_accumulation_steps == 1``). Rounding once per epoch (for
+        example ``epochs * (train_size // effective_batch_size)``) under-counts
+        when ``(train_size // batch_size) % gradient_accumulation_steps != 0``.
+        If you train while the dataset iterator is not over, then it is the
+        number of optimizer updates the iterator produces, i.e. its
+        (micro-)batch length // gradient_accumulation_steps.
       train_size: The number of training examples in the dataset. If you repeat
         the examples in your dataset iterator, it should be the number of
         training examples in the original dataset before repeating.
@@ -700,15 +705,24 @@ def _create_fit_fn_with_validation(
     )
 
     # `_optimizer_steps` increments once per Keras train_step (micro-batch).
-    # DPKerasConfig.train_steps and the accountant count optimizer updates.
+    # Keras carries gradient-accumulation remainder across epochs, so completed
+    # optimizer updates are floor(global_microbatches / gas), not a per-epoch
+    # round. DPKerasConfig.train_steps counts those completed updates.
     performed_microbatch_steps = (
         _get_non_trainable_weight('_optimizer_steps', self).numpy().item()
     )
     gradient_accumulation_steps = (
         self._dp_params.gradient_accumulation_steps  # pylint: disable=protected-access
     )
-    performed_optimizer_steps = math.ceil(
-        performed_microbatch_steps / gradient_accumulation_steps
+    upcoming_microbatch_steps = _microbatch_steps_to_perform_in_fit(
+        self._dp_params.train_size,  # pylint: disable=protected-access
+        batch_size,
+        epochs,
+        initial_epoch,
+        steps_per_epoch,
+    )
+    performed_optimizer_steps = _optimizer_updates_from_microbatches(
+        performed_microbatch_steps, gradient_accumulation_steps
     )
     optimizer_steps_to_perform = _calculate_optimizer_steps_to_perform_in_fit(
         self._dp_params.train_size,  # pylint: disable=protected-access
@@ -717,9 +731,14 @@ def _create_fit_fn_with_validation(
         initial_epoch,
         steps_per_epoch,
         gradient_accumulation_steps=gradient_accumulation_steps,
+        performed_microbatch_steps=performed_microbatch_steps,
+    )
+    total_optimizer_steps = _optimizer_updates_from_microbatches(
+        performed_microbatch_steps + upcoming_microbatch_steps,
+        gradient_accumulation_steps,
     )
     if (
-        performed_optimizer_steps + optimizer_steps_to_perform
+        total_optimizer_steps
         > self._dp_params.train_steps  # pylint: disable=protected-access
     ):
       raise RuntimeError(
@@ -732,7 +751,7 @@ def _create_fit_fn_with_validation(
           ' parameters, training steps will exceed the maximum number of'
           f' training steps: {performed_optimizer_steps=} +'
           f' {optimizer_steps_to_perform=} ='
-          f' {performed_optimizer_steps + optimizer_steps_to_perform} >'
+          f' {total_optimizer_steps} >'
           f' total_train_steps={self._dp_params.train_steps}.'  # pylint: disable=protected-access
       )
     if use_poisson_sampling_in_fit:
@@ -1098,6 +1117,33 @@ def _get_non_trainable_weight(
   return next(w for w in model.non_trainable_weights if w.name == weight_name)
 
 
+def _optimizer_updates_from_microbatches(
+    microbatch_steps: int, gradient_accumulation_steps: int
+) -> int:
+  """Returns completed optimizer updates after ``microbatch_steps`` train steps.
+
+  Keras applies an update every ``gradient_accumulation_steps`` micro-batches
+  and carries leftover accumulation across epoch and ``fit()`` boundaries.
+  Incomplete accumulation cycles are not optimizer updates.
+  """
+  return microbatch_steps // gradient_accumulation_steps
+
+
+def _microbatch_steps_to_perform_in_fit(
+    train_size: int,
+    batch_size: int,
+    epochs: int,
+    initial_epoch: int,
+    steps_per_epoch: int | None,
+) -> int:
+  """Returns the number of Keras train_step calls that fit() will perform."""
+  epochs_to_perform = epochs - initial_epoch
+  steps_per_epoch = steps_per_epoch or _get_default_steps_per_epoch(
+      train_size, batch_size
+  )
+  return steps_per_epoch * epochs_to_perform
+
+
 def _calculate_optimizer_steps_to_perform_in_fit(
     train_size: int,
     batch_size: int,
@@ -1105,25 +1151,24 @@ def _calculate_optimizer_steps_to_perform_in_fit(
     initial_epoch: int,
     steps_per_epoch: int | None,
     gradient_accumulation_steps: int = 1,
+    performed_microbatch_steps: int = 0,
 ) -> int:
-  """Returns the number of optimizer updates that will be performed by fit.
+  """Returns optimizer updates that the upcoming fit() will complete.
 
-  ``DPKerasConfig.train_steps`` and the privacy accountant count optimizer
-  updates, not micro-batches. When ``steps_per_epoch`` is omitted, this uses
-  ``effective_batch_size = batch_size * gradient_accumulation_steps`` so the
-  result matches ``epochs * (train_size // effective_batch_size)``.
+  Keras keeps gradient-accumulation state across epochs, so this converts the
+  global micro-batch count (already performed plus upcoming) rather than
+  rounding once per epoch. Leftover micro-batches from a previous epoch or
+  ``fit()`` are included in the next accumulation cycle.
   """
-  epochs_to_perform = epochs - initial_epoch
-  if steps_per_epoch is None:
-    effective_batch_size = batch_size * gradient_accumulation_steps
-    optimizer_steps_per_epoch = _get_default_steps_per_epoch(
-        train_size, effective_batch_size
-    )
-  else:
-    optimizer_steps_per_epoch = math.ceil(
-        steps_per_epoch / gradient_accumulation_steps
-    )
-  return optimizer_steps_per_epoch * epochs_to_perform
+  upcoming_microbatch_steps = _microbatch_steps_to_perform_in_fit(
+      train_size, batch_size, epochs, initial_epoch, steps_per_epoch
+  )
+  return _optimizer_updates_from_microbatches(
+      performed_microbatch_steps + upcoming_microbatch_steps,
+      gradient_accumulation_steps,
+  ) - _optimizer_updates_from_microbatches(
+      performed_microbatch_steps, gradient_accumulation_steps
+  )
 
 
 def _get_default_steps_per_epoch(train_size: int, batch_size: int) -> int:

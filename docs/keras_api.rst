@@ -51,16 +51,22 @@ Poisson-sampled batches internally from those arrays.
 .. note::
 
    :attr:`~jax_privacy.keras_api.DPKerasConfig.train_steps` counts
-   **optimizer updates**, not micro-batches. When
-   ``gradient_accumulation_steps > 1``, set
+   **optimizer updates**, not micro-batches. Keras applies an update every
+   ``gradient_accumulation_steps`` micro-batches and carries leftover
+   accumulation across epochs. From a fresh optimizer, set
 
    .. code-block:: python
 
-      train_steps = epochs * (train_size // effective_batch_size)
+      train_steps = (
+          (epochs * (train_size // batch_size))
+          // gradient_accumulation_steps
+      )
 
-   where ``effective_batch_size = batch_size * gradient_accumulation_steps``.
+   Rounding once per epoch
+   (``epochs * (train_size // effective_batch_size)``) under-counts when
+   ``(train_size // batch_size) % gradient_accumulation_steps != 0``.
    The privacy accountant uses ``train_steps`` directly as the composition
-   count; it does not divide by ``gradient_accumulation_steps``.
+   count.
 
 ***************
  API Reference

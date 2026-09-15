@@ -196,8 +196,9 @@ class KerasApiTest(parameterized.TestCase):
     train_size = 100
     batch_size = 10
     gas = 4
-    # steps_per_epoch is None: effective_batch_size = 40, so 100 // 40 = 2
-    # optimizer updates per epoch.
+    # 10 micro-batches/epoch * 3 epochs = 30 global steps. Keras applies at
+    # 4, 8, ..., 28 (7 updates). Per-epoch floor(100/40)*3 = 6 is wrong
+    # because leftover accumulation carries across epochs.
     steps = keras_api._calculate_optimizer_steps_to_perform_in_fit(
         train_size=train_size,
         batch_size=batch_size,
@@ -206,9 +207,10 @@ class KerasApiTest(parameterized.TestCase):
         steps_per_epoch=None,
         gradient_accumulation_steps=gas,
     )
-    self.assertEqual(steps, 2 * 3)
+    self.assertEqual(steps, 7)
 
-    steps_explicit = keras_api._calculate_optimizer_steps_to_perform_in_fit(
+    # steps_per_epoch % gas == 0: 12 * 2 = 24 micro-batches -> 6 updates.
+    steps_divisible = keras_api._calculate_optimizer_steps_to_perform_in_fit(
         train_size=train_size,
         batch_size=batch_size,
         epochs=2,
@@ -216,7 +218,51 @@ class KerasApiTest(parameterized.TestCase):
         steps_per_epoch=12,
         gradient_accumulation_steps=gas,
     )
-    self.assertEqual(steps_explicit, 3 * 2)
+    self.assertEqual(steps_divisible, 6)
+
+    # steps_per_epoch % gas != 0: 10 * 3 = 30 micro-batches -> 7 updates.
+    steps_remainder = keras_api._calculate_optimizer_steps_to_perform_in_fit(
+        train_size=train_size,
+        batch_size=batch_size,
+        epochs=3,
+        initial_epoch=0,
+        steps_per_epoch=10,
+        gradient_accumulation_steps=gas,
+    )
+    self.assertEqual(steps_remainder, 7)
+
+  def test_optimizer_updates_use_global_microbatch_remainder(self):
+    gas = 4
+    # After one micro-batch, no optimizer update has occurred.
+    self.assertEqual(
+        keras_api._optimizer_updates_from_microbatches(1, gas), 0
+    )
+    # Leftover from a previous epoch is consumed by the next one: 10 then 10
+    # micro-batches is 5 updates, not 2+2.
+    self.assertEqual(
+        keras_api._calculate_optimizer_steps_to_perform_in_fit(
+            train_size=100,
+            batch_size=10,
+            epochs=1,
+            initial_epoch=0,
+            steps_per_epoch=10,
+            gradient_accumulation_steps=gas,
+            performed_microbatch_steps=10,
+        ),
+        3,
+    )
+    self.assertEqual(
+        keras_api._calculate_optimizer_steps_to_perform_in_fit(
+            train_size=100,
+            batch_size=10,
+            epochs=2,
+            initial_epoch=0,
+            steps_per_epoch=10,
+            gradient_accumulation_steps=gas,
+            performed_microbatch_steps=0,
+        ),
+        5,
+    )
 
   def test_fit_budget_counts_optimizer_updates_when_gas_gt_1(self):
     # Distinguishes micro-batch counting from optimizer-update counting.
@@ -260,6 +306,52 @@ class KerasApiTest(parameterized.TestCase):
       )
 
     history = _make_model(train_steps=15).fit(  # pylint: disable=not-callable
+        x, y, batch_size=batch_size, epochs=epochs
+    )
+    self.assertIn("loss", history.history)
+    self.assertLen(history.history["loss"], epochs)
+
+  def test_fit_budget_when_steps_per_epoch_not_divisible_by_gas(self):
+    # train_size=100, batch_size=10, gas=4, epochs=3 -> 30 micro-batches and
+    # 7 optimizer updates (applied at global steps 4, 8, ..., 28). Per-epoch
+    # rounding would predict 6 and incorrectly accept train_steps=6.
+    train_size = 100
+    batch_size = 10
+    gas = 4
+    epochs = 3
+    x = np.random.uniform(0, 1, (train_size, 4)).astype(np.float32)
+    y = np.random.uniform(0, 1, (train_size, 1)).astype(np.float32)
+
+    def _make_model(train_steps):
+      model = keras.Sequential(
+          [keras.Input(shape=(4,)), keras.layers.Dense(1)]
+      )
+      dp_params = keras_api.DPKerasConfig(
+          epsilon=100.0,
+          delta=1e-5,
+          clipping_norm=1.0,
+          batch_size=batch_size,
+          gradient_accumulation_steps=gas,
+          train_steps=train_steps,
+          train_size=train_size,
+          noise_multiplier=1.0,
+          seed=0,
+      )
+      model = keras_api.make_private(model, dp_params)
+      optimizer = keras.optimizers.Adam(
+          learning_rate=0.01, gradient_accumulation_steps=gas
+      )
+      model.compile(loss="mse", optimizer=optimizer)
+      return model
+
+    with self.assertRaisesRegex(
+        RuntimeError, "you will run out of privacy budget"
+    ):
+      _make_model(train_steps=6).fit(  # pylint: disable=not-callable
+          x, y, batch_size=batch_size, epochs=epochs
+      )
+
+    history = _make_model(train_steps=7).fit(  # pylint: disable=not-callable
         x, y, batch_size=batch_size, epochs=epochs
     )
     self.assertIn("loss", history.history)
