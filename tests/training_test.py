@@ -195,10 +195,10 @@ class DPTrainerTest(parameterized.TestCase):
 
     grain_data = [{'x': np.zeros((3, 2)), 'y': np.ones((4,))}] * 5
     grain_ds = grain.MapDataset.source(grain_data)
-    batch_grain, is_pad_grain = training._get_batch(grain_ds, empty_idx)
+    batch_grain, is_pad = training._get_batch(grain_ds, empty_idx)
     self.assertEqual(batch_grain['x'].shape, (0, 3, 2))
     self.assertEqual(batch_grain['y'].shape, (0, 4))
-    self.assertEqual(is_pad_grain.shape, (0,))
+    self.assertEqual(is_pad.shape, (0,))
 
   def test_get_batch_with_padding(self):
     """Test _get_batch correctly handles padding entries (-1)."""
@@ -213,7 +213,46 @@ class DPTrainerTest(parameterized.TestCase):
     self.assertEqual(batch['y'].shape, (3, 1))
     np.testing.assert_array_equal(is_padding, [False, True, False])
     np.testing.assert_allclose(batch['x'][0], [1.0, 2.0])
+    np.testing.assert_allclose(batch['x'][1], [0.0, 0.0])
     np.testing.assert_allclose(batch['x'][2], [4.0, 5.0])
+
+  def test_get_batch_with_empty_indices(self):
+    """Test _get_batch correctly handles empty Grain dataset."""
+    ex = {'a': np.zeros((2, 3)), 'b': np.ones((4,))}
+    grain_ds = grain.MapDataset.source([ex, ex, ex, ex])
+    indices = np.array([], dtype=np.int32)
+    batch, is_padding = training._get_batch(grain_ds, indices)
+    self.assertEqual(jax.tree.structure(batch), jax.tree.structure(ex))
+    self.assertEqual(batch['a'].shape, (0, 2, 3))
+    self.assertEqual(batch['b'].shape, (0, 4))
+    self.assertEqual(is_padding.shape, (0,))
+
+  def test_get_batch_does_not_access_index_zero_when_not_padding(self):
+    """Tests that _get_batch only fetches requested indices without padding."""
+    accessed_indices = []
+
+    class TrackingDataSource(grain.RandomAccessDataSource):
+
+      def __len__(self):
+        return 10
+
+      def __getitem__(self, idx):
+        accessed_indices.append(idx)
+        return {'x': np.array([float(idx), float(idx)])}
+
+    ds = grain.MapDataset.source(TrackingDataSource())
+    indices = np.array([2, 3, 5], dtype=np.int32)
+    batch, is_padding = training._get_batch(ds, indices)
+    self.assertEqual(accessed_indices, [2, 3, 5])
+    np.testing.assert_array_equal(is_padding, [False, False, False])
+    self.assertEqual(batch['x'].shape, (3, 2))
+
+    accessed_indices.clear()
+    indices = np.array([2, -1, 5], dtype=np.int32)
+    batch, is_padding = training._get_batch(ds, indices)
+    self.assertEqual(accessed_indices, [2, 9, 5])
+    np.testing.assert_array_equal(is_padding, [False, True, False])
+    np.testing.assert_allclose(batch['x'][1], [0.0, 0.0])
 
   def test_params_change_after_training(self):
     """Parameters should change from initial values after training."""
