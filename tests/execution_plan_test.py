@@ -13,8 +13,8 @@
 # limitations under the License.
 
 import dataclasses
+import json
 import math
-
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
@@ -314,6 +314,21 @@ class ExecutionPlanTest(parameterized.TestCase):
         config.make().batch_selection_strategy,
         batch_selection.CyclicPoissonSampling,
     )
+
+  def test_bandmf_config_serializable(self):
+    """Tests that BandMFConfig can be serialized via dataclasses.asdict."""
+    config = BandMFConfig.default(
+        num_bands=3,
+        iterations=20,
+        expected_participations=2,
+        noise_multiplier=1.0,
+    )
+    d = dataclasses.asdict(config)
+    serialized = json.dumps(d)
+    loaded = json.loads(serialized)
+    self.assertEqual(loaded["iterations"], 20)
+    self.assertEqual(loaded["expected_participations"], 2.0)
+    self.assertEqual(loaded["strategy"], list(config.strategy))
 
 
 if __name__ == "__main__":
