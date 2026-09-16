@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import dataclasses
-
+import json
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
@@ -206,6 +206,41 @@ class ExecutionPlanTest(parameterized.TestCase):
     opt_state = plan.noise_addition_transform.init(dummy_grads)
     updates, _ = plan.noise_addition_transform.update(dummy_grads, opt_state)
     np.testing.assert_equal(updates, dummy_grads)
+
+  def test_bandmf_config_serializable(self):
+    """Tests that BandMFConfig can be serialized via dataclasses.asdict."""
+    config = BandMFConfig.default(
+        num_bands=3,
+        iterations=20,
+        expected_participations=2,
+        noise_multiplier=1.0,
+    )
+    self.assertEqual(config.strategy.tolist(), list(config.strategy))
+    d = dataclasses.asdict(config)
+    serialized = json.dumps(d)
+    loaded = json.loads(serialized)
+    self.assertEqual(loaded["iterations"], 20)
+    self.assertEqual(loaded["expected_participations"], 2.0)
+    self.assertEqual(loaded["strategy"], list(config.strategy))
+
+  def test_bandmf_config_numpy_strategy(self):
+    """Tests BandMFConfig initialized with a numpy array strategy."""
+    strategy_np = np.array([1.0, 0.5, 0.2])
+    config = BandMFConfig(
+        strategy=strategy_np,
+        iterations=20,
+        expected_participations=2,
+        noise_multiplier=1.0,
+    )
+    self.assertEqual(config.strategy.tolist(), [1.0, 0.5, 0.2])
+    for x in config.strategy:
+      self.assertIsInstance(x, float)
+    for x in config.strategy.tolist():
+      self.assertIsInstance(x, float)
+    d = dataclasses.asdict(config)
+    serialized = json.dumps(d)
+    loaded = json.loads(serialized)
+    self.assertEqual(loaded["strategy"], [1.0, 0.5, 0.2])
 
 
 if __name__ == "__main__":
