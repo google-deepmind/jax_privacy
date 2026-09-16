@@ -53,10 +53,9 @@ available in the future.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
 import dataclasses
 import functools
-from typing import Protocol
+from typing import Callable, Protocol
 
 import dp_accounting
 import jax
@@ -187,11 +186,10 @@ class ExecutionPlanConfig(Protocol):
 class BandMFConfig:
   """Configuration for an Amplified BandMF-based DPExecutionPlan.
 
-  This config is designed to be fully serializable, so it is defined in terms of
-  simple python types (int, float, bool, Sequence, etc.) types. The config can
-  be created with or without a ``noise_multiplier``. If created without one,
-  call ``calibrate()`` to obtain a new config with a ``noise_multiplier``
-  calibrated to a target (epsilon, delta) guarantee.
+  This config is designed to be fully serializable, defined in terms of simple
+  types. The config can be created with or without a ``noise_multiplier``. If
+  created without one, call ``calibrate()`` to obtain a new config with a
+  ``noise_multiplier`` calibrated to a target (epsilon, delta) guarantee.
 
   Example Usage (Calibrate from epsilon/delta):
     >>> config = BandMFConfig.default(  # doctest: +SKIP
@@ -206,7 +204,7 @@ class BandMFConfig:
 
   Example Usage (BandMF with custom strategy):
     >>> config = BandMFConfig(  # doctest: +SKIP
-    ...   strategy=[1.0, 0.5, 0.2],
+    ...   strategy=np.array([1.0, 0.5, 0.2]),
     ...   iterations=1000, expected_participations=400,
     ... ).calibrate(epsilon=1.0, delta=1e-5)
 
@@ -248,7 +246,7 @@ class BandMFConfig:
 
   iterations: int
   expected_participations: float
-  strategy: Sequence[float]
+  strategy: np.typing.ArrayLike
   noise_multiplier: float | None = None
   l2_clip_norm: float = 1.0
   rescale_to_unit_norm: bool = True
@@ -431,7 +429,7 @@ class BandMFConfig:
     return BandMFConfig(
         iterations=iterations,
         expected_participations=expected_participations,
-        strategy=strategy.tolist(),
+        strategy=strategy,
         **kwargs,
     )
 
@@ -482,11 +480,10 @@ class BandMFConfig:
         partition_type=self._partition_type,
     )
 
-    strategy = np.asarray(self.strategy)
     max_column_norm = self._max_column_norm
     column_normalize_for_n = self.iterations if self.column_normalize else None
     noising_matrix = toeplitz.inverse_as_streaming_matrix(
-        strategy, column_normalize_for_n
+        self.strategy, column_normalize_for_n
     )
 
     query_sensitivity = clipped_grad_transform(lambda: None).sensitivity()

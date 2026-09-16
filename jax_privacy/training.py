@@ -123,14 +123,9 @@ CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
 
 
 def _get_batch(
-    dataset: Dataset,
-    indices: np.ndarray,
+    dataset: Dataset, indices: np.ndarray
 ) -> tuple[Batch, jax.Array]:
   """Retrieves a batch from a PyTree or Grain dataset, zeroing padding examples.
-
-  This function expects the dataset to be backed by numpy arrays, and it returns
-  batches as numpy arrays as well. It should work even if the dataset is backed
-  by JAX arrays, but it will lead to JAX --> numpy conversions.
 
   Args:
     dataset: A PyTree of arrays or a PyGrain MapDataset.
@@ -145,19 +140,19 @@ def _get_batch(
   is_padding = indices == -1
 
   if _compilation.is_map_dataset(dataset):
-    # If indices is empty, we grab the first example just so np.stack works.
-    # We still return an empty batch, just with the correct shape and structure.
-    elements = [dataset[i] for i in indices] or [dataset[0]]
-    batch = jax.tree.map(lambda *x: np.stack(x)[: len(indices)], *elements)
+    template = jax.tree.map(np.zeros_like, dataset[0])
+    batch_elements = [template if i == -1 else dataset[i] for i in indices]
+    batch_elements = batch_elements or [template]
+    batch = jax.tree.map(
+        lambda *leaves: np.stack(leaves)[: len(indices)], *batch_elements
+    )
+    return batch, jax.device_put(is_padding)
 
-  else:
-    batch = jax.tree.map(lambda x: x[indices], dataset)
-
-  def zero_out_padding(x):
+  def _index_and_zero(x):
     mask = np.expand_dims(is_padding, tuple(range(1, x.ndim)))
-    return np.where(mask, 0, x)
+    return jax.device_put(np.where(mask, 0, x[indices]))
 
-  return jax.tree.map(zero_out_padding, batch), jax.device_put(is_padding)
+  return jax.tree.map(_index_and_zero, dataset), jax.device_put(is_padding)
 
 
 # DPTrainer contains static configuration that defines the training step, but
@@ -167,26 +162,6 @@ def _get_batch(
 @dataclasses.dataclass(frozen=True, kw_only=True, eq=False)
 class DPTrainer:
   """Stateless trainer encapsulating the static configuration of a DP loop.
-
-  DPTrainer is JAX Privacy's "Tier 1" API for DP training. It is the only
-  end-to-end mechanism implementation in the library (with the rest of the
-  library implementing critical mechanism ingredients) and surrounding
-  utilities. By design it is less flexible than the Tier 2 API (custom training
-  loop with ExecutionPlanConfig) and Tier 3 API (direct usage of low-level
-  components), however it is more convenient to use and provides easy access to
-  standard mechanism implementations. The goal is to support as much of the
-  flexibility of the lower-level components as we can reasonably maintain, with
-  focus on supporting established state-of-the-art mechanisms beyond DP-SGD.
-  What you get by using DPTrainer:
-
-    - Support for arbitrary ExecutionPlanConfig (Tier 2 API).
-    - Support for custom DP-aware optimizers, like those that transform
-      per-example gradients before clipping (e.g., scale-then-privatize).
-    - Support for advanced compilation strategies including precompilation and
-      automatic microbatch-size selection, allowing you to avoid thinking about
-      batch size tuning and gradient accumulation.
-    - Support for arbitrary JAX loss functions (no framework lock-in).
-    - Implementation correctness has been verified by JAX Privacy authors.
 
   ``DPTrainer`` separates *configuration* (plan, loss, optimizer) from
   *per-run state* (data, initial params, RNG seed).  This makes the
