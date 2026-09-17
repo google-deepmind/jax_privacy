@@ -56,6 +56,8 @@ class KerasApiTest(parameterized.TestCase):
     # Invalid delta
     with self.assertRaisesRegex(ValueError, "Expected delta=0.0 > 0"):
       dataclasses.replace(valid_params, delta=0.0)
+    with self.assertRaisesRegex(ValueError, r"Expected delta=2.0 in \(0, 1\]"):
+      dataclasses.replace(valid_params, delta=2.0)
 
     # Invalid batch size
     with self.assertRaisesRegex(ValueError, "Expected batch_size=0 > 0"):
