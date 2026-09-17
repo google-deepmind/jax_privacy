@@ -93,8 +93,9 @@ yet supported.
 
 ### Tier 2: `DPExecutionPlan`
 
-*   {mod}`~jax_privacy.execution_plan` (currently only
-    {class}`~jax_privacy.execution_plan.BandMFConfig` exists)
+*   {mod}`~jax_privacy.execution_plan` (currently
+    {class}`~jax_privacy.execution_plan.BandMFConfig` and
+    {class}`~jax_privacy.execution_plan.NonPrivateConfig`)
 
 A single config object bundles batch selection, clipped gradient computation,
 noise addition, and the corresponding `DpEvent` into a verified
