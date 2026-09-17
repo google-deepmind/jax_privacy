@@ -33,6 +33,7 @@ class ExecutionPlanTest(parameterized.TestCase):
   @parameterized.parameters(
       {"strategy": np.array([])},
       {"truncated_batch_size": 5, "num_examples": None},
+      {"normalize_by": 0},
   )
   def test_bandmf_validation(self, **kwargs):
     default_kwargs = {

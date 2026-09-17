@@ -259,8 +259,8 @@ class BandMFConfig:
     _validate.non_negative(
         iterations=self.iterations,
         l2_clip_norm=self.l2_clip_norm,
-        normalize_by=self.normalize_by,
     )
+    _validate.positive(normalize_by=self.normalize_by)
     _validate.strategy(self.strategy, self.iterations)
     _validate.in_range(
         0,
