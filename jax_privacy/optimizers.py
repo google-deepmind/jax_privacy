@@ -222,9 +222,7 @@ def scale_then_privatize(
     # Multiply/divide in the scale dtype (at least float32) so float16
     # gradients do not overflow before the result is cast back.
     return lambda updates: jax.tree.map(
-        lambda u, s: jnp.astype(
-            scale_fn(jnp.astype(u, s.dtype), s), u.dtype
-        ),
+        lambda u, s: jnp.astype(scale_fn(jnp.astype(u, s.dtype), s), u.dtype),
         updates,
         scaling,
     )
