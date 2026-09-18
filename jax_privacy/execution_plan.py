@@ -260,7 +260,10 @@ class BandMFConfig:
         iterations=self.iterations,
         l2_clip_norm=self.l2_clip_norm,
     )
-    _validate.positive(normalize_by=self.normalize_by)
+    if not (np.isfinite(self.normalize_by) and self.normalize_by > 0):
+      raise ValueError(
+          f'Expected normalize_by={self.normalize_by} to be finite and > 0.'
+      )
     _validate.strategy(self.strategy, self.iterations)
     _validate.in_range(
         0,
