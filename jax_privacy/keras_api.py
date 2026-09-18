@@ -209,12 +209,11 @@ class DPKerasConfig:
     """Validates the parameters for DP-SGD training."""
     _validate.positive(
         epsilon=self.epsilon,
-        delta=self.delta,
         clipping_norm=self.clipping_norm,
         batch_size=self.batch_size,
         train_size=self.train_size,
     )
-    if self.delta > 1:
+    if not 0 < self.delta <= 1:
       raise ValueError(f'Expected delta={self.delta} in (0, 1].')
     if self.batch_size > self.train_size:
       raise ValueError(
