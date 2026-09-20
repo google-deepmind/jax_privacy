@@ -338,18 +338,24 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
     # Initialize last_batch so that every user is eligible in the first batch:
     # current_batch(0) - last_batch(-min_sep) = min_sep >= min_sep.
     last_batch = np.full(graph.num_users, -self._min_sep, dtype=np.int32)
-    example_count = np.zeros(num_examples, dtype=dtype)
+    # Note ``dtype`` is sized to hold example *indices*; participation counts
+    # are bounded by ``total_slots`` instead, so they need their own dtype.
+    example_count = np.zeros(num_examples, dtype=np.int64)
     slots: list[int] = []
 
     user_maxpart_cap = 1
     ex_maxpart_cap = 1
     rng = np.random.default_rng(seed)
     eligible = np.argsort(graph.csr.degree, kind='stable')
+    # Examples set aside by the caps, accumulated across passes so that none is
+    # lost: a pass that makes progress still reports cap-blocked examples, and
+    # they must stay available for when the caps are next relaxed.
+    capped = np.empty(0, dtype=eligible.dtype)
     while len(slots) < total_slots:
       if seed is not None:
         _shuffle_in_place(eligible, graph.csr.degree, rng)
       slots_before = len(slots)
-      eligible, capped = self._greedy_pass(
+      eligible, newly_capped = self._greedy_pass(
           graph,
           eligible,
           slots,
@@ -359,6 +365,7 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
           user_maxpart_cap,
           ex_maxpart_cap,
       )
+      capped = np.concatenate([capped, newly_capped])
       if len(slots) > slots_before:
         continue
       # No progress — relax caps if examples were blocked by them.
@@ -366,7 +373,8 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
         break
       user_maxpart_cap += 1
       ex_maxpart_cap = math.ceil(user_maxpart_cap / self._user_example_ratio)
-      eligible = np.concatenate([eligible, capped]) if eligible.size else capped
+      eligible = np.concatenate([eligible, capped])
+      capped = np.empty(0, dtype=eligible.dtype)
 
     if len(slots) < total_slots:
       raise ValueError(
@@ -414,8 +422,17 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
       user_maxpart_cap,
       ex_maxpart_cap,
   ):
-    """Runs one greedy pass, returning (min_sep_blocked, cap_blocked)."""
-    min_sep_blocked = []
+    """Runs one greedy pass, returning (still_eligible, cap_blocked).
+
+    ``still_eligible`` holds the examples that remain candidates under the
+    current caps: those blocked by min-sep, plus those selected in this pass.
+    Selected examples are kept because an example may be placed in several
+    batches, up to ``ex_maxpart_cap`` times; dropping them here would limit the
+    total number of slots to the number of examples. ``cap_blocked`` holds the
+    examples that were blocked by the per-example or per-user caps, and only
+    become candidates again once those caps are relaxed.
+    """
+    still_eligible = []
     cap_blocked = []
     for ex in eligible.tolist():
       if len(slots) >= self._batch_size * self._iterations:
@@ -432,14 +449,15 @@ class MultiOwnerMinSepSampling(batch_selection.BatchSelectionStrategy):
         continue
       # Batch-level min-sep.
       if np.any(current_batch - last_batch[users] < self._min_sep):
-        min_sep_blocked.append(ex)
+        still_eligible.append(ex)
         continue
       # Select.
       slots.append(ex)
       example_count[ex] += 1
       user_count[users] += 1
       last_batch[users] = current_batch
-    return np.array(min_sep_blocked, dtype=eligible.dtype), np.array(
+      still_eligible.append(ex)
+    return np.array(still_eligible, dtype=eligible.dtype), np.array(
         cap_blocked, dtype=eligible.dtype
     )
 
