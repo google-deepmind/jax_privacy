@@ -79,7 +79,6 @@ import abc
 import dataclasses
 import enum
 import itertools
-import math
 from typing import Iterator
 
 import numpy as np
@@ -376,23 +375,12 @@ class BallsInBinsSampling(BatchSelectionStrategy):
 class RandomAllocationSampling(BatchSelectionStrategy):
   """Implements k-out-of-t random allocation (aka balanced-iteration sampling).
 
-  Each example independently selects exactly :math:`k` steps (out of the steps
-  it is eligible for) to participate in, uniformly at random. For :math:`k=1`
-  and ``cycle_length=1``, this participation pattern is equivalent to
-  BallsInBinsSampling.
-
-  If ``cycle_length > 1``, each example is first independently assigned to one
-  of ``cycle_length`` groups uniformly at random, and group :math:`j` is only
-  eligible to participate in iterations :math:`i` with ``i % cycle_length ==
-  j``.
-  Two consecutive participations of an example are then always at least
-  ``cycle_length`` iterations apart, which satisfies the min-separation
-  requirement of a ``cycle_length``-banded matrix mechanism.
-  ``cycle_length == 1`` retrieves standard random allocation.
+  Each example independently selects exactly :math:`k` steps (out of
+  ``iterations`` total) to participate in, uniformly at random. For
+  :math:`k=1`, this participation pattern is equivalent to BallsInBinsSampling.
 
   References:
     * https://arxiv.org/abs/2206.03151 (k=1 only)
-    * https://arxiv.org/abs/2306.08153 (cycle_length > 1)
     * https://arxiv.org/abs/2410.06266 (k=1 only)
     * https://arxiv.org/abs/2412.16802 (k=1 only)
     * https://arxiv.org/abs/2502.08202 (k>1)
@@ -403,51 +391,27 @@ class RandomAllocationSampling(BatchSelectionStrategy):
 
   Formal guarantees of the ``batch_iterator``:
     - All batches consist of indices in the range ``[0, num_examples)``.
-    - Each example only appears in batches with index ``i`` such that
-      ``i % cycle_length == j`` for some fixed ``j`` chosen uniformly at random
-      independently for each example.
-    - If ``iterations`` is a multiple of ``cycle_length``, each example
-      appears in *exactly* :math:`k` of the batches it is eligible for, chosen
-      uniformly at random without replacement. More generally, each group
-      samples :math:`k` out of ``ceil(iterations / cycle_length)`` virtual
-      cycles uniformly at random without replacement, and the schedule is
-      truncated after ``iterations`` batches (so every group has the same
-      privacy guarantee and expected batch size).
+    - Each example appears in exactly :math:`k` of the ``iterations`` batches,
+      chosen uniformly at random without replacement from ``[0, iterations)``.
     - The allocation for each example is independent of all other examples.
 
-  Accounting:
-    For DP-SGD with Gaussian noise (``cycle_length = 1``), and for amplified
-    BandMF with a ``cycle_length``-banded strategy matrix, exact analytical
-    privacy accounting under the add-or-remove-one adjacency notion is supported
-    via :func:`~jax_privacy.accounting.random_allocation_dpsgd_event` and
-    :func:`~jax_privacy.accounting.random_allocation_bandmf_event`
-    respectively.
-
   Attributes:
-    total_participations: The number of eligible steps each example participates
-      in (k).
+    total_participations: The number of steps each example participates in (k).
     iterations: The total number of iterations / batches to generate (t).
-    cycle_length: If > 1, the examples are independently partitioned into
-      ``cycle_length`` groups which participate in a round-robin fashion, so
-      that each example participates at most once every ``cycle_length``
-      iterations. ``cycle_length == 1`` retrieves standard random allocation.
   """
 
   total_participations: int
   iterations: int
-  cycle_length: int = 1
 
   def __post_init__(self):
     _validate.non_negative(
         total_participations=self.total_participations,
         iterations=self.iterations,
     )
-    _validate.positive(cycle_length=self.cycle_length)
-    num_cycles = math.ceil(self.iterations / self.cycle_length)
-    if self.total_participations > num_cycles:
+    if self.total_participations > self.iterations:
       raise ValueError(
-          f'Expected total_participations={self.total_participations} <='
-          f' ceil(iterations / cycle_length)={num_cycles}.'
+          f'Expected total_participations={self.total_participations}'
+          f' <= iterations={self.iterations}.'
       )
 
   def batch_iterator(
@@ -455,32 +419,16 @@ class RandomAllocationSampling(BatchSelectionStrategy):
   ) -> Iterator[np.ndarray]:
     rng = np.random.default_rng(rng)
     dtype = np.min_scalar_type(-num_examples)
-
-    partition = _independent_partition(
-        num_examples, self.cycle_length, rng, dtype
-    )
-    # If iterations is not a multiple of cycle_length, we pretend we are running
-    # for ceil(iterations / cycle_length) * cycle_length iterations so that all
-    # groups have the same number of eligible iterations, and then truncate to
-    # self.iterations.
-    num_cycles = math.ceil(self.iterations / self.cycle_length)
-    remaining = [
-        np.full(len(group), self.total_participations) for group in partition
-    ]
-
+    # At step i, each example with r remaining participations and (t-i)
+    # remaining steps participates with probability r/(t-i). This is equivalent
+    # to each example choosing k steps uniformly without replacement, but uses
+    # only O(n) space instead of O(n*k).
+    remaining = np.full(num_examples, self.total_participations)
     for i in range(self.iterations):
-      group_index = i % self.cycle_length
-      group = partition[group_index]
-      eligible = num_cycles - i // self.cycle_length
-      # At each eligible iteration, an example with r remaining participations
-      # and e remaining eligible iterations participates with probability r/e.
-      # This is equivalent to each example choosing k of its eligible
-      # iterations uniformly without replacement, but uses only O(n) space
-      # instead of O(n*k).
-      probs = remaining[group_index] / eligible
-      mask = rng.random(len(group)) < probs
-      yield group[mask]
-      remaining[group_index] -= mask
+      probs = remaining / (self.iterations - i)
+      mask = rng.random(num_examples) < probs
+      yield np.where(mask)[0].astype(dtype)
+      remaining -= mask
 
 
 @dataclasses.dataclass(frozen=True)
