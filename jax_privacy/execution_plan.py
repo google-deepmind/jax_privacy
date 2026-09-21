@@ -229,8 +229,8 @@ class BandMFConfig:
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to. If set, the ``plan.batch_selection_strategy`` will
       always return batches of size at most ``truncated_batch_size``, and
-      accounting will be based on truncated Poisson sampling (`Choquette-Choo et
-      al. (2025) <https://arxiv.org/abs/2508.15089>`_).
+      accounting will be based on truncated Poisson sampling (`Ganesh et al.
+      (2025) <https://arxiv.org/abs/2508.15089>`_).
     num_examples: The number of examples in the dataset. Required when
       ``truncated_batch_size`` is set. Only set when the dataset size is
       considered public, non-sensitive information (e.g., when using zero-out
