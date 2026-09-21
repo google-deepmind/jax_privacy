@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import dataclasses
-import math
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -207,113 +206,6 @@ class ExecutionPlanTest(parameterized.TestCase):
     opt_state = plan.noise_addition_transform.init(dummy_grads)
     updates, _ = plan.noise_addition_transform.update(dummy_grads, opt_state)
     np.testing.assert_equal(updates, dummy_grads)
-
-  @parameterized.parameters(
-      # expected_participations must be an integer.
-      {"expected_participations": 2.5},
-      # k > iterations // num_bands.
-      {"expected_participations": 11},
-      # truncation is Poisson-only.
-      {"truncated_batch_size": 5, "num_examples": 100},
-      # num_examples (zero-out adjacency) is Poisson-only.
-      {"num_examples": 100},
-  )
-  def test_random_allocation_validation(self, **kwargs):
-    default_kwargs = {
-        "strategy": np.linspace(1, 0, 2),
-        "iterations": 20,
-        "expected_participations": 2,
-        "noise_multiplier": 1.0,
-        "sub_strategy": execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION,
-    }
-    default_kwargs.update(kwargs)
-    with self.assertRaises(ValueError):
-      BandMFConfig(**default_kwargs)
-
-  @parameterized.parameters(
-      {"num_bands": 1, "iterations": 20, "expected_participations": 4},
-      {"num_bands": 4, "iterations": 20, "expected_participations": 5},
-      # iterations is not a multiple of num_bands.
-      {"num_bands": 3, "iterations": 20, "expected_participations": 7},
-  )
-  def test_random_allocation_execution_plan_creation(
-      self, num_bands, iterations, expected_participations
-  ):
-    config = BandMFConfig.default(
-        num_bands=num_bands,
-        iterations=iterations,
-        expected_participations=expected_participations,
-        noise_multiplier=1.5,
-        sub_strategy=execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION,
-    )
-    plan = config.make()
-
-    self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
-    strategy = plan.batch_selection_strategy
-    self.assertIsInstance(strategy, batch_selection.RandomAllocationSampling)
-    self.assertEqual(strategy.total_participations, expected_participations)
-    self.assertEqual(strategy.iterations, iterations)
-    self.assertEqual(strategy.cycle_length, num_bands)
-    self.assertLen(list(strategy.batch_iterator(100)), iterations)
-
-    self.assertIsInstance(
-        plan.dp_event, dp_accounting.dp_event.RandomAllocationDpEvent
-    )
-    self.assertEqual(plan.dp_event.num_selected, expected_participations)
-    self.assertEqual(plan.dp_event.num_steps, math.ceil(iterations / num_bands))
-    self.assertEqual(
-        plan.neighboring_relation,
-        dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE,
-    )
-
-  def test_random_allocation_uncalibrated_raises(self):
-    config = BandMFConfig.default(
-        num_bands=1,
-        iterations=10,
-        expected_participations=2,
-        sub_strategy=execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION,
-    )
-    with self.assertRaises(ValueError):
-      config.make()
-
-  def test_random_allocation_calibrate(self):
-    accountant_fn = lambda rel: dp_accounting.pld.PLDAccountant(
-        neighboring_relation=rel, value_discretization_interval=1e-2
-    )
-    config = BandMFConfig.default(
-        num_bands=1,
-        iterations=5,
-        expected_participations=1,
-        sub_strategy=execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION,
-    ).calibrate(
-        epsilon=1.0,
-        delta=1e-03,
-        tol=1e-2,
-        accountant_fn=accountant_fn,
-    )
-
-    self.assertIsNotNone(config.noise_multiplier)
-    self.assertGreater(config.noise_multiplier, 0)
-    plan = config.make()
-    self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
-    self.assertIsInstance(
-        plan.dp_event, dp_accounting.dp_event.RandomAllocationDpEvent
-    )
-
-  def test_poisson_is_the_default_sub_strategy(self):
-    config = BandMFConfig.default(
-        num_bands=2,
-        iterations=20,
-        expected_participations=2,
-        noise_multiplier=1.0,
-    )
-    self.assertEqual(
-        config.sub_strategy, execution_plan.CyclicInnerStrategy.POISSON
-    )
-    self.assertIsInstance(
-        config.make().batch_selection_strategy,
-        batch_selection.CyclicPoissonSampling,
-    )
 
 
 if __name__ == "__main__":
