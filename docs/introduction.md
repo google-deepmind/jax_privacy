@@ -57,8 +57,8 @@ terminology used there.
 Additionally, depending on APIs you will use, you might need to get familiar
 with one of the following libraries:
 
-* [Flax NNX](https://flax-linen.readthedocs.io/en/latest/quick_start.html):
-  PyTorch-like high-level library for building neural networks in JAX.
+*   [Flax NNX](https://flax.readthedocs.io/en/latest/nnx_basics.html):
+    PyTorch-like high-level library for building neural networks in JAX.
 * [Flax Linen](https://flax-linen.readthedocs.io/en/latest/api_reference/flax.linen/index.html):
   predecessor of Flax NNX, more JAX-like than Pytorch-like.
 * [Keras](https://keras.io): even more high-level library for building and
