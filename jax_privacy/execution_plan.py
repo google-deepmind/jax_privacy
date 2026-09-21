@@ -54,7 +54,9 @@ available in the future.
 from __future__ import annotations
 
 import dataclasses
+import enum
 import functools
+import math
 from typing import Callable, Protocol
 
 import dp_accounting
@@ -71,6 +73,26 @@ from .matrix_factorization import toeplitz
 
 NeighboringRelation = dp_accounting.NeighboringRelation
 AccountantFn = Callable[[NeighboringRelation], dp_accounting.PrivacyAccountant]
+
+
+class CyclicInnerStrategy(enum.Enum):
+  """Specifies the "inner" sampling strategy for cyclic sampling strategies.
+
+  Both options assign each example to one of ``num_bands`` groups, and only let
+  a group participate in iterations matching its index modulo ``num_bands``.
+  They differ in how participations are chosen within the iterations a group is
+  eligible for.
+  """
+
+  POISSON = enum.auto()
+  """Each example participates in each eligible iteration independently with a
+  fixed probability, so the number of participations is random. See
+  :class:`~jax_privacy.batch_selection.CyclicPoissonSampling`."""
+
+  RANDOM_ALLOCATION = enum.auto()
+  """Each example participates in exactly ``expected_participations`` of its
+  eligible iterations, chosen uniformly at random. See
+  :class:`~jax_privacy.batch_selection.RandomAllocationSampling`."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -208,15 +230,25 @@ class BandMFConfig:
     ...   iterations=1000, expected_participations=400,
     ... ).calibrate(epsilon=1.0, delta=1e-5)
 
+  Example Usage (DP-SGD with random allocation instead of Poisson sampling):
+    >>> config = BandMFConfig.default(  # doctest: +SKIP
+    ...   num_bands=1, iterations=1000, expected_participations=100,
+    ...   sub_strategy=CyclicInnerStrategy.RANDOM_ALLOCATION,
+    ... ).calibrate(epsilon=1.0, delta=1e-5)
+
   References: `Choquette-Choo et al. (2023) <https://arxiv.org/abs/2306.08153>`_
   and `McKenna (2024) <https://arxiv.org/abs/2405.15913>`_.
 
   Attributes:
     iterations: The number of iterations the mechanism is defined for. Tip: Set
       this to be a multiple of ``num_bands`` for the best utility.
-    expected_participations: The expected number of times each example
-      participates across all iterations. The Poisson sampling probability is
-      derived as ``expected_participations * num_bands / iterations``.
+    expected_participations: The number of times each example participates
+      across all iterations. With
+      :attr:`~jax_privacy.execution_plan.CyclicInnerStrategy.POISSON` this is an
+      expectation, and the Poisson sampling probability is derived as
+      ``expected_participations * num_bands / iterations``. With
+      :attr:`~jax_privacy.execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION`
+      this is the exact number of participations, and must be an integer.
     strategy: The Toeplitz coefficients of the BandMF strategy matrix.
     noise_multiplier: The ratio of noise standard deviation to the query
       sensitivity. The actual noise stddev is determined by this value, the
@@ -229,8 +261,9 @@ class BandMFConfig:
     truncated_batch_size: If using truncated Poisson sampling, the maximum batch
       size to truncate to. If set, the ``plan.batch_selection_strategy`` will
       always return batches of size at most ``truncated_batch_size``, and
-      accounting will be based on truncated Poisson sampling (`Ganesh et al.
-      (2025) <https://arxiv.org/abs/2508.15089>`_).
+      accounting will be based on truncated Poisson sampling (`Choquette-Choo et
+      al. (2025) <https://arxiv.org/abs/2508.15089>`_). Only supported with
+      :attr:`~jax_privacy.execution_plan.CyclicInnerStrategy.POISSON`.
     num_examples: The number of examples in the dataset. Required when
       ``truncated_batch_size`` is set. Only set when the dataset size is
       considered public, non-sensitive information (e.g., when using zero-out
@@ -238,10 +271,20 @@ class BandMFConfig:
       partitioned using
       :attr:`~jax_privacy.batch_selection.PartitionType.EQUAL_SPLIT`, and
       otherwise it will be partitioned using
-      :attr:`~jax_privacy.batch_selection.PartitionType.INDEPENDENT`.
+      :attr:`~jax_privacy.batch_selection.PartitionType.INDEPENDENT`. Only
+      supported with
+      :attr:`~jax_privacy.execution_plan.CyclicInnerStrategy.POISSON`, because
+      accounting for random allocation assumes the add-or-remove-one adjacency
+      notion.
     column_normalize: Whether to column-normalize the strategy matrix. If True,
       each column of the realized strategy matrix is rescaled to have L2 norm
       1.0, which makes the mechanism invariant to the scale of `strategy`.
+    sub_strategy: How examples are assigned to the iterations they are eligible
+      for. Defaults to
+      :attr:`~jax_privacy.execution_plan.CyclicInnerStrategy.POISSON`. Use
+      :attr:`~jax_privacy.execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION`
+      for (cyclic) random allocation, which gives each example exactly
+      ``expected_participations`` participations.
   """
 
   iterations: int
@@ -254,6 +297,7 @@ class BandMFConfig:
   truncated_batch_size: int | None = None
   num_examples: int | None = None
   column_normalize: bool = False
+  sub_strategy: CyclicInnerStrategy = CyclicInnerStrategy.POISSON
 
   def __post_init__(self):
     _validate.non_negative(
@@ -262,9 +306,13 @@ class BandMFConfig:
         normalize_by=self.normalize_by,
     )
     _validate.strategy(self.strategy, self.iterations)
+    if self.sub_strategy == CyclicInnerStrategy.RANDOM_ALLOCATION:
+      max_participations = math.ceil(self.iterations / self.num_bands)
+    else:
+      max_participations = self.iterations // self.num_bands
     _validate.in_range(
         0,
-        self.iterations // self.num_bands,
+        max_participations,
         expected_participations=self.expected_participations,
     )
     if self.noise_multiplier is not None:
@@ -275,6 +323,22 @@ class BandMFConfig:
       _validate.non_negative(num_examples=self.num_examples)
     if self.truncated_batch_size is not None and self.num_examples is None:
       raise ValueError('truncated_batch_size requires num_examples to be set.')
+    if self.sub_strategy == CyclicInnerStrategy.RANDOM_ALLOCATION:
+      _validate.is_int(
+          context=(
+              'If using RANDOM_ALLOCATION, expected_participations must be an'
+              ' integer.'
+          ),
+          expected_participations=self.expected_participations,
+      )
+      _validate.is_none(
+          context=(
+              'If using RANDOM_ALLOCATION, truncated_batch_size and '
+              'num_examples must be None.'
+          ),
+          truncated_batch_size=self.truncated_batch_size,
+          num_examples=self.num_examples,
+      )
 
   @property
   def _max_column_norm(self) -> float:
@@ -336,6 +400,13 @@ class BandMFConfig:
 
   def _get_dp_event(self, sigma: float) -> dp_accounting.DpEvent:
     """Returns a DpEvent for the BandMF mechanism."""
+    if self.sub_strategy == CyclicInnerStrategy.RANDOM_ALLOCATION:
+      return accounting.random_allocation_bandmf_event(
+          noise_multiplier=sigma,
+          iterations=self.iterations,
+          num_bands=self.num_bands,
+          total_participations=int(self.expected_participations),
+      )
     sampling_prob = (
         self.expected_participations * self.num_bands / self.iterations
     )
@@ -469,16 +540,23 @@ class BandMFConfig:
           keep_batch_dim=performance_flags.keep_batch_dim,
       )
 
-    sampling_prob = (
-        self.expected_participations * self.num_bands / self.iterations
-    )
-    batch_selection_strategy = batch_selection.CyclicPoissonSampling(
-        sampling_prob=sampling_prob,
-        iterations=self.iterations,
-        cycle_length=self.num_bands,
-        truncated_batch_size=self.truncated_batch_size,
-        partition_type=self._partition_type,
-    )
+    if self.sub_strategy == CyclicInnerStrategy.RANDOM_ALLOCATION:
+      batch_selection_strategy = batch_selection.RandomAllocationSampling(
+          total_participations=int(self.expected_participations),
+          iterations=self.iterations,
+          cycle_length=self.num_bands,
+      )
+    else:
+      sampling_prob = (
+          self.expected_participations * self.num_bands / self.iterations
+      )
+      batch_selection_strategy = batch_selection.CyclicPoissonSampling(
+          sampling_prob=sampling_prob,
+          iterations=self.iterations,
+          cycle_length=self.num_bands,
+          truncated_batch_size=self.truncated_batch_size,
+          partition_type=self._partition_type,
+      )
 
     max_column_norm = self._max_column_norm
     column_normalize_for_n = self.iterations if self.column_normalize else None
