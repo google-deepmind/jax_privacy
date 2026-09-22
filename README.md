@@ -23,8 +23,7 @@ This repository contains:
     models in JAX and Keras.
 *   A library of core components for implementing differentially private machine
     learning algorithms in JAX.
-*   A JAX-based machine learning DP pipeline using components from the library
-    to experiment with image classification models.
+*   Worked examples of DP training in JAX, Flax, and Keras.
 
 This code is open-sourced with the main objective of transparency and
 reproducibility for research purposes, and includes production-focused APIs for
@@ -48,8 +47,8 @@ Ponomareva, Natalia and Pravilov, Mikhail and Rush, Keith and Smith, Samuel L
 and Stanforth, Robert and Mishra, Chaitanya},
   title = {{JAX}-{P}rivacy: Algorithms for Privacy-Preserving Machine Learning in JAX},
   url = {http://github.com/google-deepmind/jax_privacy},
-  version = {0.4.0},
-  year = {2025},
+  version = {2.3.0.dev0},
+  year = {2026},
 }
 ```
 
@@ -60,8 +59,8 @@ jax-privacy-open-source@google.com.
 
 ## Acknowledgements
 
--   [NFNet codebase](https://github.com/deepmind/deepmind-research/tree/master/nfnets)
--   [DeepMind JAX Ecosystem](https://github.com/deepmind/jax/blob/main/deepmind2020jax.txt)
+-   [NFNet codebase](https://github.com/google-deepmind/deepmind-research/tree/master/nfnets)
+-   [DeepMind JAX Ecosystem](https://deepmind.google/blog/using-jax-to-accelerate-our-research/)
 
 ## License
 

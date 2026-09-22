@@ -55,6 +55,18 @@ PLD_EVENT_FNS = (
         largest_group_size=1000,
         truncated_batch_size=16,
     ),
+    functools.partial(
+        accounting.random_allocation_dpsgd_event,
+        iterations=100,
+        total_participations=4,
+    ),
+    # Random allocation PLD is expensive, so keep this entry small.
+    functools.partial(
+        accounting.random_allocation_bandmf_event,
+        iterations=12,
+        num_bands=4,
+        total_participations=1,
+    ),
 )
 
 RDP_REPLACE_EVENT_FNS = (
@@ -231,6 +243,61 @@ class AccountingTest(parameterized.TestCase):
     # The discrete Gaussian with rho=0.5/sigma^2 should give the same RDP
     # as the continuous Gaussian with the same sigma.
     self.assertAlmostEqual(eps_continuous, eps_discrete, places=4)
+
+  def test_random_allocation_dpsgd_event_structure(self):
+    event = accounting.random_allocation_dpsgd_event(
+        noise_multiplier=2.5,
+        iterations=50,
+        total_participations=5,
+    )
+    self.assertIsInstance(event, dp_accounting.dp_event.RandomAllocationDpEvent)
+    self.assertEqual(event.num_steps, 50)
+    self.assertEqual(event.num_selected, 5)
+    self.assertIsInstance(event.event, dp_accounting.dp_event.GaussianDpEvent)
+    self.assertEqual(event.event.noise_multiplier, 2.5)
+
+  def test_random_allocation_validation(self):
+    with self.assertRaises(ValueError):
+      accounting.random_allocation_dpsgd_event(
+          noise_multiplier=1.0,
+          iterations=10,
+          total_participations=15,
+      )
+
+  @parameterized.parameters(
+      # (iterations, num_bands, expected num_steps)
+      (50, 1, 50),
+      (50, 5, 10),
+      # iterations is not a multiple of num_bands; accounting uses
+      # ceil(iterations / num_bands) steps with truncation.
+      (20, 3, 7),
+  )
+  def test_random_allocation_bandmf_event_structure(
+      self, iterations, num_bands, expected_num_steps
+  ):
+    event = accounting.random_allocation_bandmf_event(
+        noise_multiplier=2.5,
+        iterations=iterations,
+        num_bands=num_bands,
+        total_participations=3,
+    )
+    self.assertIsInstance(event, dp_accounting.dp_event.RandomAllocationDpEvent)
+    self.assertEqual(event.num_steps, expected_num_steps)
+    self.assertEqual(event.num_selected, 3)
+    self.assertIsInstance(event.event, dp_accounting.dp_event.GaussianDpEvent)
+    self.assertEqual(event.event.noise_multiplier, 2.5)
+
+  @parameterized.parameters(
+      # num_bands must be positive.
+      {"num_bands": 0, "total_participations": 1},
+      # total_participations must be at most ceil(iterations / num_bands).
+      {"num_bands": 5, "total_participations": 11},
+  )
+  def test_random_allocation_bandmf_validation(self, **kwargs):
+    with self.assertRaises(ValueError):
+      accounting.random_allocation_bandmf_event(
+          noise_multiplier=1.0, iterations=50, **kwargs
+      )
 
 
 if __name__ == "__main__":

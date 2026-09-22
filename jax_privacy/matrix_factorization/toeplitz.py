@@ -589,15 +589,11 @@ class _AmplifiedBandMFHelper:
     )
 
   def required_stddev(self, coef: jax.Array):
-    # pylint: disable=line-too-long
     """The stddev of the uncorrelated noise Z required.
 
     That is, passing this stddev to
-    :func:`~jax_privacy.noise_addition.streaming_matrix_to_single_machine_privatizer`
-    in
-    :mod:`~jax_privacy.distributed_noise_generation` should achieve the
-    (epsilon, delta)-DP
-    guarantee.
+    :func:`~jax_privacy.noise_addition.matrix_factorization_privatizer`
+    should achieve the (epsilon, delta)-DP guarantee.
 
     Args:
       coef: The coefficients of the banded Toeplitz matrix C.
@@ -730,10 +726,9 @@ def optimize_coefs_for_amplifications(
       - ``coefs`` are the coefficients of a banded Toeplitz strategy; the number
          of bands chosen is simply the length of the returned coefficients.
       - ``stddev`` is the stddev of the uncorrelated noise Z required to achieve
-        the privacy target (that, is, passing this stddev to
-        ``streaming_matrix_to_single_machine_privatizer`` in
-        ``distributed_noise_generation`` should achieve the (epsilon, delta)-DP
-        guarantee).
+        the privacy target. Passing this stddev to
+        :func:`~jax_privacy.noise_addition.matrix_factorization_privatizer`
+        should achieve the (epsilon, delta)-DP guarantee.
   """
   helper = _AmplifiedBandMFHelper(
       n, dataset_size, expected_batch_size, epsilon, delta, reduction_fn

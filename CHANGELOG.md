@@ -20,12 +20,69 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+### Added
+
+-   **[`DPTrainer`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)
+    precompilation and auto-tuning**: Added `init()` and `precompile()`
+    ahead-of-time compilation with batch-size deduping, and automated
+    `microbatch_size` tuning to maximize throughput and optimize device memory
+    during DP-SGD training, while minimizing compilation overhead and manual
+    tuning of performance knobs.
+-   **[Monte Carlo (MC) accounting](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.accounting.html)**:
+    Added cyclic Poisson sampling (with independent partitions) to the MC
+    accounting library, and added support for hybrid mechanism calibration
+    composing events analyzed via MC accounting with events analyzed via
+    Privacy Loss Distributions (PLD).
+-   **Slack-based adaptive clipping**: Added optional `slack` argument to
+    [`clipped_fun`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.clipping.html)
+    and
+    [`clipped_grad`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.clipping.html)
+    to output a sensitivity-bounded slack indicator from the gradient norm,
+    enabling downstream adaptive clipping-bound controllers. This is a building
+    block for the [SLAClip](https://icml.cc/virtual/2026/poster/66390)
+    approach. ([#343](https://github.com/google-deepmind/jax_privacy/pull/343))
+-   **Documentation improvements**:
+    -   **API documentation rendering**: Greatly improved documentation across
+        `.md`, `.rst`, and `.py` files for better rendering of math, code, and
+        tables on
+        [jax-privacy.readthedocs.io](https://jax-privacy.readthedocs.io/).
+    -   **DP pitfalls guide**: Added a comprehensive guide on
+        [Common Pitfalls in DP Training](https://jax-privacy.readthedocs.io/en/latest/sharp_edges_dp_training_pitfalls.html)
+        covering pitfalls across data loading, clipping, composition, and model
+        architecture, and explaining how the design of `jax_privacy` prevents
+        or mitigates them.
+        ([#362](https://github.com/google-deepmind/jax_privacy/pull/362))
+    -   **Batch selection**: Added the
+        [Batch Selection Strategies guide](https://jax-privacy.readthedocs.io/en/latest/batch_selection.html)
+        documenting supported batch selection strategies and their privacy
+        accounting implications.
+    -   **Contributor documentation guide**: Updated `CONTRIBUTING.md` and added
+        a dedicated
+        [Documentation Guide](https://jax-privacy.readthedocs.io/en/latest/contribution_guide.html#documentation-guide)
+        establishing ReadTheDocs rendering quality as a primary priority for
+        Python docstrings and Markdown documentation, complete with local
+        preview workflows.
+    -   **Sphinx intersphinx mappings**: Added cross-reference mappings for
+        `jax` and `optax` for native cross-references in Sphinx documentation.
+
 ### Fixed
 
--   **`clipped_fun` Formal Guarantees**: Replaced the incorrect claim that
-    sensitivity is always `1.0` / `l2_clip_norm` with guidance to use
-    ``.sensitivity()`` / ``.l2_norm_bound``, matching `clipped_grad`. The old
-    text ignored ``normalize_by`` and per-layer clipping. Added contract tests.
+-   **[`DPTrainer.fit`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)
+    preemption resume**: Fixed an issue where resuming from preemption did not
+    advance the `batch_iterator` to match the restored `TrainingState`,
+    correctly synchronizing the data stream.
+-   **[`clipped_fun`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.clipping.html)
+    Formal Guarantees**: Replaced the incorrect claim that sensitivity is
+    always `1.0` / `l2_clip_norm` with guidance to use `.sensitivity()` /
+    `.l2_norm_bound`, matching `clipped_grad`. The old text ignored
+    `normalize_by` and per-layer clipping. Added contract tests.
+
+### Internal / Cleanups
+
+-   **Dependency management with `uv` and `pylock.toml`**: Migrated lockfile
+    and development workflow to PEP 751 `pylock.toml` using `uv`, enforced via
+    GitHub Actions.
+-   **Removed `pytype` from CI**: Removed `pytype` checks from CI workflows.
 
 ## [2.2.0] - 2026-06-15
 

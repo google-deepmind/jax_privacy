@@ -22,7 +22,7 @@
    :special-members: __call__
 
    {% block methods %}
-   {% if methods %}
+   {% if methods and 'zfill' not in methods %}
    .. rubric:: Methods
 
    .. autosummary::
