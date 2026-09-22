@@ -76,6 +76,15 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     always `1.0` / `l2_clip_norm` with guidance to use `.sensitivity()` /
     `.l2_norm_bound`, matching `clipped_grad`. The old text ignored
     `normalize_by` and per-layer clipping. Added contract tests.
+-   **[BLT](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.matrix_factorization.buffered_toeplitz.html)
+    closed forms for ratios above one**: `geometric_sum` selected between its
+    exact closed form and a Taylor expansion about `r = 1` with a one-sided
+    test, so every `r > 1` silently used the series approximation. This made
+    `iteration_error`, `max_error` and `max_loss` return grossly incorrect
+    values (including negative squared errors) whenever the noising matrix
+    `C^{-1}` had a `buf_decay` of magnitude greater than one, which happens for
+    ordinary strategy BLTs whose Pillutla score exceeds one. The test is now
+    two-sided.
 
 ### Internal / Cleanups
 
