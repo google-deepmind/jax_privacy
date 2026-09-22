@@ -63,7 +63,7 @@ class Split(ThresholdStrategy):
   Attributes:
     threshold_estimation_frac: The fraction of data to use for computing the
       threshold. The rest will be used for computing the bound.
-    seed: The seed for the random number generator. If None, a seed will be
+    seed: The seed for the random number generator. If ``None``, a seed will be
       chosen non-deterministically.
   """
 
@@ -86,7 +86,7 @@ class MultiSplit(ThresholdStrategy):
     num_samples: The number of splits to use.
     threshold_estimation_frac: The fraction of data to use for computing the
       threshold. The rest will be used for computing the bound.
-    seed: The seed for the random number generator. If None, a seed will be
+    seed: The seed for the random number generator. If ``None``, a seed will be
       chosen non-deterministically.
   """
 
@@ -736,8 +736,8 @@ class CanaryScoreAuditor:
   ) -> float | np.ndarray:
     """Estimates epsilon from raw count statistics of seen/unseen canaries.
 
-    `min_count` is the minimum number of FP (or FN, if not one_sided) required
-    to consider a threshold. If `min_count` is too high relative to the number
+    ``min_count`` is the minimum number of FP (or FN, if not one_sided) required
+    to consider a threshold. If ``min_count`` is too high relative to the number
     of canaries, the estimate will be biased towards zero. If it is too low, the
     estimate will have high variance.
 
@@ -792,7 +792,7 @@ class CanaryScoreAuditor:
         independent FPR values, in which case an array of the same shape is
         returned with the TPR at each FPR.
       bootstrap_params: If provided, compute and return bootstrapped quantiles
-        of the TPR. `fpr` must be a scalar in this case.
+        of the TPR. ``fpr`` must be a scalar in this case.
 
     Returns:
       The maximum true positive rate at the given false positive rate,
@@ -880,7 +880,7 @@ class CanaryScoreAuditor:
       delta: float,
       eps_tol: float = 1e-6,
   ) -> float:
-    """Calculates the an estimate for epsilon with GDP.
+    """Calculates an estimate for epsilon with GDP.
 
     This is the method used in https://arxiv.org/pdf/2302.07956 and described in
     https://arxiv.org/pdf/2406.04827.
@@ -1015,13 +1015,13 @@ class CanaryScoreAuditor:
     This is an implementation of the method from Steinke et al. 2024, "Privacy
     Auditing in One (1) Training Run": https://arxiv.org/abs/2305.08846.
 
-    Currently only one-sided hypotheses are supported ($k_- = 0$).
+    Currently only one-sided hypotheses are supported (:math:`k_- = 0`).
 
     Args:
       significance: Allowed probability of failure (one minus confidence).
       delta: Approximate DP delta.
-      one_sided: Whether to consider only hypotheses with ($k_- = 0$). Must be
-        True.
+      one_sided: Whether to consider only hypotheses with (:math:`k_- = 0`).
+        Must be ``True``.
       threshold_strategy: How to select the threshold to use for the epsilon
         estimate.
 
@@ -1051,19 +1051,19 @@ class CanaryScoreAuditor:
       *,
       threshold_strategy: ThresholdStrategy = Bonferroni(),
   ) -> float:
-    """Computes lower bound on epsilon for a single round of auditing.
+    r"""Computes lower bound on epsilon for a single round of auditing.
 
     This is an implementation of the method from Mahloujifar et al. 2024,
     "Auditing f-Differential Privacy in One Run":
     https://arxiv.org/pdf/2410.22235.
 
-    Currently only one-sided hypotheses are supported ($k_- = 0$).
+    Currently only one-sided hypotheses are supported (:math:`k_- = 0`).
 
     Args:
       significance: Allowed probability of failure (one minus confidence).
       delta: Approximate DP delta.
-      one_sided: Whether to consider only hypotheses with ($k_- = 0$). Must be
-        True.
+      one_sided: Whether to consider only hypotheses with (:math:`k_- = 0`).
+        Must be ``True``.
       threshold_strategy: How to select the threshold to use for the epsilon
         estimate.
 

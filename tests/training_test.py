@@ -14,10 +14,13 @@
 
 
 import dataclasses
+from unittest import mock
 from absl.testing import absltest
 from absl.testing import parameterized
+import grain.python as grain
 import jax
 import jax.numpy as jnp
+from jax_privacy import _compilation
 from jax_privacy import batch_selection
 from jax_privacy import execution_plan
 from jax_privacy import training
@@ -78,6 +81,139 @@ class DPTrainerTest(parameterized.TestCase):
 
     self.assertIsInstance(state, training.TrainingState)
     self.assertEqual(int(state.step), 3)
+
+  def test_resume_from_state_yields_identical_results(self):
+    """Test that resuming from intermediate steps works as intended."""
+    params = jnp.array([5.0, 5.0])
+    dataset = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])
+
+    trainer = training.DPTrainer(
+        config=_make_config(5, noise_multiplier=0.1, expected_participations=1),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+    )
+
+    intermediate_states = []
+
+    def callback(step, state, _):
+      del step
+      intermediate_states.append(jax.tree.map(jax.numpy.copy, state))
+
+    expected_final_state = trainer.fit(
+        dataset, params, rng_or_seed=42, callback=callback
+    )
+
+    for state in intermediate_states:
+      final_state_resumed = trainer.fit(dataset, state, rng_or_seed=42)
+      np.testing.assert_allclose(
+          final_state_resumed.params, expected_final_state.params
+      )
+      self.assertEqual(final_state_resumed.step, expected_final_state.step)
+
+  def test_map_dataset_training_runs(self):
+    """Train loop with a Grain MapDataset completes and returns valid state."""
+    params = jnp.array([5.0, 5.0])
+    data = [np.array([1.0, 0.0]), np.array([0.0, 1.0]), np.array([1.0, 1.0])]
+    dataset = grain.MapDataset.source(data)
+    config = _make_config(iterations=3)
+    optimizer = optax.sgd(0.01)
+
+    trainer = training.DPTrainer(
+        config=config,
+        loss_fn=_quadratic_loss,
+        optimizer=optimizer,
+    )
+    state = trainer.fit(dataset, params, rng_or_seed=0)
+
+    self.assertIsInstance(state, training.TrainingState)
+    self.assertEqual(int(state.step), 3)
+
+  def test_map_dataset_resume_from_state_yields_identical_results(self):
+    """Test that resuming from intermediate steps works with MapDataset."""
+    params = jnp.array([5.0, 5.0])
+    data = [
+        np.array([1.0, 2.0]),
+        np.array([3.0, 4.0]),
+        np.array([5.0, 6.0]),
+        np.array([7.0, 8.0]),
+    ]
+    dataset = grain.MapDataset.source(data)
+
+    trainer = training.DPTrainer(
+        config=_make_config(5, noise_multiplier=0.1, expected_participations=1),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+    )
+
+    intermediate_states = []
+
+    def callback(step, state, _):
+      del step
+      intermediate_states.append(jax.tree.map(jax.numpy.copy, state))
+
+    expected_final_state = trainer.fit(
+        dataset, params, rng_or_seed=42, callback=callback
+    )
+
+    for state in intermediate_states:
+      final_state_resumed = trainer.fit(dataset, state, rng_or_seed=42)
+      np.testing.assert_allclose(
+          final_state_resumed.params, expected_final_state.params
+      )
+      self.assertEqual(final_state_resumed.step, expected_final_state.step)
+
+  def test_map_dataset_pytree_structure(self):
+    """Train loop works with a Grain MapDataset yielding PyTrees."""
+    params = jnp.array([1.0, 2.0])
+    data = [
+        {'x': np.array([1.0, 2.0]), 'y': np.array([0.5])},
+        {'x': np.array([3.0, 4.0]), 'y': np.array([1.5])},
+        {'x': np.array([5.0, 6.0]), 'y': np.array([2.5])},
+    ]
+    dataset = grain.MapDataset.source(data)
+
+    def pytree_loss(params, batch, prng):
+      del prng
+      loss = jnp.mean((params - batch['x']) ** 2) + jnp.mean(batch['y'])
+      return loss, {'loss': loss}
+
+    trainer = training.DPTrainer(
+        config=_make_config(iterations=3),
+        loss_fn=pytree_loss,
+        optimizer=optax.sgd(0.01),
+    )
+    state = trainer.fit(dataset, params, rng_or_seed=0)
+    self.assertEqual(int(state.step), 3)
+
+  def test_get_batch_empty_indices(self):
+    """Test _get_batch correctly returns shape (0, ...) on empty indices."""
+    array_data = np.arange(10, dtype=np.float32).reshape((5, 2))
+    empty_idx = np.array([], dtype=np.int32)
+    batch_arr, is_pad_arr = training._get_batch(array_data, empty_idx)
+    self.assertEqual(batch_arr.shape, (0, 2))
+    self.assertEqual(is_pad_arr.shape, (0,))
+
+    grain_data = [{'x': np.zeros((3, 2)), 'y': np.ones((4,))}] * 5
+    grain_ds = grain.MapDataset.source(grain_data)
+    batch_grain, is_pad_grain = training._get_batch(grain_ds, empty_idx)
+    self.assertEqual(batch_grain['x'].shape, (0, 3, 2))
+    self.assertEqual(batch_grain['y'].shape, (0, 4))
+    self.assertEqual(is_pad_grain.shape, (0,))
+
+  def test_get_batch_with_padding(self):
+    """Test _get_batch correctly handles padding entries (-1)."""
+    grain_data = [
+        {'x': np.array([1.0, 2.0]), 'y': np.array([3.0])},
+        {'x': np.array([4.0, 5.0]), 'y': np.array([6.0])},
+    ]
+    grain_ds = grain.MapDataset.source(grain_data)
+    indices = np.array([0, -1, 1], dtype=np.int32)
+    batch, is_padding = training._get_batch(grain_ds, indices)
+    self.assertEqual(batch['x'].shape, (3, 2))
+    self.assertEqual(batch['y'].shape, (3, 1))
+    np.testing.assert_array_equal(is_padding, [False, True, False])
+    np.testing.assert_allclose(batch['x'][0], [1.0, 2.0])
+    np.testing.assert_allclose(batch['x'][2], [4.0, 5.0])
 
   def test_params_change_after_training(self):
     """Parameters should change from initial values after training."""
@@ -167,7 +303,7 @@ class DPTrainerTest(parameterized.TestCase):
         config=config,
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
-        padding_multiple=4,
+        compilation_strategy=training.PadToMultiple(multiple=4),
     )
     state = trainer.fit(dataset, params, rng_or_seed=0)
 
@@ -412,7 +548,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    futures = trainer._precompile(dataset, params, rng_or_seed=42)
+    _, futures = trainer._precompile(dataset, params, rng_or_seed=42)
 
     self.assertIsInstance(futures, dict)
     self.assertNotEmpty(futures)
@@ -434,9 +570,9 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         config=config,
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
-        padding_multiple=padding_multiple,
+        compilation_strategy=training.PadToMultiple(multiple=padding_multiple),
     )
-    futures = trainer._precompile(dataset, params, rng_or_seed=0)
+    _, futures = trainer._precompile(dataset, params, rng_or_seed=0)
 
     for size in futures:
       self.assertEqual(size % padding_multiple, 0)
@@ -460,7 +596,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
 
     rng = np.random.default_rng(42)
     state_before = rng.__getstate__()
-    futures = trainer._precompile(dataset, params, rng_or_seed=rng)
+    _, futures = trainer._precompile(dataset, params, rng_or_seed=rng)
     state_after = rng.__getstate__()
 
     # RNG should not have been consumed.
@@ -481,7 +617,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    futures = trainer._precompile(dataset, params, rng_or_seed=0)
+    _, futures = trainer._precompile(dataset, params, rng_or_seed=0)
 
     self.assertNotEmpty(futures)
     for future in futures.values():
@@ -508,7 +644,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         config=_FixedPlanConfig(plan),
         loss_fn=loss_fn,
         optimizer=optax.sgd(1),
-        padding_multiple=1,
+        compilation_strategy=training.PadToMultiple(multiple=1),
     )
 
     with self.assertLogs(level='INFO') as logs:
@@ -518,6 +654,38 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         self.assertNotIn('JIT-compiling train_step for batch size', log)
       self.assertEqual(trace_count[0], 5)
       self.assertLen(logs.output, 5)
+
+  def test_precompile_dedupes_shared_padded_sizes(self):
+    """Steps sharing a padded size are lowered and compiled only once."""
+    trace_count = [0]
+
+    def loss_fn(params, batch, _):
+      trace_count[0] += 1
+      return jnp.mean((params - batch) ** 2), {}
+
+    params = jnp.array([1.0])
+    dataset = np.array([[i] for i in range(50)])
+
+    # A padding multiple larger than any possible batch collapses every step to
+    # the same padded size, so precompile must lower/compile exactly once even
+    # though the run takes several (differently sized) steps.
+    plan = dataclasses.replace(
+        _make_config(iterations=5).make(),
+        batch_selection_strategy=batch_selection.CyclicPoissonSampling(0.5, 5),
+    )
+    trainer = training.DPTrainer(
+        config=_FixedPlanConfig(plan),
+        loss_fn=loss_fn,
+        optimizer=optax.sgd(1),
+        compilation_strategy=training.PadToMultiple(multiple=64),
+    )
+
+    with self.assertLogs(level='INFO') as logs:
+      trainer.fit(dataset, params, rng_or_seed=0, precompile=True)
+
+    aot = [l for l in logs.output if 'AOT-compiling train_step' in l]
+    self.assertLen(aot, 1)
+    self.assertEqual(trace_count[0], 1)
 
   @parameterized.parameters(jnp.bfloat16, jnp.float16, jnp.float32)
   def test_fit_precompile_low_precision_params(self, param_dtype):
@@ -538,6 +706,110 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
     # AOT precompilation should be effective (no JIT cache misses).
     for log in logs.output:
       self.assertNotIn('Cache Miss', log)
+
+
+class DPTrainerAutotuneTest(parameterized.TestCase):
+  """CPU smoke test for microbatch_size autotuning."""
+
+  def test_autotune_fit_runs_on_cpu(self):
+    """fit() with autotuning selects a microbatch size and completes."""
+    # On CPU ``memory_stats`` is unavailable, so autotuning falls back to
+    # compile-success and picks the largest candidate that compiles.
+    params = jnp.array([1.0, 2.0])
+    dataset = np.array([[0.0, 0.0]] * 10)  # 10 examples.
+    trainer = training.DPTrainer(
+        config=_make_config(iterations=3),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+        compilation_strategy=training.AutotuneMicrobatch(),
+    )
+
+    with self.assertLogs(level='INFO') as logs:
+      state = trainer.fit(dataset, params, rng_or_seed=0)
+
+    self.assertEqual(int(state.step), 3)
+    self.assertTrue(any('fits; pad=' in log for log in logs.output))
+    # Autotuning compiles the one fixed padded size ahead of time; the training
+    # loop must reuse that step for every batch (no recompilation).
+    for log in logs.output:
+      self.assertNotIn('Cache Miss', log)
+
+
+class ExtrapolateSeedTest(parameterized.TestCase):
+  """Unit tests for the affine microbatch seed used by autotuning."""
+
+  @parameterized.named_parameters(
+      ('affine_exact', 1000.0, 2000.0, 8000.0, 8),
+      ('zero_slope_all_fit', 0.0, 0.0, 5.0, 1024),
+      ('seed_one_when_min_over_budget', 10.0, 20.0, 5.0, 1),
+      ('decreasing_all_fit', 200.0, 100.0, 500.0, 1024),
+  )
+  def test_extrapolate_seed_cases(self, peak1, peak2, budget, expected):
+    powers = [2**i for i in range(11)]
+    seed = _compilation._extrapolate_seed(peak1, peak2, budget, powers)
+    self.assertEqual(seed, expected)
+
+  def test_extrapolate_seed_matches_brute_force(self):
+    """Seed equals the brute-force largest power of two under the affine fit."""
+    rng = np.random.default_rng(0)
+    powers = [2**i for i in range(14)]
+    for _ in range(1000):
+      c0, c1 = rng.uniform(0, 1e6), rng.uniform(1, 1e4)
+      budget = rng.uniform(0, c0 + c1 * powers[-1])
+      expected = powers[0]
+      for b in powers:
+        if c0 + c1 * b <= budget:
+          expected = b
+      seed = _compilation._extrapolate_seed(
+          c0 + c1, c0 + 2 * c1, budget, powers
+      )
+      self.assertEqual(seed, expected)
+
+
+class _FakeDevice:
+  """Stand-in JAX device with configurable memory_stats and topology attr."""
+
+  def __init__(self, *, stats=None, stats_error=None, total=None):
+    self._stats = stats
+    self._stats_error = stats_error
+    if total is not None:
+      self.device_memory_bytes_limit = total
+
+  def memory_stats(self):
+    if self._stats_error is not None:
+      raise self._stats_error
+    return self._stats
+
+
+class DeviceHbmLimitTest(parameterized.TestCase):
+  """Unit tests for sourcing the per-chip HBM budget."""
+
+  def _patch_devices(self, devices):
+    self.enterContext(
+        mock.patch.object(jax, 'local_devices', return_value=devices)
+    )
+
+  def test_prefers_bytes_limit_over_attribute(self):
+    self._patch_devices([_FakeDevice(stats={'bytes_limit': 100}, total=999)])
+    self.assertEqual(_compilation._device_hbm_limit(), 100)
+
+  def test_falls_back_to_attribute_when_memory_stats_raises(self):
+    self._patch_devices(
+        [_FakeDevice(stats_error=RuntimeError('unsupported'), total=42)]
+    )
+    self.assertEqual(_compilation._device_hbm_limit(), 42)
+
+  def test_falls_back_to_attribute_when_bytes_limit_missing(self):
+    self._patch_devices([_FakeDevice(stats={}, total=42)])
+    self.assertEqual(_compilation._device_hbm_limit(), 42)
+
+  def test_none_when_neither_available(self):
+    self._patch_devices([_FakeDevice(stats_error=RuntimeError('x'))])
+    self.assertIsNone(_compilation._device_hbm_limit())
+
+  def test_none_when_no_local_devices(self):
+    self._patch_devices([])
+    self.assertIsNone(_compilation._device_hbm_limit())
 
 
 if __name__ == '__main__':

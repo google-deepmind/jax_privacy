@@ -19,9 +19,11 @@
     "default": false,
     "MD013": {
       "line_length": 80,
-      // Don't flag long lines in code blocks or tables (often unwrappable).
+      // Don't flag long lines in code blocks, tables,
+      // or headings (often unwrappable).
       "code_blocks": false,
-      "tables": false
+      "tables": false,
+      "headings": false
     }
   },
   "ignores": [

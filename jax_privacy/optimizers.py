@@ -16,10 +16,11 @@
 
 Gradient-based DP training algorithms may need to specify pre-processing of the
 per-example gradients before clipping and noising happens. Because this is
-tightly linked to the optimizer, we provide an `AugmentedGradientTransformation`
-that provides a pre-processing function (the `pre_clipping_transform` that can
-be passed into jax_privacy_clipped_grad) bound together with the core optimizer
-update.
+tightly linked to the optimizer, we provide an
+:class:`~jax_privacy.optimizers.AugmentedGradientTransformation` that provides a
+pre-processing function (the ``pre_clipping_transform`` that can be passed into
+:func:`~jax_privacy.clipping.clipped_grad`) bound together with the core
+optimizer update.
 
 The primary use case is the "scale-then-privatize" technique from:
   Ganesh, McMahan, Thakurta. "On Design Principles for Private Adaptive
@@ -70,12 +71,12 @@ class AugmentedGradientTransformation(NamedTuple):
   """A gradient transformation augmented with a pre-clipping transform.
 
   This extends the standard optax.GradientTransformation interface with a
-  `pre_clipping_transform` field that, given the current optimizer state,
-  returns a `pre_clipping_transform` specifying how to transform per-example
+  ``pre_clipping_transform`` field that, given the current optimizer state,
+  returns a ``pre_clipping_transform`` specifying how to transform per-example
   gradients before and after the clipping/noising step.
 
-  The `update` function expects to receive gradients that have already been
-  transformed by `pre_clipping_transform(...)`, clipped, summed,
+  The ``update`` function expects to receive gradients that have already been
+  transformed by ``pre_clipping_transform(...)``, clipped, summed,
   and noised. It will internally apply the inverse transform before delegating
   to the base optimizer's update. See the module docstring for an example usage.
 
@@ -88,11 +89,12 @@ class AugmentedGradientTransformation(NamedTuple):
       base optimizer's update: update(updates, state, params=None) -> (updates,
       new_state)
     pre_clipping_transform: Given the current optimizer state, returns a
-      `pre_clipping_transform` function intended to be used with
-      jax_privacy.clipped_grad. It consumes a pytree with structure matching the
-      parameters and returns a transformed pytree. The transformed pytree may or
-      may not have the same structure. The `update` function is responsible for
-      mapping the input back to the original structure.
+      ``pre_clipping_transform`` function intended to be used with
+      :func:`~jax_privacy.clipping.clipped_grad`. It consumes a pytree with
+      structure matching the parameters and returns a transformed pytree. The
+      transformed pytree may or may not have the same structure. The ``update``
+      function is responsible for mapping the input back to the original
+      structure.
   """
 
   init: Callable[[optax.Params], optax.OptState]
@@ -125,7 +127,7 @@ def _find_adaptive_state(state: optax.OptState) -> optax.Updates:
       ' scale_then_privatize requires an adaptive optimizer (e.g.,'
       ' optax.adam, optax.adamw, optax.rmsprop, optax.adagrad). If you are'
       ' using a custom adaptive optimizer, pass a custom'
-      ' `extract_preconditioner_from_state_fn` function to'
+      ' ``extract_preconditioner_from_state_fn`` function to'
       ' scale_then_privatize.'
   )
 
@@ -138,46 +140,51 @@ def scale_then_privatize(
         Callable[[optax.OptState], optax.Updates] | None
     ) = None,
 ) -> AugmentedGradientTransformation:
-  """Constructs an AugmentedGradientTransformation for scale-then-privatize.
+  r"""Constructs an AugmentedGradientTransformation for scale-then-privatize.
 
   This implements Algorithm 8 from Ganesh, McMahan, Thakurta (2507.01129).
-  The key idea is to use the optimizer's second-moment estimate v_{t-1} from
-  the previous step to define a non-isotropic geometry for clipping and noising
-  per-example gradients. Specifically:
+  The key idea is to use the optimizer's second-moment estimate :math:`v_{t-1}`
+  from the previous step to define a non-isotropic geometry for clipping and
+  noising per-example gradients. Specifically:
 
-    s_t = 1 / (sqrt(v_{t-1} + eps_root) + eps)
+  .. math::
 
-  Before clipping, each per-example gradient g is transformed to s_t ⊙ g.
-  After clipping + aggregation + noise addition, the `update` function applies
-  the inverse (divides by s_t) before passing to the base optimizer's update.
+    s_t = 1 / (\sqrt{v_{t-1} + \text{eps\_root}} + \text{eps})
 
-  A large eps or eps_root passed here (but not in the adaptive optimizer's
-  scaling) will cause all coordinates to be scaled nearly-identically,
-  effectively retrieving no pre-clipping transform. eps or eps_root matching the
-  adaptive optimizer may add large noise in coordinates where the gradient i
-  s small. Ideally, this should parameter should be tuned to tradeoff between
-  these two regimes.
+  Before clipping, each per-example gradient :math:`g` is transformed to
+  :math:`s_t \odot g`. After clipping + aggregation + noise addition, the
+  ``update`` function applies the inverse (divides by :math:`s_t`) before
+  passing to the base optimizer's update.
+
+  A large ``eps`` or ``eps_root`` passed here (but not in the adaptive
+  optimizer's scaling) will cause all coordinates to be scaled
+  nearly-identically, effectively retrieving no pre-clipping transform.
+  ``eps`` or ``eps_root`` matching the adaptive optimizer may add large noise
+  in coordinates where the gradient is small. Ideally, this parameter should
+  be tuned to tradeoff between these two regimes.
 
   Args:
-    base_optimizer: A standard optax.GradientTransformation, typically an
-      adaptive optimizer like `optax.adamw(...)`, `optax.adam(...)`, or any
-      chained transformation containing a `scale_by_adam` (or similar)
+    base_optimizer: A standard :class:`optax.GradientTransformation`, typically
+      an adaptive optimizer like ``optax.adamw(...)``, ``optax.adam(...)``, or
+      any chained transformation containing a ``scale_by_adam`` (or similar)
       component.
     eps: A small constant added to the denominator outside the square root when
-      computing the scaling vector s_t. Analogous to the eps parameter in Adam.
-      This also acts as a stability constant to prevent excessively large
-      scaling in coordinates where νv is very small. Corresponds to ε_{s₁} in
-      Algorithm 8 of the paper. See the note above on tuning this parameter.
-    eps_root: A small constant added to v inside the square root, analogous to
-      eps_root in optax.scale_by_adam. See the note above on tuning this
-      parameter.
+      computing the scaling vector :math:`s_t`. Analogous to the ``eps``
+      parameter in Adam. This also acts as a stability constant to prevent
+      excessively large scaling in coordinates where :math:`v` is very small.
+      Corresponds to :math:`\varepsilon_{s_1}` in Algorithm 8 of the paper. See
+      the note above on tuning this parameter.
+    eps_root: A small constant added to :math:`v` inside the square root,
+      analogous to ``eps_root`` in :func:`optax.scale_by_adam`. See the note
+      above on tuning this parameter.
     extract_preconditioner_from_state_fn: A function that takes the optimizer
-      state and returns the second-moment estimate (v) pytree. If None, uses a
-      default implementation that handles common optax adaptive optimizers
-      (Adam, AMSGrad, RMSProp, AdaGrad).
+      state and returns the second-moment estimate (:math:`v`) pytree. If
+      ``None``, uses a default implementation that handles common optax adaptive
+      optimizers (Adam, AMSGrad, RMSProp, AdaGrad).
 
   Returns:
-    An AugmentedGradientTransformation for the scale-then-privatize technique.
+    An :class:`~jax_privacy.optimizers.AugmentedGradientTransformation` for the
+    scale-then-privatize technique.
   """
   if extract_preconditioner_from_state_fn is None:
     extract_preconditioner_from_state_fn = _find_adaptive_state

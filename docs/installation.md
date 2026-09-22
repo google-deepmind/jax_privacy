@@ -24,28 +24,28 @@ We **highly recommend** installing JAX Privacy directly from GitHub head.
 The repository is under active development, and installing from head ensures
 you get the most recent features and the best version of the library.
 
-```
+```bash
 pip install git+https://github.com/google-deepmind/jax_privacy
 ```
 
 ### Dependency versions
 
-*   [**DP Accounting**](https://github.com/google/differential-privacy/tree/main/python/dp_accounting):
-    JAX Privacy and DP Accounting are co-developed — we often add features to
-    DP Accounting and then surface them in JAX Privacy, so installing from head
-    ensures consistency.
+* [**DP Accounting**](https://github.com/google/differential-privacy/tree/main/python/dp_accounting):
+  JAX Privacy and DP Accounting are co-developed — we often add features to
+  DP Accounting and then surface them in JAX Privacy, so installing from head
+  ensures consistency.
 
-*   [**Optax**](https://github.com/google-deepmind/optax):
-    Parts of JAX Privacy have been upstreamed to optax (optax.microbatching),
-    and JAX Privacy depends on this recently-added code. Installing from head
-    ensures updates to optax are reflected in JAX-Privacy.
+* [**Optax**](https://github.com/google-deepmind/optax):
+  Parts of JAX Privacy have been upstreamed to optax (optax.microbatching),
+  and JAX Privacy depends on this recently-added code. Installing from head
+  ensures updates to optax are reflected in JAX-Privacy.
 
 ## Alternative: Install from PyPI
 
 You can also install JAX Privacy from PyPI (version 1.0 or 2.0), but note
 that these releases will not have all the features available on GitHub head.
 
-```
+```bash
 pip install jax-privacy
 ```
 
@@ -54,17 +54,17 @@ pip install jax-privacy
 This option is preferred if you want to build on top of our codebase or
 contribute to the library.
 
-*   The first step is to clone the repository:
+1. Clone the repository:
 
-```
-git clone https://github.com/google-deepmind/jax_privacy
-```
+   ```bash
+   git clone https://github.com/google-deepmind/jax_privacy
+   ```
 
-*   Then the code can be installed. We recommend local installation so
-    modifications to the code are reflected in imports of the package:
+2. Install the package in editable mode so modifications to the code are
+   reflected in imports:
 
-```
-cd jax_privacy
-pip install -e .
-```
+   ```bash
+   cd jax_privacy
+   pip install -e .
+   ```
 

@@ -25,7 +25,7 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - uses: wow-actions/auto-assign@v3
+      - uses: wow-actions/auto-assign@67fafa03df61d7e5f201734a2fa60d1ab111880d # v3
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # TODO: Create GitHub team and use it here, keep it in sync it using internal tool.

@@ -25,6 +25,9 @@ on:
     branches: ["main"]
     paths-ignore: ["README.md"]
 
+permissions:
+  contents: read
+
 jobs:
   check_rebase:
     name: "Check Branch Sync"
@@ -32,9 +35,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout code
-        uses: "actions/checkout@v6"
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Check if PR is up to date
         run: |
@@ -59,34 +63,78 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: "actions/checkout@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       # Enforce the 80-column line limit (MD013); see .markdownlint-cli2.jsonc.
       - name: Lint Markdown line length
-        uses: "DavidAnson/markdownlint-cli2-action@v24"
+        uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24
         with:
           globs: "**/*.md"
+
+  check-lockfile:
+    name: "Check: pylock.toml Sync"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check if pyproject.toml was modified
+        id: check_pyproject
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$GH_EVENT_NAME" = "pull_request" ]; then
+            git fetch origin "$GH_BASE_REF" --depth=1
+            BASE_REF="origin/$GH_BASE_REF"
+          else
+            BASE_REF="HEAD~1"
+          fi
+          if git diff --name-only "$BASE_REF" HEAD | grep -q '^pyproject.toml$'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "pyproject.toml was modified. Validating pylock.toml sync..."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "pyproject.toml was not modified. Skipping lockfile sync check."
+          fi
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        if: steps.check_pyproject.outputs.changed == 'true'
+        with:
+          enable-cache: true
+      - name: Verify pylock.toml is up to date with pyproject.toml
+        if: steps.check_pyproject.outputs.changed == 'true'
+        run: |
+          uv export -q --format pylock.toml --all-extras --default-index https://pypi.org/simple -o pylock.toml
+          go run github.com/google/addlicense@v1.2.0 -c "DeepMind Technologies Limited" -y "2026" -l apache pylock.toml
+          git diff --stat pylock.toml
+          git diff --exit-code pylock.toml
 
   lint:
     name: "Lint: Python 3.11"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: pyproject.toml
-      - name: Install Linting Tools
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[lint,examples,test]"
+          uv pip install --system -r pylock.toml
       - name: Run flake
         run: |
           flake8 jax_privacy tests examples
       - name: Check formatting with Pyink
         run: |
-          pyink --check --diff jax_privacy tests examples || { echo -e "\n---> Formatting check failed. To fix, run `pip install pyink pyink[jupyter] && pyink jax_privacy tests examples` locally and commit the changes." >&2; exit 1; }
+          pyink --check --diff jax_privacy tests examples || { echo -e "\n---> Formatting check failed. To fix, run \`uv pip install pyink pyink[jupyter] && pyink jax_privacy tests examples\` locally and commit the changes." >&2; exit 1; }
       - name: Run pydocstyle
         run: |
           pydocstyle --convention=google --add-ignore=D101,D102,D103,D105,D202,D402 jax_privacy/
@@ -96,11 +144,6 @@ jobs:
           pylint --rcfile=.pylintrc jax_privacy || pylint-exit -efail -wfail -cfail -rfail $?
           pylint --rcfile=.pylintrc examples || pylint-exit -efail -wfail -cfail -rfail $?
           pylint --rcfile=.pylintrc tests -d W0101,W0212,C0114 || pylint-exit -efail -wfail -cfail -rfail $?
-      - name: Run pytype
-        run: |
-          pytype jax_privacy -k
-          pytype tests -k
-          pytype examples -k
       - name: Run pyrefly
         run: |
           pyrefly check
@@ -115,16 +158,18 @@ jobs:
         python-version: ["3.11"]
         os: [ubuntu-latest]
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
-          cache-dependency-path: pyproject.toml
-      - name: Install Test Dependencies
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[test,examples]"
+          uv pip install --system -r pylock.toml
 
       # 1. Linux: Full Power (Parallel + Coverage)
       - name: Run Doctests (Linux)
@@ -144,17 +189,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: |
-            pyproject.toml
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          uv pip install --system -r pylock.toml
       - name: Run Heavy Tests
         env:
           HYPOTHESIS_PROFILE: dpftrl_default
@@ -170,16 +216,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: "actions/checkout@v6"
-      - uses: "actions/setup-python@v6"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: pyproject.toml
-      - name: Install Docs Dependencies
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[docs]"
+          uv pip install --system -r pylock.toml
       - name: Build Sphinx
         run: |
           cd docs

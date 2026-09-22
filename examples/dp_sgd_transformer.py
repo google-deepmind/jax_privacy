@@ -294,6 +294,10 @@ def main(argv: Sequence[str]) -> None:
   ):
 
     idx = batch_selection.pad_to_multiple_of(batch_idx, padding_multiple)
+    # Mark padding positions so clipped_grad zeros them out before
+    # aggregation, preserving the DP sensitivity guarantee. See
+    # "Using is_padding_example" in the Variable Batch Sizes documentation.
+    # TODO: b/543134538 - Add public padding example as last dataset entry.
     is_padding_example = idx == -1
     idx = jnp.where(idx == -1, 0, idx)
 

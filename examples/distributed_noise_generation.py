@@ -14,7 +14,7 @@
 
 r"""Standalone binary for running distributed noise generation.
 
-This file is intended to provide a stanadlone example of how to generate
+This file is intended to provide a standalone example of how to generate
 correlated noise efficiently with DP-MF.  It also provides sharding information
 and visualizations about the intermediate arrays and their sharding to help
 understand how the sharding strategy works.  It can also be used to determine if

@@ -19,7 +19,7 @@ from the paper:
   Clement Canonne, Gautam Kamath, & Thomas Steinke
   "The Discrete Gaussian for Differential Privacy"
   NeurIPS 2020 https://arxiv.org/abs/2004.00010
-Note that the implementation here is uses floating point arithmetic for
+Note that the implementation here uses floating point arithmetic for
 computing probabilities, which can result in small inaccuracies, but
 not catastrophic failures. Roughly speaking, the floating point errors in
 computing the probabilities are added to the delta term in differential privacy.
@@ -66,27 +66,29 @@ def sample_discrete_gaussian(
     oversample: int | None = None,
     dtype: np.typing.DTypeLike = np.int64,
 ) -> np.ndarray:
-  """Generates samples from a discrete Gaussian distribution.
+  r"""Generates samples from a discrete Gaussian distribution.
 
-  Specifically P[output=x] = exp(-x@x/sigma**2/2) * const for integer vectors x.
-  The output is a vector of integers of the given size. Samples are
-  i.i.d. with mean 0 and variance < sigma**2.
-  See https://arxiv.org/abs/2004.00010 for more details.
+  Specifically
+  :math:`\mathbb{P}[\text{output}=x] \propto \exp(-\|x\|_2^2 / (2 \sigma^2))`
+  for integer vectors :math:`x`. The output is a vector of integers of the given
+  size. Samples are i.i.d. with mean 0 and variance :math:`< \sigma^2`.
+  See "The Discrete Gaussian for Differential Privacy"
+  `Canonne et al. (2020) <https://arxiv.org/abs/2004.00010>`_ for more details.
 
   Args:
     rng: PRNG to use for sampling.
     sigma: Standard deviation proxy of the discrete Gaussian distribution.
     size: Size of the output array.
-    oversample: Number of samples to draw before rejection sampling. (If None, a
-      default value is used. This parameter is only useful for tuning the
-      algorithm for efficiency purposes.)
+    oversample: Number of samples to draw before rejection sampling. (If
+      ``None``, a default value is used. This parameter is only useful for
+      tuning the algorithm for efficiency purposes.)
     dtype: Output dtype. Must be an integer type. Defaults to ``np.int64``.
 
   Returns:
     An array of the given size sampled from the discrete Gaussian distribution.
 
   Raises:
-    ValueError: If size<=0 or sigma<0 or oversample<=0.
+    ValueError: If ``size <= 0``, ``sigma < 0``, or ``oversample <= 0``.
     ValueError: If dtype is not an integer type.
   """
   if not np.issubdtype(dtype, np.integer):
@@ -146,9 +148,9 @@ def sample_discrete_gaussian_pytree(
     rng: PRNG to use for sampling.
     sigma: Standard deviation proxy of the discrete Gaussian distribution.
     pytree: PyTree defining the desired output structure and shapes.
-    oversample: Number of samples to draw before rejection sampling. (If None, a
-      default value is used. This parameter is only useful for tuning the
-      algorithm for efficiency purposes.)
+    oversample: Number of samples to draw before rejection sampling. (If
+      ``None``, a default value is used. This parameter is only useful for
+      tuning the algorithm for efficiency purposes.)
     dtype: Output dtype. Must be an integer type. Defaults to ``np.int64``.
 
   Returns:

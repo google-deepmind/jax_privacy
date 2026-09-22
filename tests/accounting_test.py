@@ -183,9 +183,9 @@ class AccountingTest(parameterized.TestCase):
   def test_dpsgd_event_zero_noise_does_not_crash(self):
     """noise_multiplier=0 is permitted and must not raise in either branch.
 
-    `_validate_args` only rejects negative noise multipliers, so 0.0 is a valid
-    input denoting infinite privacy loss. The continuous branch already handles
-    it via GaussianDpEvent(0); the zCDP branch must likewise not raise a
+    ``_validate_args`` only rejects negative noise multipliers, so 0.0 is a
+    valid input denoting infinite privacy loss. The continuous branch already
+    handles it via GaussianDpEvent(0); the zCDP branch must likewise not raise a
     ZeroDivisionError from 0.5 / noise_multiplier**2 and should report rho=inf.
     """
     continuous = accounting.dpsgd_event(0.0, 10, sampling_prob=0.01)

@@ -51,23 +51,22 @@ part of the development and scaling process to ensure resources are utilized
 effectively. On the other hand, naively using low-precision dtypes everywhere is
 known to cause training instabilities, especially at large scales.
 
-The best dtypes strategy to use is in general model specific, although there are
+The best dtype strategy to use is in general model-specific, although there are
 some [general best practices](https://arxiv.org/abs/1710.03740) one can follow.
 When using JAX Privacy for training, our recommendations are as follows:
 
-1.  Parameters, per-example-gradients, and activations can use whatever dtype
-    strategy is stable without privacy. i.e., no changes to the loss function
-    should be needed.
+1. Parameters, per-example-gradients, and activations can use whatever dtype
+   strategy is stable without privacy. i.e., no changes to the loss function
+   should be needed.
 
-2.  Per-example clipped gradients should be accumulated using at least a
-    precision of float32. This can be accomplished by specifying the `dtype`
-    keyword arg of
-    [`jax_privacy.clipped_grad`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.clipping.clipped_grad.html#jax_privacy.clipping.clipped_grad).
+2. Per-example clipped gradients should be accumulated using at least a
+   precision of float32. This can be accomplished by specifying the `dtype`
+   keyword arg of {func}`~jax_privacy.clipping.clipped_grad`.
 
-3.  Noise should be added using at least a precision of float32. This can be
-    accomplished by ensuring the input gradients are passed as `float32`, or
-    specifying the `dtype` arg to the appropriate function from
-    [`jax_privacy.noise_addition`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.noise_addition.html).
+3. Noise should be added using at least a precision of float32. This can be
+   accomplished by ensuring the input gradients are passed as `float32`, or
+   specifying the `dtype` arg to the appropriate function from
+   {mod}`jax_privacy.noise_addition`.
 
 We believe this strategy strikes a good balance between efficiency and
 stability. The accumulation of gradients and addition of noise is generally not
@@ -75,12 +74,12 @@ the most expensive part of the training step, and hence the performance cost of
 using float32 in these places should generally be small.
 
 As a simple example, consider a standard transformer model. The number of FLOPs
-required to do a forward/backward pass is typically approximated as $$6 \cdot N
-\cdot D$$ where $$N$$ is the number of tokens, and $$D$$ is the total number of
+required to do a forward/backward pass is typically approximated as $6 \cdot N
+\cdot D$ where $N$ is the number of tokens, and $D$ is the total number of
 parameters. Meanwhile, accumulating gradients across the batch dimension
-requires $$B \cdot D'$$ FLOPS, where $$B$$ is the batch size (such that $$N = B
-\cdot L$$ where $$L$$ is sequence length), and $$D'$$ is the number of
-*trainable* parameters, which is sometimes the same as $$D$$ (e.g., pretraining,
+requires $B \cdot D'$ FLOPS, where $B$ is the batch size (such that $N = B
+\cdot L$ where $L$ is sequence length), and $D'$ is the number of
+*trainable* parameters, which is sometimes the same as $D$ (e.g., pretraining,
 full fine-tuning) and sometimes much smaller (e.g., parameter-efficient
 fine-tuning). Either way, this is a small fraction of the total number of FLOPS
 needed for the train step, and hence higher precision dtypes can be used with

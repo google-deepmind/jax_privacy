@@ -26,10 +26,14 @@ you have one, you are very welcome to contribute!
 Check whether it goes down with non-DP training. If it does not go down for
 non-DP either, then try usual ML remediation techniques like changing learning
 rate, using different optimizers. Such a problem might often happen if you use
-16 bit mixed precision because more error is accumulated. In this case
-accumulating less gradients might help.
+16-bit mixed precision because more error is accumulated. In this case,
+accumulating fewer gradients or adjusting precision might help (see the
+[Mixed Precision Training guide](sharp_edges_mixed_precision)).
 
-If it happens only for DP training, then it worth noting that DP training in
+If it happens only for DP training, then it is worth noting that DP training in
 general converges slower than usual training. In this case, try to do more
-iterations, increase batch size, both physical and effective, increase learning
-rate.
+iterations, increase batch size (both physical and effective; see
+[Handling Variable Batch Sizes](sharp_edges_variable_batch_sizes)), or
+increase the learning rate. For a comprehensive overview of pitfalls that can
+affect DP convergence and utility, consult
+[Common Pitfalls in DP Training](sharp_edges_dp_training_pitfalls).

@@ -205,10 +205,9 @@ def main(_):
       print(f"Epoch {epoch:4d}, Avg. Loss: {avg_epoch_loss:.4f}")
 
   print("\nTraining complete!")
-  print(
-      f"Learned parameters: w={model_params['w']:.4f},"
-      f" b={model_params['b']:.4f}"
-  )
+  learned_w = model_params["w"]
+  learned_b = model_params["b"]
+  print(f"Learned parameters: w={learned_w:.4f}, b={learned_b:.4f}")
   print(f"True parameters: w={true_w:.4f}, b={true_b:.4f}")
 
   if use_dp:

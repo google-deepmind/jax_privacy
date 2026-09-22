@@ -14,16 +14,27 @@
 
 """End-to-end training loop for differentially private training.
 
-This module provides :class:`DPTrainer`, a class that encapsulates the
-static configuration for a DP training loop (execution plan, loss function,
-optimizer) and exposes a reusable ``train_step`` that can be independently
-JIT-compiled or ahead-of-time compiled.
+This module provides :class:`~jax_privacy.training.DPTrainer`, a class that
+encapsulates the static configuration for a DP training loop (execution plan,
+loss function, optimizer) and exposes a reusable ``train_step`` that can be
+independently JIT-compiled or ahead-of-time compiled.
+
+Design notes: This module aims to provide a framework-agnostic and model
+agnostic DP training loop that can be easily configured to use a variety of
+mechanism variants and performance knobs. Since it is defined in terms of an
+ExecutionPlanConfig object, it automatically works with any mechanism plan
+supported by our Tier 2 API.
+
+Because it is designed to be framework and model-agnostic, there are a few
+things that are explicitly out of scope, like checkpointing and metrics logging.
+Callers are expected to implement these things themselves via dependency
+injection through the callback_fn option.
 """
 
 from collections.abc import Callable
 import dataclasses
 import functools
-from typing import Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
 from absl import logging
 import jax
@@ -46,12 +57,16 @@ Loss: TypeAlias = jax.Array
 Aux: TypeAlias = optax.ArrayTree
 PerExampleAux: TypeAlias = jax_privacy.clipping.AuxiliaryOutput
 Batch: TypeAlias = optax.ArrayTree
-Dataset: TypeAlias = optax.ArrayTree
+Dataset: TypeAlias = optax.ArrayTree | Any
 Params: TypeAlias = optax.ArrayTree
 OptState: TypeAlias = optax.ArrayTree
 NoiseState: TypeAlias = optax.ArrayTree
 # Re-exported so callers can keep using training.PrecompiledFuture.
 PrecompiledFuture: TypeAlias = _compilation.PrecompiledFuture
+# Compilation strategies, re-exported for the public API.
+CompilationStrategy = _compilation.CompilationStrategy
+PadToMultiple = _compilation.PadToMultiple
+AutotuneMicrobatch = _compilation.AutotuneMicrobatch
 
 
 class LossFn(Protocol):
@@ -63,7 +78,7 @@ class LossFn(Protocol):
 
   Any additional context the loss function needs — frozen parameters,
   model configuration, label smoothing constants, etc. — should be closed
-  over before passing the function to :class:`DPTrainer`::
+  over before passing the function to :class:`~jax_privacy.training.DPTrainer`::
 
       frozen = model.freeze(some_params)
       def my_loss(params, data, prng):
@@ -107,11 +122,13 @@ class TrainingState:
 CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
 
 
-def _get_batch(dataset: Batch, indices: np.ndarray) -> tuple[Batch, jax.Array]:
-  """Retrieves a batch from a PyTree dataset, zeroing padding examples.
+def _get_batch(
+    dataset: Dataset, indices: np.ndarray
+) -> tuple[Batch, jax.Array]:
+  """Retrieves a batch from a PyTree or Grain dataset, zeroing padding examples.
 
   Args:
-    dataset: A PyTree of arrays.
+    dataset: A PyTree of arrays or a PyGrain MapDataset.
     indices: A 1D array of indices. Entries equal to ``-1`` are treated as
       padding and the corresponding examples are zeroed out.
 
@@ -121,6 +138,15 @@ def _get_batch(dataset: Batch, indices: np.ndarray) -> tuple[Batch, jax.Array]:
     which examples are padding.
   """
   is_padding = indices == -1
+
+  if _compilation.is_map_dataset(dataset):
+    template = jax.tree.map(np.zeros_like, dataset[0])
+    batch_elements = [template if i == -1 else dataset[i] for i in indices]
+    batch_elements = batch_elements or [template]
+    batch = jax.tree.map(
+        lambda *leaves: np.stack(leaves)[: len(indices)], *batch_elements
+    )
+    return batch, jax.device_put(is_padding)
 
   def _index_and_zero(x):
     mask = np.expand_dims(is_padding, tuple(range(1, x.ndim)))
@@ -149,15 +175,22 @@ class DPTrainer:
   should reshard its inputs using sharding-in-types.
 
   Attributes:
-    config: An :class:`ExecutionPlanConfig` (e.g. ``BandMFConfig``) specifying
-      the DP mechanism.
+    config: An :class:`~jax_privacy.execution_plan.ExecutionPlanConfig` (e.g.
+      :class:`~jax_privacy.execution_plan.BandMFConfig`) specifying the DP
+      mechanism.
     performance_flags: Performance-only flags (numerical precision, sharding,
       memory/compute trade-offs) that do not affect the privacy guarantee.
-    loss_fn: The per-example loss function.  See :class:`LossFn`.
-    optimizer: An ``AugmentedGradientTransformation`` or a plain
-      ``optax.GradientTransformation``.
-    padding_multiple: If set, batch sizes are padded to a multiple of this value
-      to limit JIT recompilations from varying Poisson batch sizes.
+    loss_fn: The per-example loss function.  See
+      :class:`~jax_privacy.training.LossFn`.
+    optimizer: An
+      :class:`~jax_privacy.optimizers.AugmentedGradientTransformation` or a
+      plain :class:`optax.GradientTransformation`.
+    compilation_strategy: Selects which ``train_step`` programs are compiled for
+      training. :class:`~jax_privacy.training.PadToMultiple` (default) pads
+      batches to a multiple to bound recompilations;
+      :class:`~jax_privacy.training.AutotuneMicrobatch` picks the largest
+      microbatch size that fits device memory and compiles once. See
+      :class:`~jax_privacy.training.CompilationStrategy`.
   """
 
   config: execution_plan.ExecutionPlanConfig
@@ -169,7 +202,9 @@ class DPTrainer:
       aug_optimizers.AugmentedGradientTransformation
       | optax.GradientTransformation
   )
-  padding_multiple: int = 32
+  compilation_strategy: _compilation.CompilationStrategy = dataclasses.field(
+      default_factory=_compilation.PadToMultiple
+  )
 
   def __post_init__(self):
     _ = self.plan  # Build untraced so cached PRNG key isn't a leaked tracer.
@@ -254,8 +289,8 @@ class DPTrainer:
       params: Params,
       *,
       rng_or_seed: np.random.Generator | int | None = None,
-  ) -> dict[int, PrecompiledFuture]:
-    """[ADVANCED] Warm up the JIT cache for ``train_step`` asynchronously."""
+  ) -> tuple["DPTrainer", dict[int, PrecompiledFuture]]:
+    """[ADVANCED] Resolve config and AOT-compile the steps ``fit`` runs."""
     return _compilation.precompile(
         self, dataset, params, rng_or_seed=rng_or_seed
     )
@@ -263,7 +298,7 @@ class DPTrainer:
   def fit(
       self,
       dataset: Dataset,
-      params: Params,
+      state: Params | TrainingState,
       *,
       callback: CallbackFn | None = None,
       rng_or_seed: np.random.Generator | int | None = None,
@@ -272,57 +307,89 @@ class DPTrainer:
     """Runs an end-to-end differentially private training loop.
 
     Args:
-      dataset: The training dataset, as a PyTree of arrays where the first axis
-        of each leaf is the batch / example dimension.
-      params: Initial parameter PyTree.
+      dataset: The training dataset, either as a PyTree of arrays where the
+        first axis of each leaf is the batch / example dimension, or as a
+        ``grain.MapDataset``.
+      state: Initial parameter PyTree or a resumable ``TrainingState``. If a
+        ``TrainingState`` is provided, training continues from the step recorded
+        in the state, and the batch selection iterator safely fast-forwards to
+        maintain deterministic DP properties.
       callback: Called after each step as ``callback(step, state, aux)``.
         ``step`` is a Python int.
       rng_or_seed: Optional random seed or ``numpy.random.Generator``, used for
         sampling batches (impacting privacy) and initializing the loss PRNG key
         (potentially impacting utility). Does not influence the noise addition
-        transform, which is configured via the DPExecutionPlan.
-      precompile: A boolean indicating whether to asyncronously precompile
+        transform, which is configured via the
+        :class:`~jax_privacy.execution_plan.DPExecutionPlan`.
+      precompile: A boolean indicating whether to asynchronously precompile
         ``train_step`` for the batch sizes encountered, instead of just-in-time
         compiling on the fly, which can idle accelerators during training.
+        Strategies that resolve before training (e.g. ``AutotuneMicrobatch``)
+        run even when this is ``False``.
 
     Returns:
       Final ``TrainingState``.
     """
+    # Precompilation resolves the trainer and compiles the required train_steps.
+    # It may return a *different* trainer (e.g. AutotuneMicrobatch picks a
+    # concrete microbatch size), so the loop below runs on ``trainer`` rather
+    # than ``self``.
+    trainer: DPTrainer = self
     futures: dict[int, PrecompiledFuture] = {}
-    if precompile:
-      futures = self._precompile(dataset, params, rng_or_seed=rng_or_seed)
 
-    # We need tight alignement between how rng is used here and in precompile().
+    # Clone state. train_step uses donate_argnames.
+    if not isinstance(state, TrainingState):
+      state = self.init(jax.tree.map(jax.numpy.copy, state))
+
+    if precompile or isinstance(self.compilation_strategy, AutotuneMicrobatch):
+      trainer, futures = self._precompile(
+          dataset, state.params, rng_or_seed=rng_or_seed
+      )
+    assert isinstance(trainer.compilation_strategy, PadToMultiple)
+    warn_on_cache_miss = bool(futures)
+
+    # We need tight alignment between how rng is used here and in precompile().
     rng = np.random.default_rng(rng_or_seed)
     prng_key = jax.random.key(int(rng.integers(2**63)))
 
-    num_examples = _validate.batch(dataset)
-    # Copy here due to the donate_argnames on the jit decorated train_step.
-    state = self.init(jax.tree.map(jax.numpy.copy, params))
-
-    batch_iterator = self.plan.batch_selection_strategy.batch_iterator(
-        num_examples, rng=rng
+    num_examples = (
+        len(dataset)
+        if _compilation.is_map_dataset(dataset)
+        else _validate.batch(dataset)
     )
 
-    step = 0
-    for indices in batch_iterator:
-      indices = batch_selection.pad_to_multiple_of(
-          indices, self.padding_multiple
-      )
-      batch, is_padding_example = _get_batch(dataset, indices)
-      step_fn = self.train_step
-      if indices.size in futures:
-        step_fn = futures[indices.size].result()
-      elif precompile:
-        logging.info("JIT-compiling train_step for batch size %d", indices.size)
-        logging.warning("Cache Miss! Precompile is not working as intended.")
+    with _compilation.hoist_closed_over_constants():
+      bss = trainer.plan.batch_selection_strategy
+      batch_iterator = bss.batch_iterator(num_examples, rng=rng)
 
-      state, aux = step_fn(state, batch, is_padding_example, prng_key)
-      step += 1
+      # initial state.step is 0 (no replay). Otherwise replay to the saved step.
+      # TODO: b/545416482 - Investigate stateful iterator instead of rng replay.
+      for _ in range(int(state.step)):
+        next(batch_iterator)
 
-      del indices, batch, is_padding_example
+      step = int(state.step)
+      for indices in batch_iterator:
+        indices = batch_selection.pad_to_multiple_of(
+            indices,
+            trainer.compilation_strategy.multiple,
+            microbatch_size=trainer.performance_flags.microbatch_size,
+        )
+        batch, is_padding_example = _get_batch(dataset, indices)
+        step_fn = trainer.train_step
+        if indices.size in futures:
+          step_fn = futures[indices.size].result()
+        elif warn_on_cache_miss:
+          logging.info(
+              "JIT-compiling train_step for batch size %d", indices.size
+          )
+          logging.warning("Cache Miss! Precompile is not working as intended.")
 
-      if callback is not None:
-        callback(step, state, aux)
+        state, aux = step_fn(state, batch, is_padding_example, prng_key)
+        step += 1
+
+        del indices, batch, is_padding_example
+
+        if callback is not None:
+          callback(step, state, aux)
 
     return state

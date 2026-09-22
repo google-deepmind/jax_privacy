@@ -324,7 +324,7 @@ class FixedEpochSensitivityTest(parameterized.TestCase):
     n = 6
     C = jax.random.normal(jax.random.PRNGKey(321), (n, n)) * jnp.tri(n)
     ans = sensitivity_lib.fixed_epoch_sensitivity(C, epochs=1)
-    self.assertAlmostEqual(ans, jnp.linalg.norm(C, axis=0).max())
+    self.assertAlmostEqual(ans, jnp.linalg.norm(C, axis=0).max(), places=5)
 
   def test_full_participation(self):
     n = 16

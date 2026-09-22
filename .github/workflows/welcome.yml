@@ -15,6 +15,7 @@
 name: Welcome First-Time Contributors
 
 on:
+  # zizmor: ignore[dangerous-triggers] - Only posts welcome comment; does not checkout untrusted code.
   pull_request_target:
     types: [opened]
 
@@ -25,7 +26,7 @@ jobs:
   welcome:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/first-interaction@v1
+      - uses: actions/first-interaction@3c71ce730280171fd1cfb57c00c774f8998586f7 # v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           pr-message: |
