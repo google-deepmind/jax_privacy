@@ -46,7 +46,10 @@ import os
 # pylint: disable=import-outside-toplevel
 
 
-DEFAULT_CACHE_ROOT = "/bigtemp/fzv6en/diffuser_cache"
+DEFAULT_CACHE_ROOT = os.path.join(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+    "jax_privacy",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +204,14 @@ def _set_env_defaults(cache_root):
 
 def parse_args():
   p = argparse.ArgumentParser(description=__doc__)
-  p.add_argument("--cache_root", default=DEFAULT_CACHE_ROOT)
+  p.add_argument(
+      "--cache_root",
+      default=DEFAULT_CACHE_ROOT,
+      help=(
+          "Root for default caches (default: %(default)s). Existing cache "
+          "environment variables take precedence."
+      ),
+  )
   p.add_argument(
       "--dataset",
       default="cnn_dailymail",

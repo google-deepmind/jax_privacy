@@ -15,8 +15,10 @@
 """Tests for the Keras-to-DPTrainer helpers in the DP-SAPF example."""
 
 import dataclasses
+import importlib.util
 import math
 import os
+import pathlib
 from unittest import mock
 
 os.environ["KERAS_BACKEND"] = "jax"
@@ -24,7 +26,6 @@ os.environ["KERAS_BACKEND"] = "jax"
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
-from examples import dpsapf_validate
 import jax
 import jax.numpy as jnp
 from jax_privacy import accounting
@@ -32,6 +33,20 @@ from jax_privacy import training
 import keras
 import numpy as np
 # pylint: enable=g-import-not-at-top, wrong-import-position
+
+
+# Examples are not installed as a package. Resolve the script from this file
+# so test collection does not depend on the working directory or PYTHONPATH.
+_EXAMPLE_PATH = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "examples"
+    / "dpsapf_validate.py"
+)
+_SPEC = importlib.util.spec_from_file_location("dpsapf_validate", _EXAMPLE_PATH)
+if _SPEC is None or _SPEC.loader is None:
+  raise ImportError("Unable to load the DP-SAPF validation example.")
+dpsapf_validate = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(dpsapf_validate)
 
 
 class DpsapfValidateTest(parameterized.TestCase):
@@ -286,7 +301,9 @@ class DpsapfValidateTest(parameterized.TestCase):
         jax, "block_until_ready", wraps=jax.block_until_ready
     ) as synchronize, mock.patch.object(
         training, "_get_batch", wraps=training._get_batch
-    ) as get_batch, mock.patch("builtins.print") as print_progress:
+    ) as get_batch, mock.patch(
+        "builtins.print"
+    ) as print_progress:
       state = dpsapf_validate._fit_keras_model(
           model,
           dataset,
@@ -329,9 +346,7 @@ class DpsapfValidateTest(parameterized.TestCase):
     fit.assert_called_once()
     self.assertFalse(fit.call_args.kwargs["precompile"])
     trainer = fit.call_args.args[0]
-    self.assertEqual(
-        trainer.performance_flags.microbatch_size, microbatch_size
-    )
+    self.assertEqual(trainer.performance_flags.microbatch_size, microbatch_size)
     self.assertIsInstance(trainer.compilation_strategy, training.PadToMultiple)
     rng = np.random.default_rng(fit.call_args.kwargs["rng_or_seed"])
     rng.integers(2**63)  # DPTrainer's loss PRNG seed draw.
