@@ -75,7 +75,7 @@ NeighboringRelation = dp_accounting.NeighboringRelation
 AccountantFn = Callable[[NeighboringRelation], dp_accounting.PrivacyAccountant]
 
 
-class CyclicInnerStrategy(enum.Enum):
+class CyclicInnerStrategy(enum.StrEnum):
   """Specifies the "inner" sampling strategy for cyclic sampling strategies.
 
   Both options assign each example to one of ``num_bands`` groups, and only let
