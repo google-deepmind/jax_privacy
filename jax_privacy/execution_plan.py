@@ -303,8 +303,11 @@ class BandMFConfig:
     _validate.non_negative(
         iterations=self.iterations,
         l2_clip_norm=self.l2_clip_norm,
-        normalize_by=self.normalize_by,
     )
+    if not (np.isfinite(self.normalize_by) and self.normalize_by > 0):
+      raise ValueError(
+          f'Expected normalize_by={self.normalize_by} to be finite and > 0.'
+      )
     _validate.strategy(self.strategy, self.iterations)
     if self.sub_strategy == CyclicInnerStrategy.RANDOM_ALLOCATION:
       max_participations = math.ceil(self.iterations / self.num_bands)
