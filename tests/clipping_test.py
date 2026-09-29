@@ -701,5 +701,31 @@ class ClippedFunSensitivityContractTest(parameterized.TestCase):
     self.assertAlmostEqual(cf.l2_norm_bound, 5.0 / 2.0)
 
 
+class ClippedGradSensitivityContractTest(parameterized.TestCase):
+  """Regression tests for clipped_grad sensitivity accounting.
+
+  The Args section used to claim sensitivity is always ``1.0`` or
+  ``l2_clip_norm``. That ignores ``normalize_by``.
+  """
+
+  def test_normalize_by_scales_sensitivity(self):
+    def loss(params, data):
+      return 0.5 * jnp.mean((data - params) ** 2)
+
+    cg = clipping.clipped_grad(
+        loss,
+        argnums=0,
+        batch_argnums=1,
+        l2_clip_norm=2.0,
+        rescale_to_unit_norm=False,
+        normalize_by=4.0,
+    )
+    self.assertAlmostEqual(cg.l2_norm_bound, 2.0 / 4.0)
+    self.assertAlmostEqual(
+        cg.sensitivity(dp_accounting.NeighboringRelation.ADD_OR_REMOVE_ONE),
+        0.5,
+    )
+
+
 if __name__ == '__main__':
   absltest.main()
