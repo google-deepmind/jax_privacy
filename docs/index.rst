@@ -55,6 +55,7 @@
    :maxdepth: 2
    :caption: Technical Documentation
 
+   history
    paper_reproductions
    batch_selection
    troubleshooting
