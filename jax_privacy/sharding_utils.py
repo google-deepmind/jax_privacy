@@ -351,11 +351,10 @@ def with_sharding_specs(
     temporarily enter ``AxisType.Explicit`` mode with the provided specs.
 
   Raises:
-    ValueError: If no ``AxisType.Auto`` mesh is active via :func:`jax.set_mesh`,
-      or if ``param_specs`` contains leaves that are neither ``PartitionSpec``
-      nor ``NamedSharding``.
+    ValueError: If ``param_specs`` contains leaves that are neither
+      ``PartitionSpec`` nor ``NamedSharding``, or if no ``AxisType.Auto`` mesh
+      is active via :func:`jax.set_mesh` when ``init`` or ``update`` is called.
   """
-  _check_auto_mesh()
 
   def _to_pspec(s):
     if isinstance(s, jax.sharding.NamedSharding):
