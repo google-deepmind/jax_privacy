@@ -18,6 +18,7 @@ import chex
 import jax
 import jax.numpy as jnp
 from jax_privacy import noise_addition
+from jax_privacy import sharding_utils
 from jax_privacy.matrix_factorization import buffered_toeplitz
 from jax_privacy.matrix_factorization import streaming_matrix
 from jax_privacy.matrix_factorization import toeplitz
@@ -154,6 +155,126 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
       self.assertEqual(state.dtype, jnp.float32)
       print(state.sharding)
       self.assertEqual(state.sharding.spec, expected)
+
+  @parameterized.named_parameters(
+      ('blt', buffered_toeplitz_noising_matrix_fn),
+      ('bandmf', banded_toeplitz_noising_matrix_fn),
+      ('dpsgd', streaming_matrix.identity),
+      ('prefix', streaming_matrix.prefix_sum),
+      ('momentum', streaming_matrix.momentum_sgd_matrix),
+  )
+  def test_auto_mesh_runs_as_expected(
+      self,
+      strategy_inverse_fn=banded_toeplitz_noising_matrix_fn,
+  ):
+    with jax.sharding.use_abstract_mesh(jax.sharding.AbstractMesh((), ())):
+      privatizer = noise_addition.matrix_factorization_privatizer(
+          noising_matrix=strategy_inverse_fn(),
+          stddev=1.0,
+          prng_key=jax.random.key(0),
+          dtype=jnp.float32,
+          intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
+      )
+    mesh = jax.make_mesh(
+        (4, 2), ('x', 'y'), axis_types=(jax.sharding.AxisType.Auto,) * 2
+    )
+    jax.sharding.set_mesh(mesh)
+
+    pspecs = {
+        'v': jax.sharding.PartitionSpec(),
+        'w': jax.sharding.PartitionSpec(None, 'x'),
+        'x': jax.sharding.PartitionSpec(('x', 'y')),
+        'y': jax.sharding.PartitionSpec(None, None, None),
+        'z': jax.sharding.PartitionSpec('y', None),
+    }
+    raw_params = {
+        'v': jnp.array(123.456, dtype=jnp.bfloat16),
+        'w': jnp.zeros((4, 8), dtype=jnp.bfloat16),
+        'x': jnp.arange(16, dtype=jnp.bfloat16),
+        'y': jax.random.normal(jax.random.key(0), (2, 3, 4), jnp.bfloat16),
+        'z': jnp.ones((2, 7), dtype=jnp.bfloat16),
+    }
+    put_fn = lambda x, s: jax.device_put(x, jax.sharding.NamedSharding(mesh, s))
+    model_params = jax.tree.map(put_fn, raw_params, pspecs)
+
+    privatizer = sharding_utils.with_sharding_specs(privatizer, pspecs)
+
+    @jax.jit
+    def foo(grads):
+      state = privatizer.init(grads)
+      noisy_grads, state = privatizer.update(grads, state)
+      noisy_grads2, state = privatizer.update(grads, state)
+      return noisy_grads, noisy_grads2, state
+
+    noisy_grads, noisy_grads2, noise_state = foo(model_params)
+
+    def assert_shape_dtype_sharding_equal(x, y):
+      self.assertEqual(x.shape, y.shape)
+      self.assertEqual(x.dtype, y.dtype)
+      self.assertTrue(x.sharding.is_equivalent_to(y.sharding, y.ndim))
+
+    jax.tree.map(assert_shape_dtype_sharding_equal, model_params, noisy_grads)
+    for leaf in jax.tree.leaves(noise_state[1]):
+      if jnp.issubdtype(leaf.dtype, jnp.floating):
+        self.assertIn(leaf.dtype, (jnp.float32, jnp.float64))
+      self.assertEqual(leaf.sharding.mesh, mesh)
+
+    flat_noise = np.concatenate(
+        [
+            np.array(x, dtype=np.float32).flatten()
+            for x in jax.tree.leaves(noisy_grads)
+        ]
+        + [
+            np.array(x, dtype=np.float32).flatten()
+            for x in jax.tree.leaves(noisy_grads2)
+        ]
+    )
+    self.assertGreater(len(set(flat_noise)), 10)
+
+  def test_with_sharding_specs_update_without_init(self):
+    with jax.sharding.use_abstract_mesh(jax.sharding.AbstractMesh((), ())):
+      base_priv = noise_addition.gaussian_privatizer(
+          stddev=1.0,
+          prng_key=0,
+          intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
+      )
+    mesh = jax.make_mesh(
+        (4, 2), ('x', 'y'), axis_types=(jax.sharding.AxisType.Auto,) * 2
+    )
+    jax.sharding.set_mesh(mesh)
+    pspec = jax.sharding.PartitionSpec('x', 'y')
+    sharding = jax.sharding.NamedSharding(mesh, pspec)
+    params = jax.device_put(jnp.zeros((8, 4)), sharding)
+    make_priv = lambda: sharding_utils.with_sharding_specs(base_priv, sharding)
+    abs_state = jax.eval_shape(make_priv().init, params)
+    self.assertIsNotNone(abs_state)
+    state = make_priv().init(params)
+    noisy_grads, _ = jax.jit(lambda p, s: make_priv().update(p, s))(
+        params, state
+    )
+    self.assertEqual(noisy_grads.sharding, sharding)
+
+  def test_with_sharding_specs_invalid_setup_raises(self):
+    pspec = jax.sharding.PartitionSpec('x', 'y')
+    with jax.sharding.use_abstract_mesh(jax.sharding.AbstractMesh((), ())):
+      base_priv = noise_addition.gaussian_privatizer(stddev=1.0, prng_key=0)
+      with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
+        sharding_utils.with_sharding_specs(base_priv, pspec)
+    with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
+      sharding_utils.with_sharding_specs(base_priv, pspec)
+    auto_mesh = jax.make_mesh(
+        (4, 2), ('x', 'y'), axis_types=(jax.sharding.AxisType.Auto,) * 2
+    )
+    jax.set_mesh(auto_mesh)
+    with self.assertRaisesRegex(ValueError, 'PartitionSpec or NamedSharding'):
+      sharding_utils.with_sharding_specs(base_priv, 'invalid_spec')
+    priv = sharding_utils.with_sharding_specs(base_priv, pspec)
+    state = priv.init(jnp.zeros((4, 2)))
+    with jax.sharding.use_abstract_mesh(jax.sharding.AbstractMesh((), ())):
+      with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
+        priv.init(jnp.zeros((4, 2)))
+      with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
+        priv.update(jnp.zeros((4, 2)), state)
 
 
 if __name__ == '__main__':

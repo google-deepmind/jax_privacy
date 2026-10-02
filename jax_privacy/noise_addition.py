@@ -116,7 +116,9 @@ class SupportedStrategies(enum.Enum):
       add=sharding_utils.local_reshape_add,
   )
   """Zero-redundancy approach suitable for multi-machine scenarios. Requires
-  inputs to have explicit sharding annotations."""
+  inputs to have explicit sharding annotations (or wrap the privatizer with
+  :func:`~jax_privacy.sharding_utils.with_sharding_specs` on ``AxisType.Auto``
+  meshes)."""
 
 
 def matrix_factorization_privatizer(
@@ -276,6 +278,11 @@ def _streaming_matrix_factorization_privatizer(
 
   def init(model):
     intermediate = jax.tree.map(strategy.get_noise_structure, model)
+    if dtype is not None:
+      to_dtype = lambda x: jax.ShapeDtypeStruct(
+          x.shape, dtype, sharding=jax.ShapeDtypeStruct.like(x).sharding
+      )
+      intermediate = jax.tree.map(to_dtype, intermediate)
     # downstream users may donate this state to JIT, so we copy prng_key here.
     return jnp.copy(prng_key), noising_matrix.init_multiply(intermediate)
 

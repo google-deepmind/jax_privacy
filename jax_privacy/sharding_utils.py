@@ -318,3 +318,77 @@ def parallel_sample_pytree(
     return _parallel_sample(rng, leaf.shape, leaf.sharding, sampler, leaf.dtype)
 
   return jax.tree.map(leaf_fn, struct, rngs)
+
+
+def _check_auto_mesh():
+  mesh = jax.sharding.get_abstract_mesh()
+  if mesh.empty or not all(
+      axis_type == jax.sharding.AxisType.Auto for axis_type in mesh.axis_types
+  ):
+    raise ValueError(
+        'with_sharding_specs requires an active AxisType.Auto mesh. Please set'
+        ' the mesh using jax.set_mesh() with an Auto mesh.'
+    )
+
+
+def with_sharding_specs(
+    transform: optax.GradientTransformation,
+    param_specs: PartitionSpecPyTree,
+) -> optax.GradientTransformation:
+  """Binds parameter PartitionSpecs to a transformation for Auto-axes meshes.
+
+  Requires an active ``AxisType.Auto`` mesh set via :func:`jax.set_mesh`.
+
+  Args:
+    transform: An :class:`optax.GradientTransformation` that relies on
+      type-level sharding (``AxisType.Explicit``), such as a privatizer
+      configured with ``SupportedStrategies.ZERO``.
+    param_specs: A PyTree of :class:`jax.sharding.PartitionSpec` or
+      :class:`jax.sharding.NamedSharding` matching the parameter/gradient tree.
+
+  Returns:
+    An :class:`optax.GradientTransformation` whose ``init`` and ``update``
+    temporarily enter ``AxisType.Explicit`` mode with the provided specs.
+
+  Raises:
+    ValueError: If no ``AxisType.Auto`` mesh is active via :func:`jax.set_mesh`,
+      or if ``param_specs`` contains leaves that are neither ``PartitionSpec``
+      nor ``NamedSharding``.
+  """
+  _check_auto_mesh()
+
+  def _to_pspec(s):
+    if isinstance(s, jax.sharding.NamedSharding):
+      return s.spec
+    if isinstance(s, jax.sharding.PartitionSpec):
+      return s
+    raise ValueError(
+        'Expected PartitionSpec or NamedSharding leaves in param_specs, got'
+        f' {type(s)}.'
+    )
+
+  specs = jax.tree.map(_to_pspec, param_specs)
+
+  @jax.jit
+  def init_fn(params):
+    _check_auto_mesh()
+    return jax.sharding.explicit_axes(transform.init, in_sharding=(specs,))(
+        params
+    )
+
+  @jax.jit
+  def update_fn(updates, state, params=None):
+    del params
+    _check_auto_mesh()
+
+    def _update(updates):
+      # Trace transform.init inside explicit_axes to read the Explicit state
+      # PartitionSpecs from types; @jax.jit DCEs the unused init ops.
+      state_specs = jax.tree.map(
+          lambda x: jax.typeof(x).sharding.spec, transform.init(updates)
+      )
+      return transform.update(updates, jax.sharding.reshard(state, state_specs))
+
+    return jax.sharding.explicit_axes(_update, in_sharding=(specs,))(updates)
+
+  return optax.GradientTransformation(init_fn, update_fn)
