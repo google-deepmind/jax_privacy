@@ -144,7 +144,7 @@ is_padding_example = (indices == -1)
 
 This convention is used consistently by
 {func}`~jax_privacy.batch_selection.pad_to_multiple_of`,
-`training._get_batch`, and all reference examples.
+`training._batch_iterator`, and all reference examples.
 
 When using the indices returned by `pad_to_multiple_of` to form a batch,
 padding with `-1` generally means the *last* example in the training dataset
