@@ -122,8 +122,19 @@ class TrainingState:
 CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
 
 
+def _to_device(
+    x: np.ndarray, sharding: jax.sharding.NamedSharding | None
+) -> jax.Array:
+  """Places a host NumPy array onto the active device or mesh sharding."""
+  if sharding is None:
+    return jax.device_put(x)
+  return jax.make_array_from_callback(x.shape, sharding, lambda idx: x[idx])
+
+
 def _get_batch(
-    dataset: Dataset, indices: np.ndarray
+    dataset: Dataset,
+    indices: np.ndarray,
+    sharding: jax.sharding.NamedSharding | None = None,
 ) -> tuple[Batch, jax.Array]:
   """Retrieves a batch from a PyTree or Grain dataset, zeroing padding examples.
 
@@ -131,6 +142,8 @@ def _get_batch(
     dataset: A PyTree of arrays or a PyGrain MapDataset.
     indices: A 1D array of indices. Entries equal to ``-1`` are treated as
       padding and the corresponding examples are zeroed out.
+    sharding: Optional ``NamedSharding`` to shard the batch and padding mask
+      across the active mesh.
 
   Returns:
     A tuple ``(batch, is_padding)`` where ``batch`` is the indexed and
@@ -144,15 +157,19 @@ def _get_batch(
     batch_elements = [template if i == -1 else dataset[i] for i in indices]
     batch_elements = batch_elements or [template]
     batch = jax.tree.map(
-        lambda *leaves: np.stack(leaves)[: len(indices)], *batch_elements
+        lambda *leaves: _to_device(np.stack(leaves)[: len(indices)], sharding),
+        *batch_elements,
     )
-    return batch, jax.device_put(is_padding)
+    return batch, _to_device(is_padding, sharding)
 
   def _index_and_zero(x):
     mask = np.expand_dims(is_padding, tuple(range(1, x.ndim)))
-    return jax.device_put(np.where(mask, 0, x[indices]))
+    return _to_device(np.where(mask, 0, x[indices]), sharding)
 
-  return jax.tree.map(_index_and_zero, dataset), jax.device_put(is_padding)
+  return (
+      jax.tree.map(_index_and_zero, dataset),
+      _to_device(is_padding, sharding),
+  )
 
 
 # DPTrainer contains static configuration that defines the training step, but
@@ -168,11 +185,14 @@ class DPTrainer:
   ``train_step`` method available as a standalone callable that can be
   compiled or used independently of the training loop.
 
-  **Sharding**: This class does not shard params or data.  For
-  multi-device training, provide ``params`` with explicit sharding
-  annotations and configure ``spmd_axis_name`` through
-  ``performance_flags``.  If data sharding is needed, ``loss_fn``
-  should reshard its inputs using sharding-in-types.
+  **Sharding**: For multi-device training inside a :func:`jax.set_mesh`
+  context, provide ``params`` sharded on the active mesh and configure
+  ``batch_axis_name`` (and optionally ``param_specs`` when using
+  :attr:`~jax_privacy.noise_addition.SupportedStrategies.ZERO` on an
+  ``AxisType.Auto`` mesh) through ``performance_flags``. When
+  ``batch_axis_name`` is set and a mesh is active, :meth:`fit` shards the
+  batch dimension of each batch and padding mask along
+  ``PartitionSpec(batch_axis_name)``.
 
   Attributes:
     config: An :class:`~jax_privacy.execution_plan.ExecutionPlanConfig` (e.g.
@@ -367,6 +387,9 @@ class DPTrainer:
       for _ in range(int(state.step)):
         next(batch_iterator)
 
+      sharding = _compilation.batch_sharding(
+          trainer.performance_flags.batch_axis_name
+      )
       step = int(state.step)
       for indices in batch_iterator:
         indices = batch_selection.pad_to_multiple_of(
@@ -374,7 +397,7 @@ class DPTrainer:
             trainer.compilation_strategy.multiple,
             microbatch_size=trainer.performance_flags.microbatch_size,
         )
-        batch, is_padding_example = _get_batch(dataset, indices)
+        batch, is_padding_example = _get_batch(dataset, indices, sharding)
         step_fn = trainer.train_step
         if indices.size in futures:
           step_fn = futures[indices.size].result()

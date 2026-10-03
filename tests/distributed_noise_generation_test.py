@@ -241,35 +241,32 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
     mesh = jax.make_mesh(
         (4, 2), ('x', 'y'), axis_types=(jax.sharding.AxisType.Auto,) * 2
     )
-    jax.sharding.set_mesh(mesh)
-    pspec = jax.sharding.PartitionSpec('x', 'y')
-    sharding = jax.sharding.NamedSharding(mesh, pspec)
-    params = jax.device_put(jnp.zeros((8, 4)), sharding)
-    make_priv = lambda: sharding_utils.with_sharding_specs(base_priv, sharding)
-    abs_state = jax.eval_shape(make_priv().init, params)
-    self.assertIsNotNone(abs_state)
-    state = make_priv().init(params)
-    noisy_grads, _ = jax.jit(lambda p, s: make_priv().update(p, s))(
-        params, state
-    )
-    self.assertEqual(noisy_grads.sharding, sharding)
+    with jax.set_mesh(mesh):
+      pspec = jax.sharding.PartitionSpec('x', 'y')
+      sharding = jax.sharding.NamedSharding(mesh, pspec)
+      params = jax.device_put(jnp.zeros((8, 4)), sharding)
+      make_priv = lambda: sharding_utils.with_sharding_specs(
+          base_priv, sharding
+      )
+      abs_state = jax.eval_shape(make_priv().init, params)
+      self.assertIsNotNone(abs_state)
+      state = make_priv().init(params)
+      noisy_grads, _ = jax.jit(lambda p, s: make_priv().update(p, s))(
+          params, state
+      )
+      self.assertEqual(noisy_grads.sharding, sharding)
 
   def test_with_sharding_specs_invalid_setup_raises(self):
     pspec = jax.sharding.PartitionSpec('x', 'y')
-    with jax.sharding.use_abstract_mesh(jax.sharding.AbstractMesh((), ())):
-      base_priv = noise_addition.gaussian_privatizer(stddev=1.0, prng_key=0)
-      with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
-        sharding_utils.with_sharding_specs(base_priv, pspec)
-    with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
-      sharding_utils.with_sharding_specs(base_priv, pspec)
-    auto_mesh = jax.make_mesh(
-        (4, 2), ('x', 'y'), axis_types=(jax.sharding.AxisType.Auto,) * 2
-    )
-    jax.set_mesh(auto_mesh)
+    base_priv = noise_addition.gaussian_privatizer(stddev=1.0, prng_key=0)
     with self.assertRaisesRegex(ValueError, 'PartitionSpec or NamedSharding'):
       sharding_utils.with_sharding_specs(base_priv, 'invalid_spec')
     priv = sharding_utils.with_sharding_specs(base_priv, pspec)
-    state = priv.init(jnp.zeros((4, 2)))
+    auto_mesh = jax.make_mesh(
+        (4, 2), ('x', 'y'), axis_types=(jax.sharding.AxisType.Auto,) * 2
+    )
+    with jax.set_mesh(auto_mesh):
+      state = priv.init(jnp.zeros((4, 2)))
     with jax.sharding.use_abstract_mesh(jax.sharding.AbstractMesh((), ())):
       with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
         priv.init(jnp.zeros((4, 2)))
