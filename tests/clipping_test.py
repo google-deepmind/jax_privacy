@@ -142,6 +142,42 @@ class ClipPyTreeTest(parameterized.TestCase):
     chex.assert_tree_all_finite(clipped)
     self.assertLessEqual(optax.tree.norm(clipped), 1.0)
 
+  @parameterized.parameters([jnp.float16, jnp.bfloat16])
+  def test_clip_pytree_low_precision_squared_underflow_clipped(self, dtype):
+    """Verifies small gradients are clipped when squared norm underflows in leaf dtype."""
+    # In float16, (1e-4)**2 = 1e-8 underflows to 0.0.
+    # Accumulating squared norms in float32 ensures the norm is correctly
+    # computed as ~1e-4 rather than underflowing to 0.0 (which would leave the
+    # gradient unclipped and violate sensitivity bounds).
+    pytree = jnp.array([1e-4], dtype=dtype)
+    clip_norm = 1e-5
+    clipped, norm = clipping.clip_pytree(pytree, clip_norm=clip_norm)
+    self.assertEqual(clipped.dtype, dtype)
+    self.assertTrue(jnp.isfinite(norm))
+    self.assertGreater(float(norm), clip_norm)
+    # The gradient must be scaled down by clip_norm / norm ≈ 0.1 to ~1e-5.
+    chex.assert_trees_all_close(
+        clipped, jnp.array([1e-5], dtype=dtype), rtol=1e-2
+    )
+    atol = jnp.finfo(dtype).eps
+    self.assertLessEqual(
+        float(optax.tree.norm(clipped.astype(jnp.float32))),
+        clip_norm * (1.0 + atol),
+    )
+
+  def test_clip_pytree_float16_sum_of_squares_overflow_finite_norm(self):
+    """Sum of squares exceeds float16 max (65504); norm must remain finite."""
+    # 100 elements of 100.0 in float16: each element is <= 65504, but sum of
+    # squares is 100 * 10000 = 1,000,000 > 65504.
+    pytree = jnp.full((100,), 100.0, dtype=jnp.float16)
+    clip_norm = 2000.0
+    clipped, norm = clipping.clip_pytree(pytree, clip_norm=clip_norm)
+    self.assertEqual(clipped.dtype, jnp.float16)
+    self.assertTrue(jnp.isfinite(norm))
+    self.assertAlmostEqual(float(norm), 1000.0, places=1)
+    chex.assert_tree_all_finite(clipped)
+    chex.assert_trees_all_close(clipped, pytree)
+
   def test_clip_pytree_per_layer_full_clip_norm_tree(self):
     """Tests per-layer clipping with complete clip_norm tree."""
     pytree = {'a': np.array([3.0, 4.0]), 'b': np.array([0.0, 10.0])}
@@ -353,18 +389,48 @@ class ClippedFunGridScaleTest(parameterized.TestCase):
   def test_clipped_fun_grid_scale_properties(self):
     """Tests dtype, sensitivity, and per-example norm bound with grid_scale."""
     with jax.enable_x64(True):
-      # Check int64 output dtype.
-      cf = clipping.clipped_fun(
-          lambda x: x * 2.0,
+      # Check int64 output dtype and that explicit dtype is ignored.
+      for test_dtype in (None, jnp.int32, jnp.float16):
+        cf = clipping.clipped_fun(
+            lambda x: x * 2.0,
+            batch_argnums=0,
+            keep_batch_dim=False,
+            l2_clip_norm=1.0,
+            grid_scale=1000,
+            dtype=test_dtype,
+        )
+        data = jax.random.normal(jax.random.key(0), (10, 4))
+        result = cf(data)
+        for leaf in jax.tree.leaves(result):
+          self.assertEqual(leaf.dtype, jnp.int64)
+
+      # Check that explicit dtype (e.g. int32) does not truncate fractional
+      # values, and float16 does not overflow large values before grid rounding.
+      cf_int = clipping.clipped_fun(
+          lambda x: x,
           batch_argnums=0,
           keep_batch_dim=False,
           l2_clip_norm=1.0,
           grid_scale=1000,
+          dtype=jnp.int32,
       )
-      data = jax.random.normal(jax.random.key(0), (10, 4))
-      result = cf(data)
-      for leaf in jax.tree.leaves(result):
-        self.assertEqual(leaf.dtype, jnp.int64)
+      chex.assert_trees_all_close(
+          cf_int(jnp.array([[0.5, 0.5]])),
+          jnp.array([500, 500], dtype=jnp.int64),
+      )
+
+      cf_f16 = clipping.clipped_fun(
+          lambda x: x,
+          batch_argnums=0,
+          keep_batch_dim=False,
+          l2_clip_norm=1.0,
+          grid_scale=1000,
+          dtype=jnp.float16,
+      )
+      chex.assert_trees_all_close(
+          cf_f16(jnp.array([[100000.0]])),
+          jnp.array([1000], dtype=jnp.int64),
+      )
 
       # Check sensitivity equals grid_scale.
       cf2 = clipping.clipped_fun(
@@ -549,6 +615,24 @@ class ClipTransformTest(parameterized.TestCase):
 
     # Clipped value for only the bad example should be zero.
     chex.assert_trees_all_close(cf(data_with_bad[3:4]), 0)
+
+  def test_nan_safe_float16_sum_of_squares_overflow_not_zeroed(self):
+    """Large float16 gradients whose sum of squares > 65504 are not zeroed."""
+    # Gradient sum of squares = 100 * 10000 = 1,000,000 > 65504.
+    # Accumulating squared norms in float32 prevents the norm from overflowing
+    # to inf, ensuring nan_safe does not zero out valid finite gradients.
+    data = jnp.full((2, 100), 100.0, dtype=jnp.float16)
+    cf = clipping.clipped_fun(
+        lambda x: x,
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=2000.0,
+        nan_safe=True,
+    )
+    result = cf(data)
+    chex.assert_tree_all_finite(result)
+    expected = jnp.full((100,), 200.0, dtype=jnp.float16)
+    chex.assert_trees_all_close(result, expected)
 
 
 class ClippedFunPerLayerTest(parameterized.TestCase):

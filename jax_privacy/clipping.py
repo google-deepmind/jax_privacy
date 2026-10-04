@@ -173,6 +173,22 @@ class BoundedSensitivityCallable:
         raise ValueError(f'Unsupported {neighboring_relation=}')
 
 
+def _compute_pytree_l2_norm(
+    pytree: PyTree,
+    min_dtype: jnp.dtype = jnp.float32,
+) -> jax.Array:
+  """Computes the L2 norm of a PyTree in at least `min_dtype` precision."""
+
+  # Upcast per leaf to avoid float16 overflow/underflow without full-tree copy.
+  def _leaf_squared_norm(x: jax.Array) -> jax.Array:
+    compute_dtype = jnp.promote_types(x.dtype, min_dtype)
+    x_promoted = x.astype(compute_dtype)
+    return jnp.sum(x_promoted * x_promoted)
+
+  squared_norms = [_leaf_squared_norm(x) for x in jax.tree.leaves(pytree)]
+  return jnp.sqrt(sum(squared_norms))
+
+
 def clip_pytree(
     pytree: PyTree,
     clip_norm: float | PyTree,
@@ -264,7 +280,7 @@ def clip_pytree(
     raise ValueError(f'clip_norm must be non-negative, got {clip_norm=}.')
 
   clip_norm = jnp.maximum(clip_norm, 0.0)
-  l2_norm = optax.tree.norm(pytree)
+  l2_norm = _compute_pytree_l2_norm(pytree)
   scale = jnp.minimum(1.0, clip_norm / l2_norm)
   if rescale_to_unit_norm:
     scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
@@ -627,10 +643,11 @@ def clipped_fun(
 
     def clipped_fun_one_group(*args, is_padding_example, **kwargs):
       value, aux = fun(*args, **kwargs)
-      value = optax.tree.cast(value, dtype)
       if grid_scale is not None:
+        # dtype is intentionally ignored here; the output is always int64.
         clipped, norm = clip_and_round_to_grid(value, l2_clip_norm, grid_scale)
       else:
+        value = optax.tree.cast(value, dtype)
         clipped, norm = clip_pytree(value, l2_clip_norm, rescale_to_unit_norm)
       if slack is not None:
         slack_vector = _slack_from_norm(
