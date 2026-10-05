@@ -23,6 +23,7 @@ import jax.numpy as jnp
 from jax_privacy import _compilation
 from jax_privacy import batch_selection
 from jax_privacy import execution_plan
+from jax_privacy import noise_addition
 from jax_privacy import training
 import numpy as np
 import optax
@@ -412,6 +413,49 @@ class DPTrainerTest(parameterized.TestCase):
     new_state, _ = trainer.train_step(state, batch, is_padding, prng_key)
 
     self.assertEqual(int(new_state.step), 1)
+
+  def test_fit_with_param_specs(self):
+    """fit() works on an Auto mesh with ZERO strategy and param_specs."""
+    devices = np.array(jax.devices()[:1]).reshape((1, 1))
+    mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
+    param_spec = jax.sharding.PartitionSpec('model')
+    param_sharding = jax.sharding.NamedSharding(mesh, param_spec)
+
+    with jax.set_mesh(mesh):
+      base_w = jax.device_put(jnp.ones((4,), dtype=jnp.float32), param_sharding)
+      params = jax.device_put(
+          jnp.full((4,), 5.0, dtype=jnp.float32), param_sharding
+      )
+      dataset = np.zeros((8, 4), dtype=np.float32)
+
+      def loss_with_closed_over_base(p, batch, prng):
+        del prng
+        loss = jnp.mean((p + base_w - batch) ** 2)
+        return loss, {'loss': loss}
+
+      config = execution_plan.BandMFConfig.default(
+          num_bands=2,
+          iterations=2,
+          noise_multiplier=1.0,
+          expected_participations=1,
+      )
+      flags = execution_plan.PerformanceFlags(
+          intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
+          microbatch_size=2,
+          param_specs=param_spec,
+      )
+      trainer = training.DPTrainer(
+          config=config,
+          performance_flags=flags,
+          loss_fn=loss_with_closed_over_base,
+          optimizer=optax.sgd(0.01),
+          compilation_strategy=training.PadToMultiple(multiple=4),
+      )
+      state = trainer.fit(dataset, params, rng_or_seed=0)
+
+    self.assertEqual(int(state.step), 2)
+    self.assertEqual(state.params.sharding.mesh, mesh)
+    self.assertTrue(jnp.all(jnp.isfinite(state.params)))
 
 
 class DPTrainerEdgeCasesTest(parameterized.TestCase):

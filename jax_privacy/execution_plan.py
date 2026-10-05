@@ -69,6 +69,7 @@ from . import accounting
 from . import batch_selection
 from . import clipping
 from . import noise_addition
+from . import sharding_utils
 from .matrix_factorization import toeplitz
 
 NeighboringRelation = dp_accounting.NeighboringRelation
@@ -114,6 +115,10 @@ class PerformanceFlags:
     spmd_axis_name: Axis name for distributed vmap in SPMD settings.
     keep_batch_dim: Whether to keep the batch dimension when computing
       per-example gradients.
+    param_specs: Optional PyTree of ``jax.sharding.PartitionSpec`` (or prefix
+      thereof) matching the parameter PyTree structure. When set, wraps the
+      noise addition transform with
+      :func:`~jax_privacy.sharding_utils.with_sharding_specs`.
   """
 
   dtype: jax.typing.DTypeLike = np.float32
@@ -124,6 +129,7 @@ class PerformanceFlags:
   microbatch_size: int | None = None
   spmd_axis_name: str | None = None
   keep_batch_dim: bool = True
+  param_specs: sharding_utils.PartitionSpecPyTree | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -560,9 +566,13 @@ class BandMFConfig:
 
     max_column_norm = self._max_column_norm
     column_normalize_for_n = self.iterations if self.column_normalize else None
-    noising_matrix = toeplitz.inverse_as_streaming_matrix(
-        self.strategy, column_normalize_for_n
-    )
+    # Keep closed-over Toeplitz coefficients uncommitted so shard_map in
+    # with_sharding_specs does not see AxisType.Auto constants; np.asarray
+    # strips any mesh sharding already attached to self.strategy.
+    with jax.set_mesh(None):
+      noising_matrix = toeplitz.inverse_as_streaming_matrix(
+          np.asarray(self.strategy), column_normalize_for_n
+      )
 
     query_sensitivity = clipped_grad_transform(lambda: None).sensitivity()
 
@@ -577,6 +587,10 @@ class BandMFConfig:
         dtype=performance_flags.dtype,
         intermediate_strategy=performance_flags.intermediate_strategy,
     )
+    if performance_flags.param_specs is not None:
+      privatizer = sharding_utils.with_sharding_specs(
+          privatizer, performance_flags.param_specs
+      )
 
     return DPExecutionPlan(
         clipped_grad=clipped_grad_transform,
