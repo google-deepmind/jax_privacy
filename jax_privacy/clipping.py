@@ -61,7 +61,7 @@ def _validate_slack_config(
     raise ValueError('slack must be positive.')
   if grid_scale is not None:
     raise ValueError('slack is not supported with discrete grid clipping.')
-  # TODO: Support one slack vector per clipping-bound leaf.
+  # We may want to support one slack vector per leaf in the future.
   if not jnp.isscalar(l2_clip_norm):
     raise ValueError('slack requires scalar global clipping.')
 
@@ -817,11 +817,11 @@ def clipped_grad(
       gradient PyTree.
       The L2 sensitivity of the returned callable is a complex function of
       the input parameters (``l2_clip_norm``, ``rescale_to_unit_norm``,
-      ``grid_scale``, per-layer clipping settings, etc.) and may change as
-      new features are added. Rather than reasoning about the sensitivity
-      from the parameters, callers should query the returned callable's
-      ``.sensitivity()`` method (or equivalently its ``.l2_norm_bound``
-      attribute for add-or-remove-one DP) directly.
+      ``normalize_by``, ``grid_scale``, per-layer clipping settings, etc.)
+      and may change as new features are added. Rather than reasoning about
+      the sensitivity from the parameters, callers should query the returned
+      callable's ``.sensitivity()`` method (or equivalently its
+      ``.l2_norm_bound`` attribute for add-or-remove-one DP) directly.
     All auxiliary outputs (aux, values, grad_norms) are per-example. This
       function guarantees that per-example outputs only depend on the data for
       the same example. This allows maximum flexibility for the caller to
@@ -847,12 +847,14 @@ def clipped_grad(
       structure must be a prefix of the input ``pytree``. Where ``clip_norm``
       terminates early, its leaf values automatically broadcast down to match
       all corresponding sub-leaves of ``pytree``.
-    rescale_to_unit_norm: If ``True``, clipped gradients are rescaled by ``1.0 /
-      l2_clip_norm``. This ensures the sensitivity is 1.0. If ``False``, they
-      are only scaled down if their norm exceeds ``l2_clip_norm``, resulting in
-      a sensitivity of ``l2_clip_norm``. The motivation for setting this to
-      ``True`` is to decouple the clipping norm from the learning rate for
-      non-adaptive optimizers, as described in https://arxiv.org/abs/2204.13650
+    rescale_to_unit_norm: If ``True``, the clipped gradient PyTree's norm is
+      rescaled by ``1.0 / l2_clip_norm`` after potential clipping. If ``False``,
+      each per-example gradient has norm at most ``l2_clip_norm``. Sensitivity
+      also depends on ``normalize_by`` and per-layer clipping; use
+      ``.sensitivity()`` / ``.l2_norm_bound`` rather than deriving it from these
+      flags. The motivation for setting this to ``True`` is to decouple the
+      clipping norm from the learning rate for non-adaptive optimizers, as
+      described in https://arxiv.org/abs/2204.13650
     normalize_by: Divide the clipped output by this value before returning.
     batch_argnums: Specifies which argument(s) of ``fun`` contain the batch
       dimension (usually the data and labels). Can be an integer or a sequence
