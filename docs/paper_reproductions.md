@@ -41,9 +41,10 @@ and use.
 ## Changes to JAX-Privacy maintainers
 
 The maintainers of the library have changed since its initial release, and the
-core library is currently undergoing refactorings to simplify the APIs and
-improve the user experience. As the experiments directory is far larger and
-more complex than the core library, ongoing maintenance of these files during
-refactorings is challenging. We encourage the community to develop end-to-end
-training pipelines on top of JAX privacy instead, taking inspiration from our
-[examples](examples_guide) and current best practices.
+core library has undergone a major refactoring in v2.0 to simplify the APIs and
+improve the user experience (see [History of JAX Privacy](history.md)). As the
+experiments directory was far larger and more complex than the core library,
+maintaining those files across the rewrite was impractical. We encourage the
+community to develop end-to-end training pipelines on top of JAX Privacy
+instead, taking inspiration from our [examples](examples_guide) and current best
+practices.

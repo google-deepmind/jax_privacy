@@ -144,7 +144,7 @@ class ClipPyTreeTest(parameterized.TestCase):
 
   @parameterized.parameters([jnp.float16, jnp.bfloat16])
   def test_clip_pytree_low_precision_squared_underflow_clipped(self, dtype):
-    """Verifies small gradients are clipped when squared norm underflows in leaf dtype."""
+    """Clips small gradients when squared norm underflows in leaf dtype."""
     # In float16, (1e-4)**2 = 1e-8 underflows to 0.0.
     # Accumulating squared norms in float32 ensures the norm is correctly
     # computed as ~1e-4 rather than underflowing to 0.0 (which would leave the
