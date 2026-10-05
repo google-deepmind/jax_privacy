@@ -151,10 +151,11 @@ def main(_):
     """Updates the model parameters using DP-SGD."""
     grads, aux_outputs = grad_and_value_fn(model_params, batch_x, batch_y)
     loss = aux_outputs.values.mean()
-    mean_grads = jax.tree.map(lambda x: x / batch_size, grads)
-    noisy_grads, noise_state = privatizer.update(mean_grads, noise_state)
+    # clipped_grad returns a sum; noise is calibrated to that sensitivity.
+    noisy_sum, noise_state = privatizer.update(grads, noise_state)
+    mean_grads = jax.tree.map(lambda x: x / batch_size, noisy_sum)
     # pyrefly: ignore[bad-argument-type]
-    updated_params = updated_model_params(model_params, noisy_grads)
+    updated_params = updated_model_params(model_params, mean_grads)
     return updated_params, loss, noise_state
 
   # DP only end.

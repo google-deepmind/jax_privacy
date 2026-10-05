@@ -116,9 +116,10 @@ core API ({func}`~jax_privacy.clipping.clipped_grad`,
 {func}`~jax_privacy.noise_addition.gaussian_privatizer`, PLD-based noise
 calibration). Shows both DP and non-DP training paths for comparison.
 
-**Correctness status:** Research / demonstration. Uses `tf.data` shuffling
-with fixed-size batches (`drop_remainder=True`) rather than Poisson sampling,
-and divides gradients by the fixed batch size.
+**Correctness status:** Research / demonstration. Uses `tf.data` shuffling with
+fixed-size batches (`drop_remainder=True`) rather than Poisson sampling. Noise
+is added to the clipped gradient **sum**, then the result is divided by the
+fixed batch size.
 
 ### `dp_sgd_flax_linen_mnist.ipynb` (notebook)
 
