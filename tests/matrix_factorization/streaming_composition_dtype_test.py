@@ -43,14 +43,27 @@ class StreamingCompositionDtypeTest(parameterized.TestCase):
       self.assertEqual(actual.dtype, expected.dtype)
       np.testing.assert_allclose(actual, expected, rtol=2e-6)
 
-  @parameterized.parameters(jnp.int32, jnp.float16)
-  def test_scalar_multiplication_uses_the_promoted_input_dtype(self, dtype):
-    x = jnp.arange(1, 5, dtype=dtype)
-    actual = (sm.prefix_sum() * 0.5) @ x
-    np.testing.assert_allclose(
-        actual, np.cumsum(np.asarray(x, dtype=np.float64)) * 0.5
-    )
-    self.assertEqual(actual.dtype, jnp.float32)
+  @parameterized.product(
+      dtype=[jnp.int32, jnp.float16, jnp.float32],
+      x64_enabled=[False, True],
+      compiled=[False, True],
+  )
+  def test_scalar_multiplication_uses_the_promoted_input_dtype(
+      self, dtype, x64_enabled, compiled
+  ):
+    with jax.enable_x64(x64_enabled):
+      x = jnp.arange(1, 5, dtype=dtype)
+
+      def multiply(values):
+        return (sm.prefix_sum() * 0.5) @ values
+
+      actual = jax.jit(multiply)(x) if compiled else multiply(x)
+      np.testing.assert_allclose(
+          actual, np.cumsum(np.asarray(x, dtype=np.float64)) * 0.5
+      )
+      # Scalar multiplication constructs a diagonal with the default float dtype.
+      expected_dtype = jnp.float64 if x64_enabled else jnp.float32
+      self.assertEqual(actual.dtype, expected_dtype)
 
   def test_initialization_does_not_consume_the_first_diagonal_entry(self):
     matrix = sm.prefix_sum() @ sm.diagonal(jnp.array([0.5, 2.0, 4.0]))
