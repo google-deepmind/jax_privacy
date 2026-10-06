@@ -71,12 +71,12 @@ def _create_secure_prng() -> np.random.Generator:
     # Make sure this example still works in environments where randomgen is
     # not installed.
     # pylint: disable-next=g-import-not-at-top,import-outside-toplevel
-    import randomgen  # pytype: disable=import-error
+    import randomgen  # pyrefly: ignore[missing-import]
 
-    rng = randomgen.RDRAND()  # pytype: disable=module-attr
+    rng = randomgen.RDRAND()
     # randomgen.RDRAND is a numpy BitGenerator at runtime, but its stubs do
     # not declare that, so pyrefly wrongly rejects the argument.
-    return np.random.Generator(rng)  # pyrefly: ignore[bad-argument-type]
+    return np.random.Generator(rng)
   except ImportError:
     warnings.warn(
         'randomgen is not installed. Falling back to a standard NumPy PRNG. '

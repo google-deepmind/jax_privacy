@@ -81,7 +81,6 @@ def batch_dataset(
 ) -> tf.data.Dataset:
   """Batches the data into batches of the given size."""
   return (
-      # pyrefly: ignore[bad-argument-type]
       tf.data.Dataset.from_tensor_slices((x, y))
       .shuffle(buffer_size=1024)
       .batch(batch_size, drop_remainder=True)
