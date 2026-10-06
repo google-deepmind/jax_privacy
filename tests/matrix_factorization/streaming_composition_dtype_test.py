@@ -75,13 +75,13 @@ class StreamingCompositionDtypeTest(parameterized.TestCase):
     outputs = []
     for i in range(3):
       y, state = matrix.multiply_next(
-          jax.tree.map(lambda x: x[i], values), state
+          jax.tree.map(lambda x, index=i: x[index], values), state
       )
       outputs.append(y)
-    for key in values:
+    for key, value in values.items():
       actual = jnp.stack([output[key] for output in outputs])
-      factor = diagonal.reshape((3,) + (1,) * (values[key].ndim - 1))
-      expected = jnp.cumsum(values[key].astype(jnp.float32) * factor, axis=0)
+      factor = diagonal.reshape((3,) + (1,) * (value.ndim - 1))
+      expected = jnp.cumsum(value.astype(jnp.float32) * factor, axis=0)
       np.testing.assert_allclose(actual, expected)
 
   def test_gradients_through_composed_diagonal_match_dense_linear_map(self):
