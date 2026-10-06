@@ -61,7 +61,7 @@ class StreamingCompositionDtypeTest(parameterized.TestCase):
       np.testing.assert_allclose(
           actual, np.cumsum(np.asarray(x, dtype=np.float64)) * 0.5
       )
-      # Scalar multiplication constructs a diagonal with the default float dtype.
+      # The scalar diagonal uses the configured default floating-point dtype.
       expected_dtype = jnp.float64 if x64_enabled else jnp.float32
       self.assertEqual(actual.dtype, expected_dtype)
 
