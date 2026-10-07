@@ -137,17 +137,14 @@ def _preconditioner_scale(
     eps: float,
     eps_root: float,
 ) -> jax.Array:
-  """Adam-style coordinate scale ``1 / (sqrt(v + eps_root) + eps)``.
-
-  Computed in at least float32 so the default ``eps=1e-8`` does not underflow
-  in float16. A zero denominator (``v = 0`` and a vanishing ``eps``) is floored
-  so the scale is large and finite instead of ``inf``, which would turn a zero
-  gradient into NaN (``0 * inf``).
-  """
+  """Adam-style coordinate scale ``1 / (sqrt(v + eps_root) + eps)``."""
+  # Compute in at least float32 so the default eps=1e-8 does not underflow in
+  # float16. A zero denominator (v = 0 and a vanishing eps) is floored so the
+  # scale is large and finite instead of inf, which would turn a zero gradient
+  # into NaN (0 * inf).
   compute_dtype = jnp.promote_types(second_moment.dtype, jnp.float32)
   v = jnp.astype(second_moment, compute_dtype)
-  denom = jnp.sqrt(v + jnp.asarray(eps_root, dtype=compute_dtype))
-  denom = denom + jnp.asarray(eps, dtype=compute_dtype)
+  denom = jnp.sqrt(v + eps_root) + eps
   denom = jnp.maximum(denom, jnp.finfo(compute_dtype).tiny)
   return jnp.reciprocal(denom)
 
