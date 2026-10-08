@@ -683,9 +683,11 @@ def _compute_b_min_sep_privacy_loss_no_truncation(
       samples, kernel[:, None], mode='full', axes=0
   )[c_col.size - 1 :]
 
+  # Mode n - 1 - j is cut off by the end of training and only contains
+  # c_col[: j + 1], so its squared norm is the j-th cumulative sum.
   squared_norms = np.ones(n) * (np.linalg.norm(c_col) ** 2)
   if c_col.size > 1:
-    squared_norms[-c_col.size + 1 :] = np.cumsum(c_col**2)[:-1]
+    squared_norms[-1 : -c_col.size : -1] = np.cumsum(c_col**2)[:-1]
 
   # We use a circular buffer to only store b suffix losses and avoid having to
   # shift the dynamic program table around. This also allows us to handle
@@ -768,9 +770,11 @@ def _compute_b_min_sep_privacy_loss(
       samples, kernel[:, None], mode='full', axes=0
   )[c_col.size - 1 :]
 
+  # Mode n - 1 - j is cut off by the end of training and only contains
+  # c_col[: j + 1], so its squared norm is the j-th cumulative sum.
   squared_norms = np.ones(n) * (np.linalg.norm(c_col) ** 2)
   if c_col.size > 1:
-    squared_norms[-c_col.size + 1 :] = np.cumsum(c_col**2)[:-1]
+    squared_norms[-1 : -c_col.size : -1] = np.cumsum(c_col**2)[:-1]
 
   # We use a circular buffer to only store b suffix losses and avoid having to
   # shift the dynamic program table around. This also allows us to handle

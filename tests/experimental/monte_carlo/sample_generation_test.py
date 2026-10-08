@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import itertools
+
 from absl.testing import absltest
 from absl.testing import parameterized
 from jax_privacy import batch_selection
 from jax_privacy.experimental.monte_carlo import sample_generation
 import numpy as np
+import scipy
 
 # Reused test case inputs for b-min-sep sampling.
 _DP_SGD_MODES = [
@@ -63,6 +66,46 @@ _BANDMF_TRUNCATED_MODES = [
 ]
 _COLD_START_DISTRIBUTION = np.array([1 / 4, 1 / 4, 1 / 4, 1 / 8, 1 / 8])
 _WARM_START_DISTRIBUTION = np.array([1 / 6, 1 / 6, 1 / 3, 1 / 6, 1 / 6])
+
+
+def _brute_force_b_min_sep_privacy_loss(
+    strategy: batch_selection.BMinSepSampling,
+    samples: np.ndarray,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+) -> np.ndarray:
+  """Privacy loss by enumerating all participation patterns (no truncation)."""
+  b, p, n = strategy.min_sep, strategy.sampling_prob, strategy.iterations
+  c_matrix = scipy.linalg.toeplitz(
+      np.concatenate([c_col, np.zeros(n - c_col.size)]), np.zeros(n)
+  )
+  # Probability that the last participation before round 0 was at round
+  # -b + i, for i in range(b). Without warm start, it is always at -b.
+  if strategy.warm_start:
+    initial_probs = np.full(b, p / (1 + (b - 1) * p))
+    initial_probs[0] = 1 / (1 + (b - 1) * p)
+  else:
+    initial_probs = np.array([1.0])
+  log_terms = []
+  for initial_offset, initial_prob in enumerate(initial_probs):
+    for x in itertools.product([0, 1], repeat=n):
+      last_participation = initial_offset - b
+      log_prob = np.log(initial_prob)
+      for i, x_i in enumerate(x):
+        if i - last_participation < b:
+          if x_i:
+            log_prob = -np.inf
+            break
+          continue
+        log_prob += np.log(p) if x_i else np.log1p(-p)
+        if x_i:
+          last_participation = i
+      if log_prob == -np.inf:
+        continue
+      mode = c_matrix @ np.asarray(x, dtype=float)
+      llrs = (2 * mode @ samples - mode @ mode) / (2 * noise_multiplier**2)
+      log_terms.append(log_prob + llrs)
+  return scipy.special.logsumexp(np.array(log_terms), axis=0)
 
 
 class SampleGenerationTest(parameterized.TestCase):
@@ -591,6 +634,55 @@ class SampleGenerationTest(parameterized.TestCase):
         aux=rest_batch_sizes,
     )
     np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
+
+  @parameterized.product(
+      min_sep_and_c_col_size=[(2, 2), (3, 3), (4, 3), (4, 4)],
+      warm_start=[False, True],
+  )
+  def test_compute_privacy_loss_b_min_sep_matches_brute_force(
+      self, min_sep_and_c_col_size, warm_start
+  ):
+    min_sep, c_col_size = min_sep_and_c_col_size
+    sampling_scheme = batch_selection.BMinSepSampling(
+        sampling_prob=0.4,
+        min_sep=min_sep,
+        iterations=6,
+        warm_start=warm_start,
+    )
+    rng = np.random.default_rng(0xBAD5EED)
+    c_col = rng.uniform(0.2, 1.0, size=c_col_size)
+    samples = rng.normal(size=(sampling_scheme.iterations, 5))
+    privacy_loss = sample_generation.compute_privacy_loss(
+        sampling_scheme, samples, 1.0, c_col
+    )
+    expected_privacy_loss = _brute_force_b_min_sep_privacy_loss(
+        sampling_scheme, samples, 1.0, c_col
+    )
+    np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-10)
+
+  @parameterized.parameters(False, True)
+  def test_compute_privacy_loss_b_min_sep_no_truncation_events_matches(
+      self, warm_start
+  ):
+    kwargs = dict(
+        sampling_prob=0.4, min_sep=3, iterations=6, warm_start=warm_start
+    )
+    untruncated_scheme = batch_selection.BMinSepSampling(**kwargs)
+    truncated_scheme = batch_selection.BMinSepSampling(
+        truncated_batch_size=1, **kwargs
+    )
+    rng = np.random.default_rng(0xBAD5EED)
+    c_col = rng.uniform(0.2, 1.0, size=3)
+    samples = rng.normal(size=(untruncated_scheme.iterations, 5))
+    # No batch ever reaches truncated_batch_size, so truncation never occurs.
+    rest_batch_sizes = np.zeros_like(samples, dtype=np.int32)
+    privacy_loss = sample_generation.compute_privacy_loss(
+        truncated_scheme, samples, 1.0, c_col, aux=rest_batch_sizes
+    )
+    expected_privacy_loss = sample_generation.compute_privacy_loss(
+        untruncated_scheme, samples, 1.0, c_col
+    )
+    np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-10)
 
   @parameterized.parameters([
       (
