@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jnp
 from jax_privacy import accounting
 from jax_privacy import batch_selection
-from jax_privacy import saliency
+from jax_privacy.experimental import saliency
 
 
 def _sampling(probability):
@@ -37,7 +37,7 @@ def _linear_loss(params, batch):
   return sum(param * jnp.sum(batch[..., i]) for i, param in enumerate(params))
 
 
-def _run_probe(dataset, *, microbatch_size=1, **kwargs):
+def _run_probe(dataset, **kwargs):
   num_candidates = dataset.shape[-1]
   defaults = dict(
       loss_fn=_linear_loss,
@@ -48,7 +48,6 @@ def _run_probe(dataset, *, microbatch_size=1, **kwargs):
       noise_multiplier=0.0,
       candidate_mask=(True,) * num_candidates,
       prng_key=jax.random.key(0),
-      microbatch_size=microbatch_size,
   )
   defaults.update(kwargs)
   return saliency.topk_vote_probe(**defaults)
@@ -109,19 +108,103 @@ class SaliencyTest(parameterized.TestCase):
     self.assertEqual(result.ranked_scores, [(0, 3.0), (1, 2.0), (2, 1.0)])
     chex.assert_trees_all_equal(result.selected_mask, (True, True, False))
 
-  def test_empty_sample_is_supported(self):
+  @parameterized.product(
+      keep_batch_dim=(True, False),
+      has_aux=(True, False),
+      microbatch_size=(None, 2),
+      reversed_order=(True, False),
+  )
+  def test_clipping_kwargs_adapt_loss_signature(
+      self, keep_batch_dim, has_aux, microbatch_size, reversed_order
+  ):
+    dataset = jnp.array([[3.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 4.0, 0.0]])
+
+    def loss_fn(params, batch):
+      self.assertEqual(batch.shape, (1, 3) if keep_batch_dim else (3,))
+      loss = _linear_loss(params, batch)
+      return (loss, {'raw_batch': batch}) if has_aux else loss
+
+    def reversed_loss_fn(batch, params):
+      return loss_fn(params, batch)
+
+    result = _run_probe(
+        dataset,
+        loss_fn=reversed_loss_fn if reversed_order else loss_fn,
+        select_top_k=2,
+        microbatch_size=microbatch_size,
+        clipping_kwargs={
+            'keep_batch_dim': keep_batch_dim,
+            'has_aux': has_aux,
+            'argnums': 1 if reversed_order else 0,
+            'batch_argnums': 0 if reversed_order else 1,
+        },
+    )
+
+    self.assertEqual(result.ranked_scores, [(0, 2.0), (1, 1.0), (2, 0.0)])
+    chex.assert_trees_all_equal(result.selected_mask, (True, True, False))
+
+  def test_clipping_kwargs_discard_values_and_grad_norms(self):
+    result = _run_probe(
+        jnp.array([[3.0, 0.0], [0.0, 4.0], [5.0, 0.0]]),
+        microbatch_size=2,
+        clipping_kwargs={'return_values': True, 'return_grad_norms': True},
+    )
+
+    self.assertEqual(result.ranked_scores, [(0, 2.0), (1, 1.0)])
+    chex.assert_trees_all_equal(result.selected_mask, (True, False))
+
+  @parameterized.parameters(False, True)
+  def test_empty_sample_is_supported(self, has_aux):
+    def loss_fn(params, batch):
+      loss = _linear_loss(params, batch)
+      return (loss, batch) if has_aux else loss
+
     result = _run_probe(
         jnp.empty((0, 3), dtype=jnp.float32),
+        loss_fn=loss_fn,
         microbatch_size=4,
+        clipping_kwargs={'has_aux': has_aux},
     )
 
     self.assertEqual(dict(result.ranked_scores), {0: 0.0, 1: 0.0, 2: 0.0})
+
+  @parameterized.parameters(
+      'l2_clip_norm',
+      'pre_clipping_transform',
+      'microbatch_size',
+      'normalize_by',
+      'rescale_to_unit_norm',
+      'grid_scale',
+      'slack',
+  )
+  def test_clipping_kwargs_reject_reserved_options(self, option):
+    with self.assertRaisesRegex(ValueError, option):
+      _run_probe(jnp.ones((2, 3)), clipping_kwargs={option: 1})
+
+  @parameterized.named_parameters(
+      ('same_first_arg', 0, 0),
+      ('same_second_arg', 1, 1),
+      ('negative_arg', -1, 1),
+      ('grad_arg_out_of_range', 2, 1),
+      ('batch_arg_out_of_range', 0, 2),
+      ('tuple_grad_arg', (0,), 1),
+      ('tuple_batch_arg', 0, (1,)),
+  )
+  def test_clipping_kwargs_reject_invalid_arg_layout(
+      self, argnums, batch_argnums
+  ):
+    with self.assertRaisesRegex(ValueError, 'argnums'):
+      _run_probe(
+          jnp.ones((2, 3)),
+          clipping_kwargs={'argnums': argnums, 'batch_argnums': batch_argnums},
+      )
 
   def test_noise_scale_uses_clipped_grad_sensitivity(self):
     class FakeGradFn:
 
       def __init__(self):
         self.sensitivity = mock.Mock(return_value=7.0)
+        self.has_aux = False
 
       def __call__(self, unused_params, unused_dataset, **unused_kwargs):
         return jnp.zeros((2,), dtype=jnp.float32)

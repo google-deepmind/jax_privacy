@@ -22,7 +22,6 @@ from . import experimental
 from . import matrix_factorization
 from . import noise_addition
 from . import optimizers
-from . import saliency
 from . import training
 
 # pylint: disable=g-importing-member

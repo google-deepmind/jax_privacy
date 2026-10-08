@@ -54,57 +54,10 @@ if the caller claims Poisson amplification. The Gaussian noise added has stddev
 `noise_multiplier * sqrt(vote_top_k)`, matching the standard convention that
 `noise_multiplier` is expressed in units of sensitivity.
 
-Example usage (not runnable as a doctest — caller supplies `params`,
-`loss_fn`, `full_dataset`, `train_size`, `sampling_rng`, and `noise_key` from
-their model + dataset)::
-
-    import dp_accounting
-    import jax
-    import jax_privacy
-    import optax
-    from jax_privacy import batch_selection
-    from jax_privacy import saliency
-
-    # Boolean pytree same shape as params; True on candidate leaves.
-    candidate_mask = jax.tree.map(lambda p: p.ndim == 2, params)
-
-    sampling = batch_selection.CyclicPoissonSampling(
-        sampling_prob=1024 / train_size,
-        iterations=1,
-        partition_type=batch_selection.PartitionType.INDEPENDENT,
-    )
-    indices = next(sampling.batch_iterator(train_size, rng=sampling_rng))
-    probe_batch = jax.tree.map(lambda x: x[indices], full_dataset)
-
-    result = saliency.topk_vote_probe(
-        loss_fn=loss_fn,
-        dataset=probe_batch,
-        params=params,
-        vote_top_k=8,
-        select_top_k=16,
-        noise_multiplier=6.0,
-        candidate_mask=candidate_mask,
-        prng_key=noise_key,
-    )
-
-    # Sampling and accounting are caller-owned. This event matches the
-    # independent Poisson draw above and the probe's noise multiplier.
-    probe_event = jax_privacy.accounting.dpsgd_event(
-        noise_multiplier=6.0,
-        iterations=1,
-        sampling_prob=sampling.sampling_prob,
-    )
-
-    freeze_mask = jax.tree.map(lambda selected: not selected,
-                               result.selected_mask)
-    optimizer = optax.selective_transform(
-        optax.adam(1e-3), freeze_mask=freeze_mask
-    )
-    total_event = dp_accounting.ComposedDpEvent(
-        [probe_event, jax_privacy.accounting.dpsgd_event(...)]
-    )
+See `topk_vote_probe` for a runnable sampling and accounting example.
 """
 
+from collections.abc import Mapping
 import dataclasses
 import functools
 import math
@@ -196,7 +149,7 @@ def _pad_batch_for_microbatching(
 
 
 def topk_vote_probe(
-    loss_fn: Callable[..., jax.Array],
+    loss_fn: Callable[..., Any],
     dataset: optax.ArrayTree,
     params: optax.ArrayTree,
     *,
@@ -205,7 +158,8 @@ def topk_vote_probe(
     noise_multiplier: float,
     candidate_mask: Any,
     prng_key: jax.Array,
-    microbatch_size: int | None = 1,
+    microbatch_size: int | None = None,
+    clipping_kwargs: Mapping[str, Any] | None = None,
 ) -> ProbeResult:
   """Runs the DP top-k voting probe and returns a selection mask.
 
@@ -214,7 +168,8 @@ def topk_vote_probe(
   `jax_privacy.clipped_grad`, extracts a one-hot top-`vote_top_k` vote vector
   per example over the leaves selected by `candidate_mask`, sums the vote
   vectors, and adds Gaussian noise. The expensive clipped-gradient call is
-  jitted, and its built-in microbatching performs sequential accumulation.
+  jitted. When requested, its built-in microbatching performs sequential
+  accumulation.
 
   Sampling and privacy accounting are intentionally outside this low-level
   API. The caller must select the records in `dataset` and construct a
@@ -225,9 +180,52 @@ def topk_vote_probe(
   indices, the realized Poisson batch size, and `prng_key` must not be released
   or predictable.
 
+  Example:
+    Probe a synthetic dataset and compose its privacy event with a planned
+    downstream DP-SGD run. Fixed seeds are only for this demonstration; real
+    sampling and noise randomness must be unpredictable and kept private.
+
+    >>> import math
+    >>> import dp_accounting
+    >>> import jax
+    >>> import jax.numpy as jnp
+    >>> from jax_privacy import accounting
+    >>> from jax_privacy import batch_selection
+    >>> from jax_privacy.experimental import saliency
+    >>> params = (jnp.array(0.0), jnp.array(0.0))
+    >>> data = jnp.arange(16.0).reshape(8, 2)
+    >>> def loss_fn(params, batch):
+    ...   predictions = params[0] * batch[:, 0] + params[1] * batch[:, 1]
+    ...   return jnp.mean((predictions - 1.0) ** 2)
+    >>> sampling = batch_selection.CyclicPoissonSampling(
+    ...     sampling_prob=0.5, iterations=1,
+    ...     partition_type=batch_selection.PartitionType.INDEPENDENT,
+    ... )
+    >>> indices = next(sampling.batch_iterator(len(data), rng=7))
+    >>> result = saliency.topk_vote_probe(
+    ...     loss_fn, data[indices], params,
+    ...     vote_top_k=1, select_top_k=1, noise_multiplier=3.0,
+    ...     candidate_mask=(True, True), prng_key=jax.random.key(0),
+    ... )
+    >>> sum(jax.tree.leaves(result.selected_mask)) == 1
+    True
+    >>> probe_event = accounting.dpsgd_event(
+    ...     3.0, 1, sampling_prob=sampling.sampling_prob,
+    ... )
+    >>> # Event for a planned downstream Poisson-sampled DP-SGD run.
+    >>> train_event = accounting.dpsgd_event(4.0, 10, sampling_prob=0.25)
+    >>> total_event = dp_accounting.ComposedDpEvent([probe_event, train_event])
+    >>> accountant = dp_accounting.rdp.RdpAccountant(orders=[2, 4, 8, 16, 32])
+    >>> _ = accountant.compose(total_event)
+    >>> math.isfinite(accountant.get_epsilon(1e-5))
+    True
+
   Args:
-    loss_fn: The per-example loss. `loss_fn(params, *batch_args) -> loss`
-      following the same convention as `jax_privacy.clipped_grad`.
+    loss_fn: The loss, called as `loss_fn(params, batch)` by default. It must
+      return a scalar, or `(loss, aux)` when `clipping_kwargs` sets
+      `has_aux=True`. Auxiliary outputs are discarded before adding noise to
+      the votes. Bind any arguments other than parameters and data in this
+      callable.
     dataset: A single caller-selected batched pytree. Every leaf must have the
       same leading dimension.
     params: The model parameters (a pytree). Only used to compute gradients;
@@ -245,15 +243,51 @@ def topk_vote_probe(
       leaves get no votes and are `False` in the returned `selected_mask`.
     prng_key: Private, unpredictable PRNG key for the Gaussian noise.
     microbatch_size: The vmap width used internally by `clipped_grad`. The
-      input batch is padded automatically when necessary. Trades peak memory
-      (larger) for wall-clock time (smaller is slower).
+      default `None` vectorizes over the entire batch. A positive integer
+      reduces peak memory by accumulating microbatches sequentially; the input
+      batch is padded automatically when necessary.
+    clipping_kwargs: Optional keywords forwarded to `clipped_grad`, such as
+      `has_aux` and `keep_batch_dim`. Set `keep_batch_dim=False` for a loss
+      accepting a single example without a leading batch axis. Set `argnums=1`
+      and `batch_argnums=0` for `loss_fn(batch, params)`. These default to 0 and
+      1, respectively. Both must be integer argument positions for
+      this two-argument callable. All auxiliary outputs are discarded. The
+      probe reserves `l2_clip_norm`, `pre_clipping_transform`,
+      `microbatch_size`, `normalize_by`, `rescale_to_unit_norm`, `grid_scale`,
+      and `slack` to preserve its summed top-k vote mechanism.
 
   Returns:
     A `ProbeResult`.
 
   Raises:
-    ValueError: If an argument, batch, or mask is invalid.
+    ValueError: If an argument, batch, or mask is invalid, or `clipping_kwargs`
+      contains a reserved option or unsupported argument positions.
   """
+  clipping_kwargs = dict(clipping_kwargs or {})
+  reserved = clipping_kwargs.keys() & {
+      'l2_clip_norm',
+      'pre_clipping_transform',
+      'microbatch_size',
+      'normalize_by',
+      'rescale_to_unit_norm',
+      'grid_scale',
+      'slack',
+  }
+  if reserved:
+    raise ValueError(
+        f'The probe controls these clipping_kwargs: {sorted(reserved)}.'
+    )
+  argnums = clipping_kwargs.get('argnums', 0)
+  batch_argnums = clipping_kwargs.get('batch_argnums', 1)
+  if (
+      not isinstance(argnums, int)
+      or not isinstance(batch_argnums, int)
+      or (argnums, batch_argnums) not in ((0, 1), (1, 0))
+  ):
+    raise ValueError(
+        'clipping_kwargs argnums and batch_argnums must be distinct integer '
+        'positions 0 and 1 for the parameters and dataset.'
+    )
   _validate.tree_structure(params, candidate_mask=candidate_mask)
   batch_size = _validate.batch(dataset)
   num_candidates = sum(bool(x) for x in jax.tree.leaves(candidate_mask))
@@ -281,18 +315,22 @@ def topk_vote_probe(
   # pipeline without extra machinery.
   grad_fn = clipping.clipped_grad(
       loss_fn,
-      argnums=0,
-      batch_argnums=1,
       l2_clip_norm=l2_sensitivity,
       pre_clipping_transform=vote_transform,
       microbatch_size=microbatch_size,
+      **clipping_kwargs,
   )
+
+  def aggregate_votes(params, dataset, is_padding_example):
+    args = (params, dataset) if argnums == 0 else (dataset, params)
+    output = grad_fn(*args, is_padding_example=is_padding_example)
+    return output[0] if grad_fn.has_aux else output
 
   if batch_size:
     dataset, is_padding_example = _pad_batch_for_microbatching(
         dataset, microbatch_size
     )
-    total_votes = jax.jit(grad_fn)(
+    total_votes = jax.jit(aggregate_votes)(
         params, dataset, is_padding_example=is_padding_example
     )
   else:
@@ -310,7 +348,4 @@ def topk_vote_probe(
   selected_local_indices = {i for i, _ in ranked[:select_top_k]}
   selected_mask = _mask_from_selected(candidate_mask, selected_local_indices)
 
-  return ProbeResult(
-      selected_mask=selected_mask,
-      ranked_scores=ranked,
-  )
+  return ProbeResult(selected_mask=selected_mask, ranked_scores=ranked)
