@@ -315,6 +315,14 @@ class ExecutionPlanTest(parameterized.TestCase):
         batch_selection.CyclicPoissonSampling,
     )
 
+  def test_spmd_axis_name_alias(self):
+    flags = execution_plan.PerformanceFlags(spmd_axis_name="data")
+    self.assertEqual(flags.batch_axis_name, "data")
+    with self.assertRaises(ValueError):
+      execution_plan.PerformanceFlags(
+          batch_axis_name="data", spmd_axis_name="data"
+      )
+
 
 if __name__ == "__main__":
   absltest.main()

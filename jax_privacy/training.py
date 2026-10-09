@@ -32,13 +32,16 @@ injection through the callback_fn option.
 """
 
 from collections.abc import Callable, Iterator
+import copy
 import dataclasses
 import functools
 import itertools
 from typing import Protocol, TypeAlias
+import zlib
 
 from absl import logging
 import jax
+from jax.experimental import multihost_utils
 import jax_privacy
 from jax_privacy import _compilation
 from jax_privacy import _validate
@@ -131,6 +134,7 @@ def _batch_iterator(  # pylint: disable=g-doc-args
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
+    sharding: jax.sharding.NamedSharding | None = None,
 ) -> Iterator[tuple[Batch, jax.Array]]:
   """Yields padded (batch, is_padding_example) pairs from dataset.
 
@@ -142,11 +146,27 @@ def _batch_iterator(  # pylint: disable=g-doc-args
       ``is_padding_example``.
   """
   num_examples = _validate.batch(dataset)
+  if jax.process_count() > 1:
+    crcs = [zlib.crc32(x[:1].tobytes()) for x in jax.tree.leaves(dataset)]
+    seed = copy.deepcopy(np.random.default_rng(rng)).integers(2**63)
+    multihost_utils.assert_equal(
+        (seed, *crcs), "dataset and rng must match across all JAX processes"
+    )
   index_iterator = strategy.batch_iterator(num_examples, rng=rng)
+
+  # When sharding across a mesh (including multi-controller JAX),
+  # make_array_from_callback slices and transfers only the process-addressable
+  # shards to HBM. In multi-controller setups, every process must hold the
+  # full dataset and use the same rng so each process samples the same global
+  # batch indices before slicing its local device shards.
+  def _to_device(x: np.ndarray) -> jax.Array:
+    if sharding is None:
+      return jax.device_put(x)
+    return jax.make_array_from_callback(x.shape, sharding, lambda idx: x[idx])
 
   def _index_and_zero(x, indices):
     mask = np.expand_dims(indices == -1, tuple(range(1, x.ndim)))
-    return jax.device_put(np.where(mask, 0, x[indices]))
+    return _to_device(np.where(mask, 0, x[indices]))
 
   # Fast-forward the index iterator to initial_step when resuming from a
   # checkpoint, without materializing or transferring skipped batches.
@@ -156,7 +176,7 @@ def _batch_iterator(  # pylint: disable=g-doc-args
         indices, pad_to_multiple_of, microbatch_size=microbatch_size
     )
     fn = functools.partial(_index_and_zero, indices=indices)
-    yield jax.tree.map(fn, dataset), jax.device_put(indices == -1)
+    yield jax.tree.map(fn, dataset), _to_device(indices == -1)
 
 
 # DPTrainer contains static configuration that defines the training step, but
@@ -172,11 +192,13 @@ class DPTrainer:
   ``train_step`` method available as a standalone callable that can be
   compiled or used independently of the training loop.
 
-  **Sharding**: This class does not shard params or data.  For
-  multi-device training, provide ``params`` with explicit sharding
-  annotations and configure ``spmd_axis_name`` through
-  ``performance_flags``.  If data sharding is needed, ``loss_fn``
-  should reshard its inputs using sharding-in-types.
+  **Sharding**: For multi-device training inside a :func:`jax.set_mesh`
+  context, provide ``params`` sharded on the active mesh and configure
+  ``batch_axis_name`` through ``performance_flags``. When ``batch_axis_name``
+  is set and a mesh is active, :meth:`fit` shards the batch dimension of each
+  batch and padding mask along ``PartitionSpec(batch_axis_name)``. In
+  multi-controller setups (``jax.process_count() > 1``), every process must
+  pass the full ``dataset`` and an identical ``rng_or_seed`` to :meth:`fit`.
 
   Attributes:
     config: An :class:`~jax_privacy.execution_plan.ExecutionPlanConfig` (e.g.
@@ -356,6 +378,7 @@ class DPTrainer:
     prng_key = jax.random.key(int(rng.integers(2**63)))
 
     with _compilation.hoist_closed_over_constants():
+      axis = trainer.performance_flags.batch_axis_name
       batches = _batch_iterator(
           dataset,
           trainer.plan.batch_selection_strategy,
@@ -363,6 +386,7 @@ class DPTrainer:
           pad_to_multiple_of=trainer.compilation_strategy.multiple,
           microbatch_size=trainer.performance_flags.microbatch_size,
           initial_step=int(state.step),
+          sharding=_compilation.batch_sharding(axis),
       )
 
       step = int(state.step)

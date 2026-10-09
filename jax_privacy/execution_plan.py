@@ -112,7 +112,9 @@ class PerformanceFlags:
       sharding behavior for noise addition.
     microbatch_size: If set, per-example gradient computation is broken into
       sequential microbatches to reduce peak memory at the cost of compute.
-    spmd_axis_name: Axis name for distributed vmap in SPMD settings.
+    batch_axis_name: Mesh axis name (or tuple of axis names) along which the
+      batch dimension is sharded in SPMD settings.
+    spmd_axis_name: Deprecated alias for ``batch_axis_name``.
     keep_batch_dim: Whether to keep the batch dimension when computing
       per-example gradients.
     param_specs: Optional PyTree of ``jax.sharding.PartitionSpec`` (or prefix
@@ -127,9 +129,17 @@ class PerformanceFlags:
       noise_addition.SupportedStrategies.DEFAULT
   )
   microbatch_size: int | None = None
-  spmd_axis_name: str | None = None
+  batch_axis_name: str | tuple[str, ...] | None = None
+  # Deprecated alias for batch_axis_name; remove in next release.
+  spmd_axis_name: str | tuple[str, ...] | None = None
   keep_batch_dim: bool = True
   param_specs: sharding_utils.PartitionSpecPyTree | None = None
+
+  def __post_init__(self):
+    if self.spmd_axis_name is not None:
+      if self.batch_axis_name is not None:
+        raise ValueError('Cannot set both batch_axis_name and spmd_axis_name.')
+      object.__setattr__(self, 'batch_axis_name', self.spmd_axis_name)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -542,7 +552,7 @@ class BandMFConfig:
           rescale_to_unit_norm=self.rescale_to_unit_norm,
           dtype=performance_flags.dtype,
           microbatch_size=performance_flags.microbatch_size,
-          spmd_axis_name=performance_flags.spmd_axis_name,
+          spmd_axis_name=performance_flags.batch_axis_name,
           keep_batch_dim=performance_flags.keep_batch_dim,
       )
 
@@ -634,7 +644,7 @@ class NonPrivateConfig:
           rescale_to_unit_norm=False,
           dtype=performance_flags.dtype,
           microbatch_size=performance_flags.microbatch_size,
-          spmd_axis_name=performance_flags.spmd_axis_name,
+          spmd_axis_name=performance_flags.batch_axis_name,
           keep_batch_dim=performance_flags.keep_batch_dim,
       )
 

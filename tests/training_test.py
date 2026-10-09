@@ -143,6 +143,23 @@ class BatchIteratorTest(parameterized.TestCase):
     np.testing.assert_allclose(batch[1], [0.0, 0.0])
     np.testing.assert_allclose(batch[3], [0.0, 0.0])
 
+  def test_multihost_checks_seed_and_dataset(self):
+    dataset = np.arange(8, dtype=np.float32).reshape((4, 2))
+    strategy = batch_selection.FixedBatchSampling(batch_size=2, iterations=1)
+    with (
+        mock.patch.object(jax, 'process_count', return_value=2),
+        mock.patch.object(
+            training.multihost_utils, 'assert_equal'
+        ) as mock_assert_equal,
+    ):
+      [(batch, _)] = list(training._batch_iterator(dataset, strategy, rng=42))
+    mock_assert_equal.assert_called_once()
+    checked_seed, checked_crc = mock_assert_equal.call_args[0][0]
+    self.assertEqual(checked_seed, np.random.default_rng(42).integers(2**63))
+    self.assertEqual(checked_crc, training.zlib.crc32(dataset[:1].tobytes()))
+    expected_idx = next(strategy.batch_iterator(4, rng=42))
+    np.testing.assert_allclose(batch, dataset[expected_idx])
+
 
 class DPTrainerTest(parameterized.TestCase):
   """Tests for the DPTrainer class."""
@@ -419,6 +436,49 @@ class DPTrainerTest(parameterized.TestCase):
           intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
           microbatch_size=2,
           param_specs=param_spec,
+      )
+      trainer = training.DPTrainer(
+          config=config,
+          performance_flags=flags,
+          loss_fn=loss_with_closed_over_base,
+          optimizer=optax.sgd(0.01),
+          compilation_strategy=training.PadToMultiple(multiple=4),
+      )
+      state = trainer.fit(dataset, params, rng_or_seed=0)
+
+    self.assertEqual(int(state.step), 2)
+    self.assertEqual(state.params.sharding.mesh, mesh)
+    self.assertTrue(jnp.all(jnp.isfinite(state.params)))
+
+  def test_fit_with_batch_axis_name(self):
+    """fit() shards batches along batch_axis_name on an active mesh."""
+    devices = np.array(jax.devices()[:1]).reshape((1, 1))
+    mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
+    param_sharding = jax.sharding.NamedSharding(
+        mesh, jax.sharding.PartitionSpec('model')
+    )
+
+    with jax.set_mesh(mesh):
+      base_w = jax.device_put(jnp.ones((4,), dtype=jnp.float32), param_sharding)
+      params = jax.device_put(
+          jnp.full((4,), 5.0, dtype=jnp.float32), param_sharding
+      )
+      dataset = np.zeros((8, 4), dtype=np.float32)
+
+      def loss_with_closed_over_base(p, batch, prng):
+        del prng
+        loss = jnp.mean((p + base_w - batch) ** 2)
+        return loss, {'loss': loss}
+
+      config = execution_plan.BandMFConfig.default(
+          num_bands=2,
+          iterations=2,
+          noise_multiplier=1.0,
+          expected_participations=1,
+      )
+      flags = execution_plan.PerformanceFlags(
+          batch_axis_name='replica',
+          microbatch_size=2,
       )
       trainer = training.DPTrainer(
           config=config,
