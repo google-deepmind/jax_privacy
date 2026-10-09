@@ -30,7 +30,7 @@ import contextlib
 import copy
 import dataclasses
 import functools
-from typing import TYPE_CHECKING, TypeAlias
+from typing import Any, TYPE_CHECKING, TypeAlias
 
 from absl import logging
 import jax
@@ -49,6 +49,18 @@ _COMPILE_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 # JAX config flag that lowers large closed-over constants as arguments to the
 # compiled executable instead of baking them into the HLO as literals.
 _SIMPLIFIED_JAXPR_CONSTANTS_FLAG = "jax_use_simplified_jaxpr_constants"
+
+
+def is_map_dataset(dataset: Any) -> bool:
+  """Returns whether ``dataset`` is a PyGrain MapDataset.
+
+  This function does not import Grain.
+
+  Args:
+    dataset: the dataset which is to be queried.
+  """
+  names = [c.__name__ for c in type(dataset).__mro__]
+  return any(x in ("MapDataset", "RandomAccessDataSource") for x in names)
 
 
 @contextlib.contextmanager
@@ -101,10 +113,14 @@ def batch_sharding(
 
 def _abstract_batch_and_padding(dataset, size, sharding=None):
   """Returns abstract ``(batch, is_padding)`` inputs of the given size."""
+  if is_map_dataset(dataset):
+    dataset, dim = dataset[0], 0
+  else:
+    dim = 1
 
   def _to_abstract(x):
     return jax.ShapeDtypeStruct(
-        (size, *x.shape[1:]), x.dtype, sharding=sharding
+        (size, *x.shape[dim:]), x.dtype, sharding=sharding
     )
 
   return jax.tree.map(_to_abstract, dataset), _to_abstract(np.bool_(False))
@@ -119,7 +135,7 @@ def _dry_run_state(
   """Eval-shape setup; draws the same rng as training for JIT cache hits."""
   rng = copy.deepcopy(np.random.default_rng(rng_or_seed))
   seed = rng.integers(2**63)
-  n = _validate.batch(dataset)
+  n = len(dataset) if is_map_dataset(dataset) else _validate.batch(dataset)
   state = jax.eval_shape(trainer.init, params)
   key = jax.eval_shape(lambda x: x, jax.random.key(seed))
   return rng, n, state, key
