@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Sequence
 import itertools
 
 from absl.testing import absltest
@@ -66,6 +67,22 @@ _BANDMF_TRUNCATED_MODES = [
 ]
 _COLD_START_DISTRIBUTION = np.array([1 / 4, 1 / 4, 1 / 4, 1 / 8, 1 / 8])
 _WARM_START_DISTRIBUTION = np.array([1 / 6, 1 / 6, 1 / 3, 1 / 6, 1 / 6])
+
+
+def _assert_mode_frequencies(
+    samples: np.ndarray,
+    modes: Sequence[np.ndarray],
+    distribution: np.ndarray,
+) -> None:
+  """Asserts the frequency of each mode among samples is within 6 sigma."""
+  num_samples = samples.shape[1]
+  # matches[i, j] is True if sample i equals mode j.
+  matches = np.isclose(
+      samples.T[:, None, :], np.asarray(modes)[None, :, :], atol=1e-6
+  ).all(axis=-1)
+  differences = np.abs(matches.sum(axis=0) - num_samples * distribution)
+  stdev = np.sqrt(num_samples * distribution * (1 - distribution))
+  assert np.all(differences <= 6 * stdev), (differences, stdev)
 
 
 def _brute_force_b_min_sep_privacy_loss(
@@ -137,28 +154,22 @@ class SampleGenerationTest(parameterized.TestCase):
     noise_multiplier = 1e-9
     # The distribution of samples should be evenly divided between the first
     # mode and the second mode, which is just the first mode shifted by 1
-    # position. For positive_sample=False, these are the same.
+    # position. For positive_sample=False, both are zero.
     second_mode = np.zeros_like(first_mode)
     second_mode[1:] = first_mode[:-1]
-    first_mode_count = 0
-    num_samples = 10000
     samples = sample_generation.generate_sample(
         sampling_scheme,
         noise_multiplier,
         c_col,
         positive_sample=positive_sample,
-        num_samples=num_samples,
+        num_samples=10000,
     )
-    for i in range(num_samples):
-      is_first_mode = np.allclose(samples[:, i], first_mode, atol=1e-6)
-      is_second_mode = np.allclose(samples[:, i], second_mode, atol=1e-6)
-      self.assertTrue(is_first_mode or is_second_mode)
-      if is_first_mode:
-        first_mode_count += 1
-    # 6 standard deviations away from the mean.
     if positive_sample:
-      self.assertGreater(first_mode_count, 4700)
-      self.assertLess(first_mode_count, 5300)
+      _assert_mode_frequencies(
+          samples, [first_mode, second_mode], np.array([0.5, 0.5])
+      )
+    else:
+      _assert_mode_frequencies(samples, [first_mode], np.array([1.0]))
 
   @parameterized.parameters(
       (
@@ -217,24 +228,14 @@ class SampleGenerationTest(parameterized.TestCase):
         iterations=3,
         warm_start=warm_start,
     )
-    mode_counts = np.zeros(len(modes))
-    noise_multiplier = 1e-9
-    num_samples = 10000
     samples = sample_generation.generate_sample(
         sampling_scheme,
-        noise_multiplier,
-        c_col,
+        noise_multiplier=1e-9,
+        c_col=c_col,
         positive_sample=positive_sample,
-        num_samples=num_samples,
+        num_samples=10000,
     )
-    for i, mode in enumerate(modes):
-      for j in range(num_samples):
-        if np.allclose(samples[:, j], mode, atol=1e-6):
-          mode_counts[i] += 1
-    differences = np.abs(mode_counts - num_samples * mode_distribution)
-    stdev = np.sqrt(num_samples * mode_distribution * (1 - mode_distribution))
-    # All within 6 standard deviations
-    assert np.all(differences <= 6 * stdev)
+    _assert_mode_frequencies(samples, modes, mode_distribution)
 
   @parameterized.parameters(
       # Test no warm-start, positive case, dataset size = truncated batch
@@ -343,34 +344,16 @@ class SampleGenerationTest(parameterized.TestCase):
         warm_start=warm_start,
         truncated_batch_size=truncated_batch_size,
     )
-    mode_counts = np.zeros(len(modes))
-    rbs_counts = np.zeros(len(rbs_modes))
-    noise_multiplier = 1e-9
-    num_samples = 10000
     samples, rbs = sample_generation.generate_sample(
         sampling_scheme,
-        noise_multiplier,
-        c_col,
+        noise_multiplier=1e-9,
+        c_col=c_col,
         positive_sample=positive_sample,
-        num_samples=num_samples,
+        num_samples=10000,
         dataset_size=dataset_size,
     )
-    for i, mode in enumerate(modes):
-      for j in range(num_samples):
-        if np.allclose(samples[:, j], mode, atol=1e-6):
-          mode_counts[i] += 1
-    for i, rbs_mode in enumerate(rbs_modes):
-      for j in range(num_samples):
-        if np.allclose(rbs[:, j], rbs_mode, atol=1e-6):
-          rbs_counts[i] += 1
-
-    differences = np.abs(mode_counts - num_samples * mode_distribution)
-    stdev = np.sqrt(num_samples * mode_distribution * (1 - mode_distribution))
-    assert np.all(differences <= 6 * stdev)
-
-    differences = np.abs(rbs_counts - num_samples * rbs_distribution)
-    stdev = np.sqrt(num_samples * rbs_distribution * (1 - rbs_distribution))
-    assert np.all(differences <= 6 * stdev)
+    _assert_mode_frequencies(samples, modes, mode_distribution)
+    _assert_mode_frequencies(rbs, rbs_modes, rbs_distribution)
 
   @parameterized.parameters(
       (
@@ -391,7 +374,7 @@ class SampleGenerationTest(parameterized.TestCase):
           False,
           1 / 2,
           np.array([1.0, 0.5]),
-          np.array([0.0, 0.0, 0.0]),
+          [np.array([0.0, 0.0, 0.0])],
           np.array([1.0]),
       ),
       (
@@ -411,23 +394,14 @@ class SampleGenerationTest(parameterized.TestCase):
         iterations=3,
         partition_type=batch_selection.PartitionType.INDEPENDENT,
     )
-    noise_multiplier = 1e-9
-    num_samples = 10000
     samples = sample_generation.generate_sample(
         sampling_scheme,
-        noise_multiplier,
-        c_col,
+        noise_multiplier=1e-9,
+        c_col=c_col,
         positive_sample=positive_sample,
-        num_samples=num_samples,
+        num_samples=10000,
     )
-    mode_counts = np.zeros(len(modes))
-    for i, mode in enumerate(modes):
-      for j in range(num_samples):
-        if np.allclose(samples[:, j], mode, atol=1e-6):
-          mode_counts[i] += 1
-    differences = np.abs(mode_counts - num_samples * distribution)
-    stdev = np.sqrt(num_samples * distribution * (1 - distribution))
-    assert np.all(differences <= 6 * stdev)
+    _assert_mode_frequencies(samples, modes, distribution)
 
   @parameterized.parameters([
       (

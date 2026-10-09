@@ -108,6 +108,49 @@ def _add_banded_c_times_sparse_x(
   np.add.at(mode, (rows[mask], cols[mask]), vals[mask])
 
 
+def _normal_llrs(
+    dot_products: np.ndarray,
+    squared_norms: np.ndarray,
+    sigma: float,
+    mode_scale: float = 1.0,
+) -> np.ndarray:
+  """Log of N(s * c, sigma^2 I)(y) / N(0, sigma^2 I)(y), given <c, y>, |c|^2."""
+  return (2 * mode_scale * dot_products - mode_scale**2 * squared_norms) / (
+      2 * sigma**2
+  )
+
+
+def _sliding_dot_products_and_squared_norms(
+    samples: np.ndarray, c_col: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+  """Returns <C e_i, y> for each sample y and |C e_i|^2, for all rounds i.
+
+  Column i of the banded Toeplitz matrix C contains ``c_col`` starting at row i
+  and cut off at the last round, so the dot products are a sliding window and
+  the squared norms of the last ``c_col.size - 1`` columns are partial
+  cumulative sums. Computing all dot products at once via convolution is more
+  efficient than one round at a time, at the cost of added memory.
+
+  Args:
+    samples: 2D array of shape ``(iterations, num_samples)``.
+    c_col: 1D array of non-zero entries in the first column of C.
+
+  Returns:
+    A tuple of (i) the dot products, with the same shape as ``samples``, and
+    (ii) the squared norms, of shape ``(iterations,)``.
+  """
+  iterations = samples.shape[0]
+  if c_col.size == 0:
+    return np.zeros_like(samples), np.zeros(iterations)
+  dot_products = sp.signal.fftconvolve(
+      samples, c_col[::-1, None], mode='full', axes=0
+  )[c_col.size - 1 : c_col.size - 1 + iterations]
+  cumulative_squared_norms = np.cumsum(c_col**2)
+  squared_norms = np.full(iterations, cumulative_squared_norms[-1])
+  squared_norms[-1 : -c_col.size : -1] = cumulative_squared_norms[:-1]
+  return dot_products, squared_norms
+
+
 @functools.lru_cache(maxsize=1)
 def _all_balls_in_bins_modes(
     iterations: int,
@@ -123,16 +166,15 @@ def _all_balls_in_bins_modes(
   return sp.linalg.toeplitz(first_mode, zeros_vector)
 
 
-def _generate_balls_in_bins_sample(
+def _sample_balls_in_bins_modes(
     iterations: int,
     cycle_length: int,
-    noise_multiplier: float,
     c_col: np.ndarray,
-    seed: Seed = None,
+    rng: np.random.Generator,
     positive_sample: bool = True,
     num_samples: int = 1,
 ) -> np.ndarray:
-  """Sample from the dominating pair for DP-BandMF using balls-in-bins sampling.
+  """Samples Cx for the distribution on x induced by balls-in-bins sampling.
 
   See `Choquette-Choo et al. (2024) <https://arxiv.org/abs/2410.06266>`_ for
   details.
@@ -140,11 +182,9 @@ def _generate_balls_in_bins_sample(
   Args:
     iterations: The number of iterations of DP-MF.
     cycle_length: The length of each cycle of balls-in-bins sampling.
-    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
-      clip norm, not accounting for the norm of ``c_col``.
     c_col: The non-zero entries in the first column of C. Should be non-negative
       and 1D.
-    seed: The rng or seed to use for sampling.
+    rng: The rng to use for sampling.
     positive_sample: If ``True``, we sample from the distribution in the
       dominating pair corresponding to the case where the sensitive example is
       included. Otherwise, we sample from the other case in the dominating pair,
@@ -152,40 +192,35 @@ def _generate_balls_in_bins_sample(
     num_samples: The number of samples to generate.
 
   Returns:
-    A sample from the dominating PLD for DP-BandMF using balls-in-bins sampling.
+    Modes of shape ``(iterations, num_samples)``.
   """
   _validate.positive(iterations=iterations)
   _validate.positive(cycle_length=cycle_length)
   if c_col.size > iterations:
     c_col = c_col[:iterations]
-  rng = np.random.default_rng(seed)
-  if positive_sample:
-    # Add Cx to the Gaussian noise, where x is a vector which is 1 in every
-    # b-th coordinate starting at a random position in {0, 1, ..., b-1} and 0
-    # otherwise.
-    possible_modes = _all_balls_in_bins_modes(
-        iterations, cycle_length, tuple(c_col)
-    )
-    counts = rng.multinomial(
-        n=num_samples, pvals=np.full(cycle_length, 1.0 / cycle_length)
-    )
-    mode = np.repeat(possible_modes, repeats=counts, axis=1)
-  else:
-    mode = np.zeros((iterations, num_samples))
-  return rng.normal(loc=mode, scale=noise_multiplier)
+  if not positive_sample:
+    return np.zeros((iterations, num_samples))
+  # Cx, where x is a vector which is 1 in every b-th coordinate starting at a
+  # random position in {0, 1, ..., b-1} and 0 otherwise.
+  possible_modes = _all_balls_in_bins_modes(
+      iterations, cycle_length, tuple(c_col)
+  )
+  counts = rng.multinomial(
+      n=num_samples, pvals=np.full(cycle_length, 1.0 / cycle_length)
+  )
+  return np.repeat(possible_modes, repeats=counts, axis=1)
 
 
-def _generate_cyclic_poisson_sample(
+def _sample_cyclic_poisson_modes(
     iterations: int,
     cycle_length: int,
-    noise_multiplier: float,
     c_col: np.ndarray,
+    rng: np.random.Generator,
     sampling_prob: float = 1.0,
-    seed: Seed = None,
     positive_sample: bool = True,
     num_samples: int = 1,
 ) -> np.ndarray:
-  """Sample from the dominating pair using random-shift cyclic Poisson.
+  """Samples Cx for the distribution on x induced by cyclic Poisson sampling.
 
   See `Choquette-Choo et al. (2024) <https://arxiv.org/abs/2410.06266>`__ for
   details.
@@ -193,13 +228,11 @@ def _generate_cyclic_poisson_sample(
   Args:
     iterations: The number of iterations of DP-MF.
     cycle_length: The cycle length of cyclic Poisson sampling.
-    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
-      clip norm, not accounting for the norm of ``c_col``.
     c_col: The non-zero entries in the first column of C. Should be non-negative
       and 1D.
+    rng: The rng to use for sampling.
     sampling_prob: The probability an example is sampled in the iterations it is
       eligible to be sampled in.
-    seed: The rng or seed to use for sampling.
     positive_sample: If ``True``, we sample from the distribution in the
       dominating pair corresponding to the case where the sensitive example is
       included. Otherwise, we sample from the other case in the dominating pair,
@@ -207,14 +240,13 @@ def _generate_cyclic_poisson_sample(
     num_samples: The number of samples to generate.
 
   Returns:
-    A sample from the dominating PLD using cyclic Poisson sampling.
+    Modes of shape ``(iterations, num_samples)``.
   """
   _validate.positive(iterations=iterations)
   _validate.positive(cycle_length=cycle_length)
   _validate.in_range(0.0, 1.0, sampling_prob=sampling_prob)
   if c_col.size > cycle_length:
     raise ValueError('c_col must have length <= cycle_length.')
-  rng = np.random.default_rng(seed)
   mode = np.zeros((iterations, num_samples))
   if positive_sample and c_col.size > 0:
     shifts = rng.integers(cycle_length, size=num_samples)
@@ -226,7 +258,7 @@ def _generate_cyclic_poisson_sample(
     x = eligible & sampled
     r_idx, c_idx = np.where(x)
     _add_banded_c_times_sparse_x(mode, c_col, r_idx, c_idx)
-  return rng.normal(loc=mode, scale=noise_multiplier)
+  return mode
 
 
 def _sample_b_min_sep_positive_modes_no_truncation(
@@ -375,27 +407,24 @@ def _sample_b_min_sep_modes_with_truncation(
   return mode, rest_batch_sizes
 
 
-def _generate_b_min_sep_sample(
+def _sample_b_min_sep_modes(
     strategy: batch_selection.BMinSepSampling,
-    noise_multiplier: float,
     c_col: np.ndarray,
-    seed: Seed = None,
+    rng: np.random.Generator,
     positive_sample: bool = True,
     num_samples: int = 1,
     dataset_size: int | None = None,
-) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-  """Samples from the dominating pair for DP-BandMF using b-min-sep sampling.
+) -> tuple[np.ndarray, np.ndarray | None]:
+  """Samples Cx for the distribution on x induced by b-min-sep sampling.
 
   See `Dong and Ganesh (2026) <https://arxiv.org/abs/2602.09338>`__ for details.
 
   Args:
     strategy: The b-min-sep sampling strategy to use.
-    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
-      clip norm, not accounting for the norm of ``c_col``.
     c_col: The non-zero entries in the first column of C. Should be non-negative
       and 1D. It is assumed that the length of ``c_col`` is the same as the
       minimum separation parameter in the sampling scheme.
-    seed: The rng or seed to use for sampling.
+    rng: The rng to use for sampling.
     positive_sample: If ``True``, we sample from the distribution in the
       dominating pair corresponding to the case where the sensitive example is
       included. Otherwise, we sample from the other case in the dominating pair,
@@ -405,33 +434,26 @@ def _generate_b_min_sep_sample(
       ``strategy.truncated_batch_size`` is not ``None``.
 
   Returns:
-    Sample(s) from the dominating PLD for DP-BandMF using b-min-sep sampling.
-    If ``strategy.truncated_batch_size`` is not ``None``, we also return an
-    extra array stating the pre-truncation batch sizes excluding the sensitive
-    example.
+    A tuple of (i) modes of shape ``(iterations, num_samples)`` and (ii) if
+    ``strategy.truncated_batch_size`` is not ``None``, an extra array stating
+    the pre-truncation batch sizes excluding the sensitive example, otherwise
+    ``None``.
   """
   if c_col.size > strategy.min_sep:
     raise ValueError('c_col must have length less than or equal to min_sep.')
   if c_col.size > strategy.iterations:
     c_col = c_col[: strategy.iterations]
-  rng = np.random.default_rng(seed)
   if strategy.truncated_batch_size:
-    mode, rest_batch_sizes = _sample_b_min_sep_modes_with_truncation(
+    return _sample_b_min_sep_modes_with_truncation(
         strategy, c_col, rng, num_samples, positive_sample, dataset_size
     )
-  elif positive_sample:
+  if positive_sample:
     mode = _sample_b_min_sep_positive_modes_no_truncation(
         strategy, c_col, rng, num_samples
     )
-    rest_batch_sizes = None
   else:
     mode = np.zeros((strategy.iterations, num_samples))
-    rest_batch_sizes = None
-  output = rng.normal(loc=mode, scale=noise_multiplier)
-  if rest_batch_sizes is None:
-    return output
-  else:
-    return output, rest_batch_sizes
+  return mode, None
 
 
 def generate_sample(
@@ -480,18 +502,19 @@ def generate_sample(
   """
   _validate.in_range(0, np.inf, noise_multiplier=noise_multiplier)
   _validate_c_col(c_col)
+  rng = np.random.default_rng(seed)
+  aux = None
   if isinstance(strategy, batch_selection.BallsInBinsSampling):
     if dataset_size is not None:
       raise ValueError(
           'Monte Carlo accounting for balls-in-bins sampling does not support '
           'truncation (yet), so dataset_size should not be set.'
       )
-    return _generate_balls_in_bins_sample(
+    mode = _sample_balls_in_bins_modes(
         iterations=strategy.iterations,
         cycle_length=strategy.cycle_length,
-        noise_multiplier=noise_multiplier,
         c_col=c_col,
-        seed=seed,
+        rng=rng,
         positive_sample=positive_sample,
         num_samples=num_samples,
     )
@@ -505,11 +528,10 @@ def generate_sample(
       _validate.positive(dataset_size=dataset_size)
     if strategy.truncated_batch_size is not None:
       _validate.positive(truncated_batch_size=strategy.truncated_batch_size)
-    return _generate_b_min_sep_sample(
+    mode, aux = _sample_b_min_sep_modes(
         strategy=strategy,
-        noise_multiplier=noise_multiplier,
         c_col=c_col,
-        seed=seed,
+        rng=rng,
         positive_sample=positive_sample,
         num_samples=num_samples,
         dataset_size=dataset_size,
@@ -525,24 +547,25 @@ def generate_sample(
           'Monte Carlo accounting for cyclic Poisson sampling does not support '
           'non-cyclic partition types.'
       )
-    return _generate_cyclic_poisson_sample(
+    mode = _sample_cyclic_poisson_modes(
         iterations=strategy.iterations,
         cycle_length=strategy.cycle_length,
-        noise_multiplier=noise_multiplier,
         c_col=c_col,
+        rng=rng,
         sampling_prob=strategy.sampling_prob,
-        seed=seed,
         positive_sample=positive_sample,
         num_samples=num_samples,
     )
   else:
     raise ValueError(f'Unsupported batch selection strategy: {type(strategy)}')
+  sample = rng.normal(loc=mode, scale=noise_multiplier)
+  return sample if aux is None else (sample, aux)
 
 
 def _compute_balls_in_bins_privacy_loss(
     epoch_length: int,
     sample: np.ndarray,
-    noise_multiplier: float,
+    sigma: float,
     c_col: np.ndarray,
 ) -> np.ndarray:
   """Computes the privacy loss for a sample from balls-in-bins sampling.
@@ -550,9 +573,9 @@ def _compute_balls_in_bins_privacy_loss(
   Args:
     epoch_length: The length of each epoch (number of bins) for balls-in-bins
       sampling.
-    sample: The sample(s), generated by _generate_balls_in_bins_sample.
-    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
-      clip norm, not accounting for the norm of c_col.
+    sample: The sample(s), generated by :func:`generate_sample`.
+    sigma: The noise multiplier of DP-MF. This is multiplied by the clip norm,
+      not accounting for the norm of ``c_col``.
     c_col: The non-zero entries in the first column of C. Should be non-negative
       and 1D. Assumed to match the epoch length of balls-in-bins.
 
@@ -561,7 +584,7 @@ def _compute_balls_in_bins_privacy_loss(
     the dominating pair where the sensitive example is included.
   """
   _validate.positive(epoch_length=epoch_length)
-  _validate.positive(noise_multiplier=noise_multiplier)
+  _validate.positive(sigma=sigma)
   _validate.equal(expected=2, sample_dimension=sample.ndim)
   iterations = sample.shape[0]
   _validate_c_col(c_col)
@@ -573,7 +596,7 @@ def _compute_balls_in_bins_privacy_loss(
   # dot_products[i, j] = <mode_i, sample_j>
   dot_products = np.dot(modes_matrix.T, sample)
   squared_mode_norms = (modes_matrix**2).sum(axis=0)[:, np.newaxis]
-  llrs = (2 * dot_products - squared_mode_norms) / (2 * noise_multiplier**2)
+  llrs = _normal_llrs(dot_products, squared_mode_norms, sigma)
   privacy_loss = sp.special.logsumexp(llrs, axis=0) - np.log(epoch_length)
   return privacy_loss
 
@@ -582,7 +605,7 @@ def _compute_cyclic_poisson_privacy_loss(
     cycle_length: int,
     sampling_prob: float,
     sample: np.ndarray,
-    noise_multiplier: float,
+    sigma: float,
     c_col: np.ndarray,
 ) -> np.ndarray:
   """Computes the privacy loss for a sample from cyclic Poisson sampling.
@@ -591,9 +614,9 @@ def _compute_cyclic_poisson_privacy_loss(
     cycle_length: The length of each epoch (number of bins) for cyclic Poisson
       sampling.
     sampling_prob: The probability an example is sampled in a given iteration.
-    sample: The sample(s), generated by _generate_balls_in_bins_sample.
-    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
-      clip norm, not accounting for the norm of c_col.
+    sample: The sample(s), generated by :func:`generate_sample`.
+    sigma: The noise multiplier of DP-MF. This is multiplied by the clip norm,
+      not accounting for the norm of ``c_col``.
     c_col: The non-zero entries in the first column of C. Should be non-negative
       and 1D. Assumed to match the epoch length of balls-in-bins.
 
@@ -602,7 +625,7 @@ def _compute_cyclic_poisson_privacy_loss(
     the dominating pair where the sensitive example is included.
   """
   _validate.positive(cycle_length=cycle_length)
-  _validate.positive(noise_multiplier=noise_multiplier)
+  _validate.positive(sigma=sigma)
   _validate.in_range(0, 1, sampling_prob=sampling_prob)
   _validate.equal(expected=2, sample_dimension=sample.ndim)
   iterations = sample.shape[0]
@@ -611,22 +634,12 @@ def _compute_cyclic_poisson_privacy_loss(
     raise ValueError(
         'c_col must have length less than or equal to cycle_length.'
     )
-  if c_col.size == 0:
-    dot_products = np.zeros_like(sample)
-  elif c_col.size == 1:
-    dot_products = c_col[0] * sample
-  else:
-    k = c_col.size
-    dot_products = sp.signal.convolve(sample, c_col[::-1, None], mode='full')
-    dot_products = dot_products[k - 1 : k - 1 + iterations, :]
-  c_sq_cum = np.cumsum(c_col**2)
-  squared_mode_norms = np.full(
-      iterations, c_sq_cum[-1] if c_col.size > 0 else 0.0
+  dot_products, squared_mode_norms = _sliding_dot_products_and_squared_norms(
+      sample, c_col
   )
-  if c_col.size > 1:
-    squared_mode_norms[-1 : -c_col.size : -1] = c_sq_cum[:-1]
-  unsampled_llrs_num = 2 * dot_products - squared_mode_norms[:, np.newaxis]
-  unsampled_llrs = unsampled_llrs_num / (2 * noise_multiplier**2)
+  unsampled_llrs = _normal_llrs(
+      dot_products, squared_mode_norms[:, np.newaxis], sigma
+  )
   sampled_llrs = np.logaddexp(
       unsampled_llrs + np.log(sampling_prob), np.log1p(-sampling_prob)
   )
@@ -641,7 +654,7 @@ def _compute_cyclic_poisson_privacy_loss(
 def _compute_b_min_sep_privacy_loss_no_truncation(
     strategy: batch_selection.BMinSepSampling,
     samples: np.ndarray,
-    noise_multiplier: float,
+    sigma: float,
     c_col: np.ndarray,
 ) -> np.ndarray:
   """Computes the privacy loss for a sample from b-min-sep sampling.
@@ -656,9 +669,9 @@ def _compute_b_min_sep_privacy_loss_no_truncation(
       it will participate in 1 / (b - 1 + 1 / sampling_prob) fraction of the
       iterations on average, not sampling_prob fraction of the iterations as in
       Poisson sampling.
-    samples: The samples, generated by :func:`_generate_b_min_sep_sample`.
-    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
-      clip norm, not accounting for the norm of ``c_col``.
+    samples: The samples, generated by :func:`generate_sample`.
+    sigma: The noise multiplier of DP-MF. This is multiplied by the clip norm,
+      not accounting for the norm of ``c_col``.
     c_col: The non-zero entries in the first column of C. Should be non-negative
       and 1D.
 
@@ -674,20 +687,12 @@ def _compute_b_min_sep_privacy_loss_no_truncation(
   # This evaluates the recurrence relation for the privacy loss in Equation (2)
   # of https://arxiv.org/abs/2602.09338. Note that we use log probabilities
   # here, while the paper uses probabilities.
-  kernel = c_col[::-1]
-
-  # Because the dot products are "sliding", it is more efficient to compute them
-  # all at once using convolution, even at the cost of added memory (vs. only
-  # keeping track of one at a time).
-  dot_products = sp.signal.fftconvolve(
-      samples, kernel[:, None], mode='full', axes=0
-  )[c_col.size - 1 :]
-
-  # Mode n - 1 - j is cut off by the end of training and only contains
-  # c_col[: j + 1], so its squared norm is the j-th cumulative sum.
-  squared_norms = np.ones(n) * (np.linalg.norm(c_col) ** 2)
-  if c_col.size > 1:
-    squared_norms[-1 : -c_col.size : -1] = np.cumsum(c_col**2)[:-1]
+  dot_products, squared_norms = _sliding_dot_products_and_squared_norms(
+      samples, c_col
+  )
+  # The (log of) N(c_i, sigma^2 I) / N(0, sigma^2 I)(y[i:i+b-1]) for each i,
+  # which are the coefficients appearing in the recurrence relation.
+  normal_llrs = _normal_llrs(dot_products, squared_norms[:, None], sigma)
 
   # We use a circular buffer to only store b suffix losses and avoid having to
   # shift the dynamic program table around. This also allows us to handle
@@ -701,12 +706,7 @@ def _compute_b_min_sep_privacy_loss_no_truncation(
     li_plus_b = suffix_losses_buffer[i % b]
     li_plus_1 = suffix_losses_buffer[(i + 1) % b]
     term1 = log1p_neg_p + li_plus_1
-    # Computes the (log of) N(c_i, sigma^2 I) / N(0, sigma^2 I)(y[i:i+b-1]) for
-    # each i, which are the coefficients appearing in the recurrence relation.
-    normal_llrs = (2 * dot_products[i] - squared_norms[i]) / (
-        2 * noise_multiplier**2
-    )
-    term2 = log_p + normal_llrs + li_plus_b
+    term2 = log_p + normal_llrs[i] + li_plus_b
     suffix_losses_buffer[i % b] = np.logaddexp(term1, term2)
 
   if strategy.warm_start:
@@ -720,7 +720,7 @@ def _compute_b_min_sep_privacy_loss_no_truncation(
 def _compute_b_min_sep_privacy_loss(
     strategy: batch_selection.BMinSepSampling,
     samples: np.ndarray,
-    noise_multiplier: float,
+    sigma: float,
     c_col: np.ndarray,
     rest_batch_sizes: np.ndarray | None = None,
 ) -> np.ndarray:
@@ -736,9 +736,9 @@ def _compute_b_min_sep_privacy_loss(
       it will participate in 1 / (b - 1 + 1 / sampling_prob) fraction of the
       iterations on average, not sampling_prob fraction of the iterations as in
       Poisson sampling.
-    samples: The samples, generated by :func:`_generate_b_min_sep_sample`.
-    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
-      clip norm, not accounting for the norm of ``c_col``.
+    samples: The samples, generated by :func:`generate_sample`.
+    sigma: The noise multiplier of DP-MF. This is multiplied by the clip norm,
+      not accounting for the norm of ``c_col``.
     c_col: The non-zero entries in the first column of C. Should be non-negative
       and 1D.
     rest_batch_sizes: The pre-truncation batch sizes excluding the sensitive
@@ -751,7 +751,7 @@ def _compute_b_min_sep_privacy_loss(
   # If no truncation, we can use a more efficient computation.
   if rest_batch_sizes is None:
     return _compute_b_min_sep_privacy_loss_no_truncation(
-        strategy, samples, noise_multiplier, c_col
+        strategy, samples, sigma, c_col
     )
   # Aliases to make the math more readable / terse.
   b = strategy.min_sep
@@ -761,20 +761,9 @@ def _compute_b_min_sep_privacy_loss(
   # This evaluates the recurrence relation for the privacy loss in Equation (2)
   # of https://arxiv.org/abs/2602.09338. Note that we use log probabilities
   # here, while the paper uses probabilities.
-  kernel = c_col[::-1]
-
-  # Because the dot products are "sliding", it is more efficient to compute them
-  # all at once using convolution, even at the cost of added memory (vs. only
-  # keeping track of one at a time).
-  dot_products = sp.signal.fftconvolve(
-      samples, kernel[:, None], mode='full', axes=0
-  )[c_col.size - 1 :]
-
-  # Mode n - 1 - j is cut off by the end of training and only contains
-  # c_col[: j + 1], so its squared norm is the j-th cumulative sum.
-  squared_norms = np.ones(n) * (np.linalg.norm(c_col) ** 2)
-  if c_col.size > 1:
-    squared_norms[-1 : -c_col.size : -1] = np.cumsum(c_col**2)[:-1]
+  dot_products, squared_norms = _sliding_dot_products_and_squared_norms(
+      samples, c_col
+  )
 
   # We use a circular buffer to only store b suffix losses and avoid having to
   # shift the dynamic program table around. This also allows us to handle
@@ -805,8 +794,8 @@ def _compute_b_min_sep_privacy_loss(
     not_truncated = ~truncated
 
     if np.any(not_truncated):
-      normal_llrs = (2 * dot_products[i][not_truncated] - squared_norms[i]) / (
-          2 * noise_multiplier**2
+      normal_llrs = _normal_llrs(
+          dot_products[i][not_truncated], squared_norms[i], sigma
       )
       term2_pos[not_truncated] = (
           log_p + normal_llrs + li_plus_b_pos[not_truncated]
@@ -824,14 +813,12 @@ def _compute_b_min_sep_privacy_loss(
       truncation_probs = strategy.truncated_batch_size / (
           rest_batch_sizes[i][truncated] + 1
       )
-      # Double sens = double the dot product, quadruple the squared norm.
-      double_sens_llrs = (
-          2 * dot_products[i][truncated] - 2 * squared_norms[i]
-      ) / (noise_multiplier**2)
-      # Negative sens = negative dot product, no change to squared norm.
-      negative_sens_llrs = (
-          -2 * dot_products[i][truncated] - squared_norms[i]
-      ) / (2 * noise_multiplier**2)
+      double_sens_llrs = _normal_llrs(
+          dot_products[i][truncated], squared_norms[i], sigma, mode_scale=2.0
+      )
+      negative_sens_llrs = _normal_llrs(
+          dot_products[i][truncated], squared_norms[i], sigma, mode_scale=-1.0
+      )
       log_tp = np.log(truncation_probs)
       log1p_neg_tp = np.log1p(-truncation_probs)
       truncation_llrs_pos = np.logaddexp(
@@ -907,7 +894,7 @@ def compute_privacy_loss(
     return _compute_balls_in_bins_privacy_loss(
         epoch_length=strategy.cycle_length,
         sample=sample,
-        noise_multiplier=noise_multiplier,
+        sigma=noise_multiplier,
         c_col=c_col,
     )
   elif isinstance(strategy, batch_selection.BMinSepSampling):
@@ -921,7 +908,7 @@ def compute_privacy_loss(
     return _compute_b_min_sep_privacy_loss(
         strategy=strategy,
         samples=sample,
-        noise_multiplier=noise_multiplier,
+        sigma=noise_multiplier,
         c_col=c_col,
         rest_batch_sizes=aux,
     )
@@ -937,7 +924,7 @@ def compute_privacy_loss(
         cycle_length=strategy.cycle_length,
         sampling_prob=strategy.sampling_prob,
         sample=sample,
-        noise_multiplier=noise_multiplier,
+        sigma=noise_multiplier,
         c_col=c_col,
     )
   else:

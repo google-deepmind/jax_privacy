@@ -348,24 +348,15 @@ def perform_calibration_from_samples(
   """  # fmt: skip
   if not positive_samples:
     raise ValueError('positive_samples must be non-empty.')
-  if positive_counts is not None and len(positive_samples) != len(
-      positive_counts
-  ):
-    raise ValueError(
-        'positive_samples and positive_counts must have the same length.'
-    )
-  if negative_samples is not None and len(positive_samples) != len(
-      negative_samples
-  ):
-    raise ValueError(
-        'positive_samples and negative_samples must have the same length.'
-    )
-  if negative_counts is not None and len(positive_samples) != len(
-      negative_counts
-  ):
-    raise ValueError(
-        'positive_samples and negative_counts must have the same length.'
-    )
+  for name, value in [
+      ('positive_counts', positive_counts),
+      ('negative_samples', negative_samples),
+      ('negative_counts', negative_counts),
+  ]:
+    if value is not None and len(value) != len(positive_samples):
+      raise ValueError(
+          f'positive_samples and {name} must have the same length.'
+      )
   if positive_counts is None:
     positive_counts = [np.ones_like(samples) for samples in positive_samples]
   if negative_samples is not None and negative_counts is None:
@@ -390,41 +381,22 @@ def perform_calibration_from_samples(
 
   base_delta = get_base_delta(min_sample_count, delta)
 
-  first_positive_delta = delta_from_epsilon_and_samples(
-      epsilon,
-      positive_samples[0],
-      positive_counts[0],
-      other_events[0],
-  )
-  if negative_samples is None:
-    first_negative_delta = 0.0
-  else:
-    first_negative_delta = delta_from_epsilon_and_samples(
-        epsilon,
-        negative_samples[0],
-        negative_counts[0],
-        other_events[0],
-    )
-  if first_positive_delta > base_delta or first_negative_delta > base_delta:
-    return False, base_delta
-
-  for i in range(1, len(positive_samples)):
+  def _passes(i: int) -> bool:
     positive_delta = delta_from_epsilon_and_samples(
-        epsilon,
-        positive_samples[i],
-        positive_counts[i],
-        other_events[i],
+        epsilon, positive_samples[i], positive_counts[i], other_events[i]
     )
+    if positive_delta > base_delta:
+      return False
     if negative_samples is None:
-      negative_delta = 0.0
-    else:
-      negative_delta = delta_from_epsilon_and_samples(
-          epsilon,
-          negative_samples[i],
-          negative_counts[i],
-          other_events[i],
-      )
-    if positive_delta > base_delta or negative_delta > base_delta:
-      # This hyperparameter does not pass verification, return the previous one.
-      return True, i - 1
+      return True
+    negative_delta = delta_from_epsilon_and_samples(
+        epsilon, negative_samples[i], negative_counts[i], other_events[i]
+    )
+    return negative_delta <= base_delta
+
+  for i in range(len(positive_samples)):
+    if not _passes(i):
+      # This hyperparameter does not pass verification, return the previous one
+      # (or fall back to base_delta if even the first one fails).
+      return (True, i - 1) if i > 0 else (False, base_delta)
   return True, len(positive_samples) - 1
