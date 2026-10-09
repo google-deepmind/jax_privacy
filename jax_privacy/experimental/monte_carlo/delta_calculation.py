@@ -38,7 +38,13 @@ def _convert_to_accountant(
 
 
 def _kl(q: float, p: float) -> float:
-  return scipy.special.rel_entr(q, p) + scipy.special.rel_entr(1 - q, 1 - p)
+  """KL divergence between Bernoulli(q) and Bernoulli(p)."""
+  if q == p:
+    return 0.0
+  # The two terms nearly cancel when q and p are both small, so the second is
+  # computed with log1p to retain full relative precision.
+  with np.errstate(divide='ignore'):
+    return q * np.log(q / p) + (1 - q) * (np.log1p(-q) - np.log1p(-p))
 
 
 def _hoeffding_bound(num_samples: int, tau: float, delta: float) -> float:
@@ -165,28 +171,30 @@ def get_base_delta(num_samples: int, target_delta: float) -> float:
   """
   if num_samples <= 0:
     raise ValueError('num_samples must be positive.')
-  if target_delta < 0 or target_delta > 1:
-    raise ValueError('target_delta must be in [0, 1].')
-  tol = 1e-4 * target_delta
-  base_delta = scipy.optimize.minimize_scalar(
-      lambda d: abs(get_overall_delta(num_samples, d) - target_delta),
-      bounds=(0, target_delta),
-      method='bounded',
-      options={'xatol': tol},
-  ).x
-  # Because of the tolerance, we may end up with base_delta that is slightly
-  # too small. We report base_delta if it achieves the target_delta, otherwise
-  # we try base_delta - tol to be conservative. If that also does not achieve
-  # the target_delta, it is possible that the minimum of
-  # |overall_delta - target_delta| may be greater than 0, i.e. we cannot find a
-  # base_delta that is valid.
-  if get_overall_delta(num_samples, base_delta) < target_delta:
-    return base_delta
-  if get_overall_delta(num_samples, base_delta - tol) < target_delta:
-    return base_delta - tol
-  raise ValueError(
-      'Failed to find a valid base_delta. num_samples may be too small.'
+  if target_delta <= 0 or target_delta > 1:
+    raise ValueError('target_delta must be in (0, 1].')
+
+  def _excess_delta(base_delta):
+    return get_overall_delta(num_samples, base_delta) - target_delta
+
+  # overall_delta is increasing in base_delta and exceeds target_delta at
+  # base_delta = target_delta, so a valid base_delta exists iff the excess is
+  # negative for some smaller base_delta.
+  lower = target_delta
+  while _excess_delta(lower) >= 0:
+    lower *= 1e-3
+    if lower < 1e-30 * target_delta:
+      raise ValueError(
+          'Failed to find a valid base_delta. num_samples may be too small.'
+      )
+  xtol = 1e-6 * target_delta
+  base_delta = scipy.optimize.brentq(
+      _excess_delta, lower, target_delta, xtol=xtol
   )
+  # The root is bracketed to within xtol; step down until conservatively valid.
+  while _excess_delta(base_delta) > 0:
+    base_delta -= xtol
+  return base_delta
 
 
 def delta_from_epsilon_and_samples(

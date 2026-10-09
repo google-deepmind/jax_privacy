@@ -49,16 +49,33 @@ class DeltaCalculationTest(parameterized.TestCase):
     self.assertLess(overall_delta_10001, overall_delta_10000)
     self.assertLess(base_delta, overall_delta_10001)
 
+  @parameterized.parameters(1e-8, 1e-12, 1e-15)
+  def test_kl_is_precise_for_tiny_arguments(self, q):
+    # KL(q || tau q) = q (tau - 1 - ln tau) + O(q^2); the two terms of the KL
+    # nearly cancel, so a naive implementation loses most digits here.
+    tau = 2.0
+    kl = delta_calculation._kl(q, tau * q)
+    self.assertAlmostEqual(kl / (q * (tau - 1 - math.log(tau))), 1.0, places=6)
+
+  @parameterized.parameters((0.3, 0.3), (1e-12, 1e-12), (1.0, 1.0))
+  def test_kl_is_zero_for_equal_arguments(self, q, p):
+    self.assertEqual(delta_calculation._kl(q, p), 0.0)
+
+  def test_kl_is_infinite_when_p_is_one(self):
+    self.assertEqual(delta_calculation._kl(0.5, 1.0), math.inf)
+
   @parameterized.parameters([(10 ** (i + 2), 10**-i) for i in range(1, 17)])
   def test_base_delta(self, num_samples, target_delta):
     base_delta = delta_calculation.get_base_delta(num_samples, target_delta)
     overall_delta = delta_calculation.get_overall_delta(num_samples, base_delta)
     self.assertLessEqual(overall_delta, target_delta)
-    self.assertAlmostEqual(overall_delta, target_delta, places=5)
+    self.assertGreaterEqual(overall_delta, target_delta * (1 - 1e-5))
 
   @parameterized.parameters([(10**i, 10**-i) for i in range(1, 17)])
   def test_num_samples_too_small(self, num_samples, target_delta):
-    with self.assertRaises(ValueError):
+    with self.assertRaisesRegex(
+        ValueError, 'Failed to find a valid base_delta'
+    ):
       delta_calculation.get_base_delta(num_samples, target_delta)
 
   @parameterized.product(
