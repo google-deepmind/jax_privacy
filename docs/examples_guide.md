@@ -186,6 +186,7 @@ different configurations.
 ### `balls_in_bins_accounting.py`
 
 Uses Monte Carlo accounting to calibrate the noise multiplier for DP-SGD
-under the "balls-in-bins" batch selection strategy. Demonstrates sample
-generation, noise multiplier sweeping, and verification-based calibration
-from the {mod}`jax_privacy.experimental.monte_carlo` module.
+under the "balls-in-bins" batch selection strategy. Demonstrates importance
+sampled privacy loss generation, noise multiplier sweeping, and
+verification-based calibration from the
+{mod}`jax_privacy.experimental.monte_carlo` module.

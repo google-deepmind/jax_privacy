@@ -162,8 +162,30 @@ def _all_balls_in_bins_modes(
   c_col = np.array(c_col_tuple)
   x = np.arange(iterations) % cycle_length == 0
   first_mode = _banded_c_times_x(c_col, x)
-  zeros_vector = np.zeros(cycle_length, dtype=np.float32)
-  return sp.linalg.toeplitz(first_mode, zeros_vector)
+  return sp.linalg.toeplitz(first_mode, np.zeros(cycle_length))
+
+
+def balls_in_bins_modes(
+    strategy: batch_selection.BallsInBinsSampling, c_col: np.ndarray
+) -> np.ndarray:
+  """Returns all modes of the mixture induced by balls-in-bins sampling.
+
+  Args:
+    strategy: The balls-in-bins sampling strategy.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D.
+
+  Returns:
+    An array of shape ``(strategy.iterations, strategy.cycle_length)`` whose
+    columns are the equally likely means of the positive distribution in the
+    dominating pair.
+  """
+  _validate_c_col(c_col)
+  return _all_balls_in_bins_modes(
+      strategy.iterations,
+      strategy.cycle_length,
+      tuple(c_col[: strategy.iterations]),
+  )
 
 
 def _sample_balls_in_bins_modes(
