@@ -36,7 +36,7 @@ import copy
 import dataclasses
 import functools
 import itertools
-from typing import Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 import zlib
 
 from absl import logging
@@ -61,7 +61,7 @@ Loss: TypeAlias = jax.Array
 Aux: TypeAlias = optax.ArrayTree
 PerExampleAux: TypeAlias = jax_privacy.clipping.AuxiliaryOutput
 Batch: TypeAlias = optax.ArrayTree
-Dataset: TypeAlias = optax.ArrayTree
+Dataset: TypeAlias = optax.ArrayTree | Any
 Params: TypeAlias = optax.ArrayTree
 OptState: TypeAlias = optax.ArrayTree
 NoiseState: TypeAlias = optax.ArrayTree
@@ -333,8 +333,10 @@ class DPTrainer:
     """Runs an end-to-end differentially private training loop.
 
     Args:
-      dataset: The training dataset, as a PyTree of arrays where the first axis
-        of each leaf is the batch / example dimension.
+      dataset: The training dataset, either as a PyTree of arrays where the
+        first axis of each leaf is the batch / example dimension, or as a
+        ``grain.MapDataset`` (or ``grain.RandomAccessDataSource``) where each
+        element is a PyTree of arrays for a single example.
       state: Initial parameter PyTree or a resumable ``TrainingState``. If a
         ``TrainingState`` is provided, training continues from the step recorded
         in the state, and the batch selection iterator safely fast-forwards to
@@ -378,8 +380,15 @@ class DPTrainer:
     prng_key = jax.random.key(int(rng.integers(2**63)))
 
     with _compilation.hoist_closed_over_constants():
+      if _compilation.is_map_dataset(dataset):
+        from jax_privacy import _grain  # pylint: disable=g-import-not-at-top, import-outside-toplevel
+
+        batch_it = _grain.batch_iterator
+      else:
+        batch_it = _batch_iterator
+
       axis = trainer.performance_flags.batch_axis_name
-      batches = _batch_iterator(
+      batches = batch_it(
           dataset,
           trainer.plan.batch_selection_strategy,
           rng=rng,
