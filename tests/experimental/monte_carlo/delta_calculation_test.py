@@ -110,6 +110,144 @@ class DeltaCalculationTest(parameterized.TestCase):
       # One fewer sample failed, as expected.
       pass
 
+  @parameterized.parameters(
+      # Rescaling delta and support_bound together leaves the bound unchanged.
+      (3, 2, 1 / 6, 0.5, 1 / 2),
+      (4, 3, 1 / 8, 0.5, 1 / 9),
+      (4, 3, 1 / 2, 2.0, 1 / 9),
+      # tau * delta exceeds support_bound, so the true mean is impossible. This
+      # is only reachable through rounding in callers.
+      (3, 4, 1 / 6, 0.5, 0.0),
+  )
+  def test_hoeffding_bound_with_support_bound(
+      self, num_samples, tau, delta, support_bound, expected_bound
+  ):
+    self.assertAlmostEqual(
+        delta_calculation._hoeffding_bound(
+            num_samples, tau, delta, support_bound
+        ),
+        expected_bound,
+        places=5,
+    )
+
+  def test_hoeffding_bound_raises_for_tau_less_than_one(self):
+    with self.assertRaises(ValueError):
+      delta_calculation._hoeffding_bound(10, 0.5, 0.1)
+
+  @parameterized.parameters([10**-i for i in range(1, 17)])
+  def test_overall_delta_decreasing_in_support_bound(self, base_delta):
+    overall_deltas = [
+        delta_calculation.get_overall_delta(10000, base_delta, support_bound)
+        for support_bound in [1.0, 0.5, 0.1, 0.01]
+        if support_bound > base_delta
+    ]
+    self.assertEqual(
+        overall_deltas[0],
+        delta_calculation.get_overall_delta(10000, base_delta),
+    )
+    for larger, smaller in zip(overall_deltas, overall_deltas[1:]):
+      self.assertLess(base_delta, smaller)
+      self.assertLess(smaller, larger)
+
+  @parameterized.named_parameters(
+      ('at_most_base_delta', 0.1), ('greater_than_one', 1.5)
+  )
+  def test_overall_delta_raises_for_invalid_support_bound(self, support_bound):
+    with self.assertRaises(ValueError):
+      delta_calculation.get_overall_delta(100, 0.1, support_bound)
+
+  @parameterized.product(
+      delta=[1e-3, 1e-5, 1e-8], support_bound=[0.5, 0.05, 0.005]
+  )
+  def test_support_bound_is_equivalent_to_rescaling_deltas(
+      self, delta, support_bound
+  ):
+    # Weighted samples in [0, support_bound] divided by support_bound are plain
+    # samples in [0, 1] with every delta divided by support_bound.
+    base_delta = delta / 2
+    num_samples = delta_calculation.minimum_samples_to_calibrate(
+        base_delta, delta, support_bound
+    )
+    self.assertEqual(
+        num_samples,
+        delta_calculation.minimum_samples_to_calibrate(
+            base_delta / support_bound, delta / support_bound
+        ),
+    )
+    self.assertAlmostEqual(
+        delta_calculation.get_overall_delta(
+            num_samples, base_delta, support_bound
+        ),
+        support_bound
+        * delta_calculation.get_overall_delta(
+            num_samples, base_delta / support_bound
+        ),
+        delta=1e-9 * delta,
+    )
+    self.assertAlmostEqual(
+        delta_calculation.get_base_delta(num_samples, delta, support_bound),
+        support_bound
+        * delta_calculation.get_base_delta(num_samples, delta / support_bound),
+        delta=1e-5 * delta,
+    )
+
+  @parameterized.product(
+      target_delta=[10**-i for i in range(3, 9)],
+      support_bound=[0.5, 0.05, 0.005],
+  )
+  def test_base_delta_with_support_bound(self, target_delta, support_bound):
+    num_samples = int(100 / target_delta)
+    base_delta = delta_calculation.get_base_delta(
+        num_samples, target_delta, support_bound
+    )
+    overall_delta = delta_calculation.get_overall_delta(
+        num_samples, base_delta, support_bound
+    )
+    self.assertLessEqual(overall_delta, target_delta)
+    self.assertAlmostEqual(overall_delta, target_delta, places=5)
+    # A smaller support bound is less conservative.
+    self.assertGreater(
+        base_delta,
+        delta_calculation.get_base_delta(num_samples, target_delta),
+    )
+
+  @parameterized.product(
+      base_delta_multiplier=[0.5, 0.9],
+      target_delta=[10**-i for i in range(3, 9)],
+      support_bound=[0.5, 0.05, 0.005],
+  )
+  def test_minimum_samples_to_calibrate_with_support_bound(
+      self, base_delta_multiplier, target_delta, support_bound
+  ):
+    base_delta = base_delta_multiplier * target_delta
+    num_samples = delta_calculation.minimum_samples_to_calibrate(
+        base_delta, target_delta, support_bound
+    )
+    self.assertLessEqual(
+        delta_calculation.get_overall_delta(
+            num_samples, base_delta, support_bound
+        ),
+        target_delta,
+    )
+    try:
+      delta_calculation.get_base_delta(
+          num_samples - 1, target_delta, support_bound
+      )
+      self.assertGreater(
+          delta_calculation.get_overall_delta(
+              num_samples - 1, base_delta, support_bound
+          ),
+          target_delta,
+      )
+    except ValueError:
+      pass
+    self.assertLess(
+        num_samples,
+        delta_calculation.minimum_samples_to_calibrate(
+            base_delta, target_delta
+        ),
+    )
+
   @parameterized.named_parameters(
       ('all_at_most_epsilon', 3, [1, 2, 3], None, 0.0),
       ('all_greater_than_epsilon', 3, [3 + math.log(2), 1e9], None, 3 / 4),
@@ -152,6 +290,47 @@ class DeltaCalculationTest(parameterized.TestCase):
         epsilon, samples, counts
     )
     self.assertAlmostEqual(delta, expected_delta, places=5)
+
+  @parameterized.named_parameters(
+      ('zero_log_weights', None, [0.0, 0.0], 3 / 4),
+      ('log_weights', None, [math.log(0.25), math.log(0.5)], 5 / 16),
+      (
+          'log_weights_with_counts',
+          [2, 1],
+          [math.log(0.25), math.log(0.5)],
+          1 / 4,
+      ),
+  )
+  def test_delta_from_epsilon_and_samples_with_log_weights(
+      self, counts, log_weights, expected_delta
+  ):
+    delta = delta_calculation.delta_from_epsilon_and_samples(
+        3, [3 + math.log(2), 1e9], counts, log_weights=log_weights
+    )
+    self.assertAlmostEqual(delta, expected_delta, places=5)
+
+  def test_delta_from_epsilon_and_samples_with_huge_log_weight(self):
+    # A sample below epsilon contributes 0 regardless of its weight, even when
+    # exp(log_weight) overflows.
+    delta = delta_calculation.delta_from_epsilon_and_samples(
+        3, [1.0, 3 + math.log(2)], log_weights=[1000.0, 0.0]
+    )
+    self.assertAlmostEqual(delta, 1 / 4)
+
+  @parameterized.named_parameters(
+      ('wrong_counts_shape', {'counts': [1, 2, 3]}),
+      ('wrong_log_weights_shape', {'log_weights': [0.0]}),
+      (
+          'log_weights_with_other_event',
+          {
+              'log_weights': [0.0, 0.0],
+              'other_event': dp_accounting.NoOpDpEvent(),
+          },
+      ),
+  )
+  def test_delta_from_epsilon_and_samples_raises(self, kwargs):
+    with self.assertRaises(ValueError):
+      delta_calculation.delta_from_epsilon_and_samples(3, [1.0, 2.0], **kwargs)
 
   @parameterized.parameters(
       ([1, 2, 3], None),
@@ -395,6 +574,64 @@ class DeltaCalculationTest(parameterized.TestCase):
         other_event=other_event,
     )
     self.assertEqual(result, expected_result)
+
+  _FAILURE_DELTA_HALF_SUPPORT = delta_calculation.get_base_delta(1000, 0.1, 0.5)
+
+  @parameterized.named_parameters(
+      (
+          'positive_log_weights_rescue_0',
+          dict(
+              positive_samples=[[10], [10]], positive_log_weights=[[-20], [0]]
+          ),
+          (True, 0),
+      ),
+      (
+          'negative_log_weights_sink_1',
+          dict(
+              positive_samples=[[1], [1]],
+              negative_samples=[[10], [10]],
+              negative_counts=[[1000], [1000]],
+              negative_log_weights=[[-20], [0]],
+          ),
+          (True, 0),
+      ),
+      (
+          'scalar_support_bound_all_pass',
+          dict(positive_samples=[[1], [1]], support_bound=0.5),
+          (True, 1),
+      ),
+      (
+          'scalar_support_bound_all_fail',
+          dict(positive_samples=[[10], [10]], support_bound=0.5),
+          (False, _FAILURE_DELTA_HALF_SUPPORT),
+      ),
+      (
+          'sequence_support_bound_uses_max',
+          dict(positive_samples=[[10], [10]], support_bound=[0.2, 0.5]),
+          (False, _FAILURE_DELTA_HALF_SUPPORT),
+      ),
+  )
+  def test_perform_calibration_from_samples_with_importance_sampling(
+      self, kwargs, expected_result
+  ):
+    result = delta_calculation.perform_calibration_from_samples(
+        1.0, 0.1, positive_counts=[[1000], [1000]], **kwargs
+    )
+    self.assertEqual(result, expected_result)
+
+  @parameterized.named_parameters(
+      ('log_weights_length', dict(positive_log_weights=[[0.0]])),
+      ('support_bound_greater_than_one', dict(support_bound=[0.5, 1.5])),
+  )
+  def test_perform_calibration_from_samples_raises(self, kwargs):
+    with self.assertRaises(ValueError):
+      delta_calculation.perform_calibration_from_samples(
+          1.0,
+          0.1,
+          positive_samples=[[1], [1]],
+          positive_counts=[[1000], [1000]],
+          **kwargs,
+      )
 
 
 if __name__ == '__main__':

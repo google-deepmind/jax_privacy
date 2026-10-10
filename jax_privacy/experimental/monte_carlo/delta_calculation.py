@@ -18,6 +18,7 @@ from typing import Sequence
 
 import dp_accounting
 import numpy as np
+import numpy.typing as npt
 import scipy
 
 DpEventOrAccountant = (
@@ -47,14 +48,48 @@ def _kl(q: float, p: float) -> float:
     return q * np.log(q / p) + (1 - q) * (np.log1p(-q) - np.log1p(-p))
 
 
-def _hoeffding_bound(num_samples: int, tau: float, delta: float) -> float:
-  """Bound on prob that sample mean <= delta if true mean > tau * delta."""
-  # Fact 4.2 of https://arxiv.org/pdf/2412.16802.
-  assert tau >= 1
-  return np.exp(-num_samples * _kl(delta, tau * delta))
+def _hoeffding_bound(
+    num_samples: int, tau: float, delta: float, support_bound: float = 1.0
+) -> float:
+  """Bound on prob that sample mean <= delta if true mean > tau * delta.
+
+  Fact 4.2 of https://arxiv.org/pdf/2412.16802, applied to samples in
+  ``[0, support_bound]`` by rescaling them to ``[0, 1]``.
+
+  Args:
+    num_samples: The number of i.i.d. samples.
+    tau: The ratio of the true mean to ``delta``, at least 1.
+    delta: The threshold on the sample mean.
+    support_bound: An upper bound on the samples.
+
+  Returns:
+    The KL-Hoeffding bound on the probability.
+  """
+  if tau < 1:
+    raise ValueError('tau must be at least 1.')
+  # Callers keep tau * delta <= support_bound, but rounding can push the ratio
+  # just above 1, where _kl would take the log of a negative number.
+  return np.exp(
+      -num_samples
+      * _kl(delta / support_bound, min(tau * delta / support_bound, 1.0))
+  )
 
 
-def get_overall_delta(num_samples: int, base_delta: float) -> float:
+def _validate_support_bound(support_bound: float, delta: float) -> None:
+  """Checks that support_bound is in (delta, 1]."""
+  if support_bound > 1:
+    raise ValueError(
+        'support_bound must be at most 1. If this came from importance'
+        ' sampling, the proposal is worse than plain Monte Carlo; use'
+        ' support_bound=1 and unweighted samples instead.'
+    )
+  if support_bound <= delta:
+    raise ValueError('support_bound must be greater than delta.')
+
+
+def get_overall_delta(
+    num_samples: int, base_delta: float, support_bound: float = 1.0
+) -> float:
   """The delta we can formally report using Monte Carlo verification.
 
   In more detail, if we use num_samples samples to verify that a mechanism
@@ -71,6 +106,13 @@ def get_overall_delta(num_samples: int, base_delta: float) -> float:
     num_samples: The number of samples used in Monte Carlo verification.
     base_delta: The base_delta such that we use the samples to verify that each
       mechanism satisfies (epsilon, base_delta)-DP.
+    support_bound: An upper bound on each (weighted) sample of the hockey-stick
+      divergence, in (base_delta, 1]. This is 1 for standard Monte Carlo
+      estimation, and can be much smaller with importance sampling, in which
+      case fewer samples are needed. Since the true delta is the mean of the
+      samples, it is also at most support_bound, so the result equals
+      ``support_bound * get_overall_delta(num_samples, base_delta /
+      support_bound)``.
 
   Returns:
     overall_delta such that we can report the end-to-end pipeline of Monte Carlo
@@ -81,18 +123,25 @@ def get_overall_delta(num_samples: int, base_delta: float) -> float:
     raise ValueError('base_delta must be in (0, 1].')
   if num_samples <= 0:
     raise ValueError('num_samples must be positive.')
+  _validate_support_bound(support_bound, base_delta)
 
   def overall_delta_from_tau(tau):
-    q = _hoeffding_bound(num_samples, tau, base_delta)
-    return tau * base_delta + q * (1 - tau * base_delta)
+    # With probability at most q the verification is wrong, in which case we
+    # only know the true delta is at most support_bound.
+    q = _hoeffding_bound(num_samples, tau, base_delta, support_bound)
+    return tau * base_delta + q * (support_bound - tau * base_delta)
 
   best_tau = scipy.optimize.minimize_scalar(
-      overall_delta_from_tau, bounds=(1, 1 / base_delta), method='bounded'
+      overall_delta_from_tau,
+      bounds=(1, support_bound / base_delta),
+      method='bounded',
   ).x
-  return min(overall_delta_from_tau(best_tau), 1.0)
+  return min(overall_delta_from_tau(best_tau), support_bound)
 
 
-def minimum_samples_to_calibrate(base_delta: float, target_delta: float) -> int:
+def minimum_samples_to_calibrate(
+    base_delta: float, target_delta: float, support_bound: float = 1.0
+) -> int:
   """The minimum number of samples needed to calibrate to target_delta.
 
   While for practical values of delta this method is stable, for very small
@@ -106,6 +155,8 @@ def minimum_samples_to_calibrate(base_delta: float, target_delta: float) -> int:
     target_delta: The value such that we want to report the overall mechanism of
       Monte Carlo verification and then running the best verified mechanism is
       (epsilon, target_delta)-DP.
+    support_bound: An upper bound on each (weighted) sample of the hockey-stick
+      divergence. See :func:`get_overall_delta`.
 
   Returns:
     The minimum number of samples needed to calibrate to target_delta.
@@ -116,7 +167,9 @@ def minimum_samples_to_calibrate(base_delta: float, target_delta: float) -> int:
     raise ValueError('target_delta must be in (0, 1].')
   if target_delta <= base_delta:
     raise ValueError('target_delta must be > base_delta.')
-  lower_bound = int(1 // target_delta)
+  _validate_support_bound(support_bound, target_delta)
+  # The required number of samples scales like support_bound / target_delta.
+  lower_bound = int(support_bound // target_delta)
   upper_bound = 2 * lower_bound
 
   # There are some stability issues in going back-and-forth between base_delta
@@ -124,8 +177,9 @@ def minimum_samples_to_calibrate(base_delta: float, target_delta: float) -> int:
   # base_delta and that we achieve the target_delta.
   def _enough_samples(num_samples):
     try:
-      get_base_delta(num_samples, target_delta)
-      return get_overall_delta(num_samples, base_delta) <= target_delta
+      get_base_delta(num_samples, target_delta, support_bound)
+      overall_delta = get_overall_delta(num_samples, base_delta, support_bound)
+      return overall_delta <= target_delta
     except ValueError:
       return False
 
@@ -146,7 +200,9 @@ def minimum_samples_to_calibrate(base_delta: float, target_delta: float) -> int:
   return upper_bound
 
 
-def get_base_delta(num_samples: int, target_delta: float) -> float:
+def get_base_delta(
+    num_samples: int, target_delta: float, support_bound: float = 1.0
+) -> float:
   """The base_delta for Monte Carlo verification to achieve target_delta.
 
   In more detail, if we use num_samples samples to verify that a mechanism
@@ -164,6 +220,8 @@ def get_base_delta(num_samples: int, target_delta: float) -> float:
     target_delta: The value such that we want to report the overall mechanism of
       Monte Carlo verification and then running the best verified mechanism is
       (epsilon, target_delta)-DP.
+    support_bound: An upper bound on each (weighted) sample of the hockey-stick
+      divergence. See :func:`get_overall_delta`.
 
   Returns:
     The base_delta such that we use Monte Carlo verification to check if each
@@ -173,9 +231,12 @@ def get_base_delta(num_samples: int, target_delta: float) -> float:
     raise ValueError('num_samples must be positive.')
   if target_delta <= 0 or target_delta > 1:
     raise ValueError('target_delta must be in (0, 1].')
+  _validate_support_bound(support_bound, target_delta)
 
   def _excess_delta(base_delta):
-    return get_overall_delta(num_samples, base_delta) - target_delta
+    return (
+        get_overall_delta(num_samples, base_delta, support_bound) - target_delta
+    )
 
   # overall_delta is increasing in base_delta and exceeds target_delta at
   # base_delta = target_delta, so a valid base_delta exists iff the excess is
@@ -199,9 +260,10 @@ def get_base_delta(num_samples: int, target_delta: float) -> float:
 
 def delta_from_epsilon_and_samples(
     epsilon: float,
-    samples: Sequence[float],
-    counts: Sequence[float] | None = None,
+    samples: npt.ArrayLike,
+    counts: npt.ArrayLike | None = None,
     other_event: DpEventOrAccountant | None = None,
+    log_weights: npt.ArrayLike | None = None,
 ):
   r"""Calculate the delta parameter for a given epsilon and list of samples.
 
@@ -220,7 +282,12 @@ def delta_from_epsilon_and_samples(
       we are just computing the delta parameter for the event whose samples are
       given by samples. If an accountant is given, the method returns the
       estimate for Monte Carlo accounting of the composition of the event whose
-      samples are given by samples, and other_event.
+      samples are given by samples, and other_event. Cannot be combined with
+      ``log_weights``.
+    log_weights: Optional importance weights in log space, for samples :math:`x`
+      drawn from a proposal distribution :math:`R` instead of :math:`P`. Passing
+      :math:`\ln(P(x)/R(x))` for each sample keeps the estimate unbiased. If
+      passed, should be the same length as samples.
 
   Returns:
     The delta parameter given by Monte Carlo estimation of the hockey-stick
@@ -231,33 +298,40 @@ def delta_from_epsilon_and_samples(
     raise ValueError('epsilon must be non-negative.')
   if samples.ndim != 1:
     raise ValueError('samples must be a 1D array.')
-  if counts is not None:
-    counts = np.asarray(counts)
-    if counts.ndim != 1:
-      raise ValueError('counts must be a 1D array.')
-    if samples.size != counts.size:
-      raise ValueError('samples and counts must have the same size.')
-  np_min = np.minimum
+  for name, value in [('counts', counts), ('log_weights', log_weights)]:
+    if value is not None and np.shape(value) != samples.shape:
+      raise ValueError(
+          f'{name} must be a 1D array of the same size as samples.'
+      )
+  if log_weights is not None and other_event is not None:
+    raise ValueError('log_weights cannot be combined with other_event.')
   if other_event is None:
-    return np.average(-np.expm1(np_min(epsilon - samples, 0.0)), weights=counts)
+    estimands = -np.expm1(np.minimum(epsilon - samples, 0.0))
+    if log_weights is not None:
+      # Combine in log space: a zero estimand with a huge weight is 0, not nan.
+      with np.errstate(divide='ignore'):
+        estimands = np.exp(np.log(estimands) + log_weights)
   else:
     other_event = _convert_to_accountant(other_event)
     # TODO: Cite an external derivation for this formula.
     estimands = [other_event.get_delta(epsilon - s) for s in samples]
-    return np.average(estimands, weights=counts)
+  return np.average(estimands, weights=counts)
 
 
 def perform_calibration_from_samples(
     epsilon: float,
     delta: float,
     *,
-    positive_samples: Sequence[Sequence[float]],
-    positive_counts: Sequence[Sequence[float]] | None = None,
-    negative_samples: Sequence[Sequence[float]] | None = None,
-    negative_counts: Sequence[Sequence[float]] | None = None,
+    positive_samples: Sequence[npt.ArrayLike],
+    positive_counts: Sequence[npt.ArrayLike] | None = None,
+    negative_samples: Sequence[npt.ArrayLike] | None = None,
+    negative_counts: Sequence[npt.ArrayLike] | None = None,
     other_event: (
         DpEventOrAccountant | Sequence[DpEventOrAccountant] | None
     ) = None,
+    positive_log_weights: Sequence[npt.ArrayLike] | None = None,
+    negative_log_weights: Sequence[npt.ArrayLike] | None = None,
+    support_bound: npt.ArrayLike = 1.0,
 ) -> tuple[bool, int | float]:
   r"""Perform calibration to find highest-utility parameter for DP target.
 
@@ -280,7 +354,8 @@ def perform_calibration_from_samples(
 
   If different numbers of samples were used for each hyperparameter, this method
   conservatively uses the minimum number of samples across all values of the
-  hyperparameter for computing tail bounds.
+  hyperparameter for computing tail bounds. Likewise, if different support
+  bounds apply to different hyperparameters, the maximum is used.
 
   Example Usage (calibrating a Gaussian mechanism):
     >>> epsilon, delta = 4.0, 1e-3
@@ -336,6 +411,15 @@ def perform_calibration_from_samples(
       samples_2]``, where ``samples_i`` is the privacy loss samples for
       M(sigma_i) (and ``samples_1`` is independent of ``samples_2``), and
       other_event is ``[GaussianDpEvent(sigma_1), GaussianDpEvent(sigma_2)]``.
+    positive_log_weights: An optional list of lists of importance weights in log
+      space corresponding to each of the lists of positive samples, see
+      :func:`delta_from_epsilon_and_samples`. Cannot be combined with
+      ``other_event``.
+    negative_log_weights: As ``positive_log_weights``, but for the negative
+      samples. Ignored if negative_samples is None.
+    support_bound: An upper bound on each (weighted) sample of the hockey-stick
+      divergence, see :func:`get_overall_delta`. Either a single float, or one
+      float per hyperparameter value, in which case the maximum is used.
 
   Returns:
     Either ``(True, i)``, or ``(False, base_delta)``. If there is an associated
@@ -348,12 +432,15 @@ def perform_calibration_from_samples(
   """  # fmt: skip
   if not positive_samples:
     raise ValueError('positive_samples must be non-empty.')
+  num_values = len(positive_samples)
   for name, value in [
       ('positive_counts', positive_counts),
       ('negative_samples', negative_samples),
       ('negative_counts', negative_counts),
+      ('positive_log_weights', positive_log_weights),
+      ('negative_log_weights', negative_log_weights),
   ]:
-    if value is not None and len(value) != len(positive_samples):
+    if value is not None and len(value) != num_values:
       raise ValueError(
           f'positive_samples and {name} must have the same length.'
       )
@@ -361,6 +448,10 @@ def perform_calibration_from_samples(
     positive_counts = [np.ones_like(samples) for samples in positive_samples]
   if negative_samples is not None and negative_counts is None:
     negative_counts = [np.ones_like(samples) for samples in negative_samples]
+  if positive_log_weights is None:
+    positive_log_weights = [None] * num_values
+  if negative_log_weights is None:
+    negative_log_weights = [None] * num_values
   positive_sample_counts = [sum(counts) for counts in positive_counts]
   if negative_samples is None:
     negative_sample_counts = []
@@ -368,35 +459,45 @@ def perform_calibration_from_samples(
     negative_sample_counts = [sum(counts) for counts in negative_counts]
 
   if other_event is None:
-    other_events = [None] * len(positive_samples)
+    other_events = [None] * num_values
   else:
     if isinstance(other_event, Sequence):
       other_events = [_convert_to_accountant(e) for e in other_event]
     else:
-      other_events = [_convert_to_accountant(other_event)] * len(
-          positive_samples
-      )
+      other_events = [_convert_to_accountant(other_event)] * num_values
 
+  # TODO: Support a per-hyperparameter number of samples and
+  # support bound, with a corresponding per-hyperparameter base_delta, rather
+  # than conservatively using the minimum and maximum across hyperparameters.
   min_sample_count = min(positive_sample_counts + negative_sample_counts)
+  support_bound = float(np.max(support_bound))
 
-  base_delta = get_base_delta(min_sample_count, delta)
+  base_delta = get_base_delta(min_sample_count, delta, support_bound)
 
   def _passes(i: int) -> bool:
     positive_delta = delta_from_epsilon_and_samples(
-        epsilon, positive_samples[i], positive_counts[i], other_events[i]
+        epsilon,
+        positive_samples[i],
+        positive_counts[i],
+        other_events[i],
+        positive_log_weights[i],
     )
     if positive_delta > base_delta:
       return False
     if negative_samples is None:
       return True
     negative_delta = delta_from_epsilon_and_samples(
-        epsilon, negative_samples[i], negative_counts[i], other_events[i]
+        epsilon,
+        negative_samples[i],
+        negative_counts[i],
+        other_events[i],
+        negative_log_weights[i],
     )
     return negative_delta <= base_delta
 
-  for i in range(len(positive_samples)):
+  for i in range(num_values):
     if not _passes(i):
       # This hyperparameter does not pass verification, return the previous one
       # (or fall back to base_delta if even the first one fails).
       return (True, i - 1) if i > 0 else (False, base_delta)
-  return True, len(positive_samples) - 1
+  return True, num_values - 1

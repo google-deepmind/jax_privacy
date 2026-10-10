@@ -171,6 +171,68 @@ class SampleGenerationTest(parameterized.TestCase):
     else:
       _assert_mode_frequencies(samples, [first_mode], np.array([1.0]))
 
+  @parameterized.parameters(2.0, -0.5)
+  def test_generate_balls_in_bins_sample_low_noise_with_mode_scale(
+      self, mode_scale
+  ):
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=2, iterations=4
+    )
+    samples = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier=1e-9,
+        c_col=np.array([1.0, 0.5]),
+        num_samples=10000,
+        mode_scale=mode_scale,
+    )
+    modes = mode_scale * np.array([[1.0, 0.5, 1.0, 0.5], [0.0, 1.0, 0.5, 1.0]])
+    _assert_mode_frequencies(samples, modes, np.array([0.5, 0.5]))
+
+  def test_generate_sample_mode_scale_overrides_positive_sample(self):
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=2, iterations=4
+    )
+    samples = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier=1e-9,
+        c_col=np.array([1.0, 0.5]),
+        positive_sample=False,
+        num_samples=10000,
+        mode_scale=-0.5,
+    )
+    modes = -0.5 * np.array([[1.0, 0.5, 1.0, 0.5], [0.0, 1.0, 0.5, 1.0]])
+    _assert_mode_frequencies(samples, modes, np.array([0.5, 0.5]))
+
+  def test_generate_sample_unit_mode_scale_matches_default(self):
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=2, iterations=4
+    )
+    kwargs = dict(
+        noise_multiplier=1.0, c_col=np.array([1.0, 0.5]), num_samples=10
+    )
+    np.testing.assert_array_equal(
+        sample_generation.generate_sample(
+            sampling_scheme, seed=0xBAD5EED, mode_scale=1.0, **kwargs
+        ),
+        sample_generation.generate_sample(
+            sampling_scheme, seed=0xBAD5EED, **kwargs
+        ),
+    )
+
+  @parameterized.parameters(
+      batch_selection.BMinSepSampling(
+          min_sep=2, sampling_prob=0.5, iterations=4
+      ),
+      batch_selection.CyclicPoissonSampling(
+          cycle_length=2, sampling_prob=0.5, iterations=4
+      ),
+  )
+  def test_generate_sample_raises_for_mode_scale(self, strategy):
+    with self.assertRaises(ValueError):
+      sample_generation.generate_sample(
+          strategy, 1.0, np.array([1.0]), mode_scale=2.0
+      )
+
   @parameterized.parameters(
       (
           True,
@@ -461,6 +523,49 @@ class SampleGenerationTest(parameterized.TestCase):
         c_col,
     )
     np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
+
+  @parameterized.parameters(0.5, 1.0, 1.5, -0.5)
+  def test_compute_privacy_loss_balls_in_bins_mode_scale(self, mode_scale):
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=3, iterations=7
+    )
+    noise_multiplier, c_col = 0.8, np.array([1.0, 0.5, 0.25])
+    samples = np.random.default_rng(0xBAD5EED).normal(size=(7, 5))
+    privacy_loss = sample_generation.compute_privacy_loss(
+        sampling_scheme, samples, noise_multiplier, c_col, mode_scale=mode_scale
+    )
+    # Brute-force log P_w(y) / Q(y) over the (scaled) balls-in-bins modes.
+    modes = mode_scale * sample_generation._all_balls_in_bins_modes(
+        7, 3, tuple(c_col)
+    )
+    llrs = (2 * modes.T @ samples - (modes**2).sum(axis=0)[:, None]) / (
+        2 * noise_multiplier**2
+    )
+    expected = scipy.special.logsumexp(llrs, axis=0) - np.log(3)
+    np.testing.assert_allclose(privacy_loss, expected, atol=1e-10)
+    if mode_scale > 0:
+      # Positive scales are equivalent to scaling the strategy matrix.
+      np.testing.assert_allclose(
+          privacy_loss,
+          sample_generation.compute_privacy_loss(
+              sampling_scheme, samples, noise_multiplier, mode_scale * c_col
+          ),
+          atol=1e-10,
+      )
+
+  @parameterized.parameters(
+      batch_selection.BMinSepSampling(
+          min_sep=2, sampling_prob=0.5, iterations=4
+      ),
+      batch_selection.CyclicPoissonSampling(
+          cycle_length=2, sampling_prob=0.5, iterations=4
+      ),
+  )
+  def test_compute_privacy_loss_raises_for_mode_scale(self, strategy):
+    with self.assertRaises(ValueError):
+      sample_generation.compute_privacy_loss(
+          strategy, np.zeros((4, 1)), 1.0, np.array([1.0]), mode_scale=2.0
+      )
 
   @parameterized.parameters([
       (
@@ -829,6 +934,69 @@ class SampleGenerationTest(parameterized.TestCase):
         num_samples=3,
     )
     _, _ = sample
+
+  @parameterized.named_parameters(("forward", True), ("reverse", False))
+  def test_importance_sampling_matches_plain_monte_carlo(self, forward):
+    # Hockey-stick estimates from the stretched proposal P_w (w = alpha in the
+    # forward direction, 1 - alpha in the reverse direction), reweighted by
+    # exp(log_weights), should agree with plain Monte Carlo up to noise.
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=2, iterations=4
+    )
+    noise_multiplier, c_col = 1.0, np.array([1.0, 0.5])
+    epsilon, alpha, num_samples = 1.0, 1.5, 200_000
+    sign = 1.0 if forward else -1.0
+    rng = np.random.default_rng(0xC0FFEE)
+
+    def _privacy_loss(samples, mode_scale=1.0):
+      return sample_generation.compute_privacy_loss(
+          sampling_scheme,
+          samples,
+          noise_multiplier,
+          c_col,
+          mode_scale=mode_scale,
+      )
+
+    def _estimands(privacy_losses):
+      return -np.expm1(np.minimum(epsilon - privacy_losses, 0.0))
+
+    plain_samples = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier,
+        c_col,
+        seed=rng,
+        positive_sample=forward,
+        num_samples=num_samples,
+    )
+    plain_estimands = _estimands(sign * _privacy_loss(plain_samples))
+
+    mode_scale = alpha if forward else 1.0 - alpha
+    proposal_samples = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier,
+        c_col,
+        seed=rng,
+        num_samples=num_samples,
+        mode_scale=mode_scale,
+    )
+    # log of (evaluation distribution / proposal distribution).
+    log_weights = -_privacy_loss(proposal_samples, mode_scale)
+    if forward:
+      log_weights += _privacy_loss(proposal_samples)
+    weighted_estimands = _estimands(
+        sign * _privacy_loss(proposal_samples)
+    ) * np.exp(log_weights)
+
+    self.assertGreater(plain_estimands.mean(), 1e-3)
+    standard_error = np.sqrt(
+        (plain_estimands.var() + weighted_estimands.var()) / num_samples
+    )
+    self.assertLess(
+        abs(plain_estimands.mean() - weighted_estimands.mean()),
+        6 * standard_error,
+    )
+    # Importance sampling should reduce the variance.
+    self.assertLess(weighted_estimands.var(), plain_estimands.var())
 
 
 if __name__ == "__main__":

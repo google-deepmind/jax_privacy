@@ -464,6 +464,7 @@ def generate_sample(
     positive_sample: bool = True,
     num_samples: int = 1,
     dataset_size: int | None = None,
+    mode_scale: float | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
   """Generates a sample from the dominating pair for amplified DP-BandMF.
 
@@ -486,13 +487,20 @@ def generate_sample(
     positive_sample: If ``True``, we sample from the distribution in the
       dominating pair corresponding to the case where the sensitive example is
       included. Otherwise, we sample from the other case in the dominating pair,
-      where the sensitive example is not included.
+      where the sensitive example is not included. Ignored if ``mode_scale`` is
+      not ``None``.
     num_samples: The number of samples to generate. The default is 1, but it is
       typically much more efficient to generate multiple samples in a single
       call to benefit from vectorization.
     dataset_size: The size of the dataset. Should only be set if accounting for
       the strategy supports truncation, and ``strategy.truncated_batch_size`` is
       not ``None``.
+    mode_scale: If ``None``, we sample from the dominating pair according to
+      ``positive_sample``. Otherwise, the modes of the positive mixture are
+      multiplied by ``mode_scale`` before noise is added, which samples from a
+      stretched mixture that is useful as a proposal distribution for importance
+      sampling (``0`` and ``1`` recover the dominating pair). Only supported for
+      balls-in-bins sampling.
 
   Returns:
     Sample(s) from the dominating PLD for DP-BandMF using balls-in-bins
@@ -502,6 +510,12 @@ def generate_sample(
   """
   _validate.in_range(0, np.inf, noise_multiplier=noise_multiplier)
   _validate_c_col(c_col)
+  if mode_scale is None:
+    mode_scale = 1.0
+  elif isinstance(strategy, batch_selection.BallsInBinsSampling):
+    positive_sample = True  # The modes of the positive mixture are scaled.
+  else:
+    raise ValueError('mode_scale is only supported for balls-in-bins sampling.')
   rng = np.random.default_rng(seed)
   aux = None
   if isinstance(strategy, batch_selection.BallsInBinsSampling):
@@ -558,7 +572,7 @@ def generate_sample(
     )
   else:
     raise ValueError(f'Unsupported batch selection strategy: {type(strategy)}')
-  sample = rng.normal(loc=mode, scale=noise_multiplier)
+  sample = rng.normal(loc=mode_scale * mode, scale=noise_multiplier)
   return sample if aux is None else (sample, aux)
 
 
@@ -567,6 +581,7 @@ def _compute_balls_in_bins_privacy_loss(
     sample: np.ndarray,
     sigma: float,
     c_col: np.ndarray,
+    mode_scale: float = 1.0,
 ) -> np.ndarray:
   """Computes the privacy loss for a sample from balls-in-bins sampling.
 
@@ -578,6 +593,8 @@ def _compute_balls_in_bins_privacy_loss(
       not accounting for the norm of ``c_col``.
     c_col: The non-zero entries in the first column of C. Should be non-negative
       and 1D. Assumed to match the epoch length of balls-in-bins.
+    mode_scale: A scalar by which the modes of the mixture are multiplied. See
+      :func:`compute_privacy_loss`.
 
   Returns:
     The privacy loss of the sample, assuming we sample from the distribution in
@@ -596,7 +613,7 @@ def _compute_balls_in_bins_privacy_loss(
   # dot_products[i, j] = <mode_i, sample_j>
   dot_products = np.dot(modes_matrix.T, sample)
   squared_mode_norms = (modes_matrix**2).sum(axis=0)[:, np.newaxis]
-  llrs = _normal_llrs(dot_products, squared_mode_norms, sigma)
+  llrs = _normal_llrs(dot_products, squared_mode_norms, sigma, mode_scale)
   privacy_loss = sp.special.logsumexp(llrs, axis=0) - np.log(epoch_length)
   return privacy_loss
 
@@ -854,8 +871,9 @@ def compute_privacy_loss(
     noise_multiplier: float,
     c_col: np.ndarray,
     aux: np.ndarray | None = None,
+    mode_scale: float = 1.0,
 ) -> np.ndarray:
-  """Computes the privacy loss on a sample from the dominating pair.
+  r"""Computes the privacy loss on a sample from the dominating pair.
 
   This method reports the privacy loss assuming we sample from the distribution
   in the dominating pair where the sensitive example is included. To get the
@@ -877,6 +895,12 @@ def compute_privacy_loss(
     c_col: The non-zero entries in the first column of C. Should be non-negative
       and 1D. Assumed to match the epoch length of balls-in-bins.
     aux: Auxiliary information needed to compute the privacy loss.
+    mode_scale: A scalar :math:`w` by which the modes of the positive mixture
+      :math:`P` are multiplied. The returned value is then :math:`\ln(P_w(y) /
+      Q(y))`, where :math:`P_w` is the stretched mixture (with :math:`P_1 = P`)
+      and :math:`Q` is the negative distribution. This is used to compute
+      importance weights for samples drawn from :math:`P_w`. Currently only
+      supported for balls-in-bins sampling.
 
   Returns:
     The privacy loss of the sample, assuming we sample from the distribution in
@@ -888,6 +912,10 @@ def compute_privacy_loss(
         'dimension must match the number of iterations of the strategy. Got '
         f'{sample.shape[0]} and {strategy.iterations}.'
     )
+  if mode_scale != 1.0 and not isinstance(
+      strategy, batch_selection.BallsInBinsSampling
+  ):
+    raise ValueError('mode_scale is only supported for balls-in-bins sampling.')
   if isinstance(strategy, batch_selection.BallsInBinsSampling):
     if aux is not None:
       raise ValueError('aux must be None for balls-in-bins sampling.')
@@ -896,6 +924,7 @@ def compute_privacy_loss(
         sample=sample,
         sigma=noise_multiplier,
         c_col=c_col,
+        mode_scale=mode_scale,
     )
   elif isinstance(strategy, batch_selection.BMinSepSampling):
     if (strategy.truncated_batch_size is None) != (aux is None):
