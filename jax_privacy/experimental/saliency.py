@@ -181,44 +181,28 @@ def topk_vote_probe(
   or predictable.
 
   Example:
-    Probe a synthetic dataset and compose its privacy event with a planned
-    downstream DP-SGD run. Fixed seeds are only for this demonstration; real
-    sampling and noise randomness must be unpredictable and kept private.
+    Probe a full synthetic batch without subsampling. The fixed noise seed is
+    only for this demonstration; real noise randomness must remain private.
 
-    >>> import math
     >>> import dp_accounting
     >>> import jax
     >>> import jax.numpy as jnp
-    >>> from jax_privacy import accounting
-    >>> from jax_privacy import batch_selection
     >>> from jax_privacy.experimental import saliency
     >>> params = (jnp.array(0.0), jnp.array(0.0))
-    >>> data = jnp.arange(16.0).reshape(8, 2)
+    >>> data = jnp.array([[1.0, 2.0], [3.0, 4.0]])
     >>> def loss_fn(params, batch):
-    ...   predictions = params[0] * batch[:, 0] + params[1] * batch[:, 1]
-    ...   return jnp.mean((predictions - 1.0) ** 2)
-    >>> sampling = batch_selection.CyclicPoissonSampling(
-    ...     sampling_prob=0.5, iterations=1,
-    ...     partition_type=batch_selection.PartitionType.INDEPENDENT,
-    ... )
-    >>> indices = next(sampling.batch_iterator(len(data), rng=7))
+    ...   return jnp.mean(batch @ jnp.stack(params))
     >>> result = saliency.topk_vote_probe(
-    ...     loss_fn, data[indices], params,
-    ...     vote_top_k=1, select_top_k=1, noise_multiplier=3.0,
+    ...     loss_fn, data, params,
+    ...     vote_top_k=1, select_top_k=1, noise_multiplier=1.0,
     ...     candidate_mask=(True, True), prng_key=jax.random.key(0),
     ... )
-    >>> sum(jax.tree.leaves(result.selected_mask)) == 1
-    True
-    >>> probe_event = accounting.dpsgd_event(
-    ...     3.0, 1, sampling_prob=sampling.sampling_prob,
-    ... )
-    >>> # Event for a planned downstream Poisson-sampled DP-SGD run.
-    >>> train_event = accounting.dpsgd_event(4.0, 10, sampling_prob=0.25)
-    >>> total_event = dp_accounting.ComposedDpEvent([probe_event, train_event])
-    >>> accountant = dp_accounting.rdp.RdpAccountant(orders=[2, 4, 8, 16, 32])
-    >>> _ = accountant.compose(total_event)
-    >>> math.isfinite(accountant.get_epsilon(1e-5))
-    True
+    >>> result.selected_mask
+    (False, True)
+    >>> [(i, round(score, 2)) for i, score in result.ranked_scores]
+    [(1, 4.03), (0, 1.62)]
+    >>> dp_accounting.GaussianDpEvent(noise_multiplier=1.0)
+    GaussianDpEvent(noise_multiplier=1.0)
 
   Args:
     loss_fn: The loss, called as `loss_fn(params, batch)` by default. It must
