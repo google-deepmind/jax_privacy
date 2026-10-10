@@ -14,32 +14,89 @@ limitations under the License. -->
 
 # JAX-Privacy: Algorithms for Privacy-Preserving Machine Learning in JAX
 
-| [**Docs**](https://jax-privacy.readthedocs.io/) | [**Citing**](#citing) |
+| [**Docs**](https://jax-privacy.readthedocs.io/) |
+[**Overview**](https://jax-privacy.readthedocs.io/en/latest/overview.html) |
+[**Paper**](https://arxiv.org/abs/2602.17861) | [**Citing**](#citing) |
 [**Contact**](#contact)
 
-This repository contains:
-
-*   A production-focused API for differentially-private (DP) training of ML
-    models in JAX and Keras.
-*   A library of core components for implementing differentially private machine
-    learning algorithms in JAX.
-*   Worked examples of DP training in JAX, Flax, and Keras.
-
-This code is open-sourced with the main objective of transparency and
-reproducibility for research purposes, and includes production-focused APIs for
-differentially private machine learning. Some rough edges should be expected,
-especially in the research components.
+JAX-Privacy is a library designed to simplify the deployment of robust and
+performant mechanisms for differentially private (DP) machine learning in JAX.
+Guided by design principles of usability, flexibility, and efficiency, it
+provides modular, verified primitives alongside high-level training APIs for
+both researchers requiring deep customization and practitioners seeking an
+out-of-the-box experience.
 
 For installation instructions, examples, and full API documentation, please
-visit the [JAX Privacy documentation](https://jax-privacy.readthedocs.io/).
+visit the [JAX Privacy documentation](https://jax-privacy.readthedocs.io/) or
+read the [accompanying paper](https://arxiv.org/abs/2602.17861).
+
+## Scope and Design Philosophy
+
+JAX Privacy is a general-purpose Python library for differentially private
+machine learning, with a focus on **DP-SGD-style mechanisms**. Rather than
+implementing task-specific end-to-end pipelines, it provides both high-level
+training APIs ([`training.py`][training-py] and the [Keras API][keras-doc])
+and lower-level, composable building blocks that integrate into any JAX
+training loop. For a detailed walkthrough of the five core building blocks and
+the three API tiers, see the [Library Overview][overview-doc].
+
+### What Is in Scope
+
+*   **Composable DP-SGD Ingredients**: Pure Python/JAX modules for per-example
+    gradient clipping, independent and correlated noise addition (including
+    matrix factorization), batch selection strategies, privacy accounting, and
+    empirical auditing.
+*   **Modality- and Model-Agnostic Computation**: JAX Privacy works with any
+    JAX model and dataset format. It does not need to know whether you are
+    working with tabular data, sequence data, image data, or text; the only
+    thing it cares about is that your inputs are PyTrees of JAX arrays with a
+    leading batch axis.
+*   **Zero Framework Lock-In**: JAX Privacy intentionally does not bring in any
+    neural network or data-loading framework dependencies beyond core JAX (along
+    with `optax` and `dp-accounting`), keeping it lightweight and compatible
+    with any JAX ecosystem stack.
+
+### What Is Out of Scope
+
+*   **Models and Data Loaders**: Defining model architectures, tokenizers, and
+    data loaders is out of scope for the library.
+*   **Domain-Specific End-to-End Pipelines**: Task-specific workflows such as
+    "DP Fine-Tuning of Language Models" or "DP Synthetic Data Generation" are
+    not part of the core library, though users can easily use JAX Privacy to
+    build them (see companion libraries like
+    [DPSynth](https://github.com/google/dpsynth)).
+*   **Binaries and Surrounding Infrastructure**: As a library, JAX Privacy
+    consists purely of importable Python code and does not house standalone
+    production binaries, job orchestration, or serving infrastructure. Runnable
+    scripts and binaries demonstrating how to use the library live in a
+    dedicated [`examples/`][examples-dir] directory.
+
+[overview-doc]: https://jax-privacy.readthedocs.io/en/latest/overview.html
+[keras-doc]: https://jax-privacy.readthedocs.io/en/latest/keras_api.html
+[training-py]: https://github.com/google-deepmind/jax_privacy/blob/main/jax_privacy/training.py
+[examples-dir]: https://github.com/google-deepmind/jax_privacy/tree/main/examples
 
 ## How to Cite This Repository <a id="citing"></a>
 
-If you use code from this repository, please cite the following reference:
+If you use JAX-Privacy in your work, please cite the accompanying paper:
+
+```
+@article{mckenna2026jaxprivacy,
+  author = {McKenna, Ryan and Andrew, Galen and Balle, Borja and
+Doroshenko, Vadym and Ganesh, Arun and Kong, Weiwei and Kurakin, Alex and
+McMahan, Brendan and Pravilov, Mikhail},
+  title = {{JAX}-{P}rivacy: A library for differentially private machine learning},
+  journal = {arXiv preprint arXiv:2602.17861},
+  url = {https://arxiv.org/abs/2602.17861},
+  year = {2026},
+}
+```
+
+To cite the software repository directly:
 
 ```
 @software{jax-privacy2022github,
- author = {Balle, Borja and Berrada, Leonard and Charles, Zachary and
+  author = {Balle, Borja and Berrada, Leonard and Charles, Zachary and
 Choquette-Choo, Christopher A and De, Soham and Doroshenko, Vadym and Dvijotham,
 Dj and Galen, Andrew and Ganesh, Arun and Ghalebikesabi, Sahra and Hayes, Jamie
 and Kairouz, Peter and McKenna, Ryan and McMahan, Brendan and Pappu, Aneesh and

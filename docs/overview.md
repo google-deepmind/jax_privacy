@@ -14,11 +14,14 @@ limitations under the License. -->
 
 # Overview
 
-JAX Privacy aims to provide robust, scalable, pure-jax implementations of the
-building blocks necessary to develop end-to-end DP mechanisms for machine
-learning applications. The core library does not provide end-to-end mechanism
-implementations, but we do provide some [examples](examples_guide) of how
-the core library can be used to do this.
+JAX Privacy provides robust, scalable, pure-JAX implementations of the
+building blocks necessary to develop DP mechanisms for machine learning
+applications, alongside high-level training APIs ({mod}`~jax_privacy.training`
+and the [Keras API](keras_api.rst)) and worked [examples](examples_guide). For
+a high-level summary of what is in and out of scope for the library, see
+[Scope and Design Philosophy](https://github.com/google-deepmind/jax_privacy#scope-and-design-philosophy)
+in the repository README and the
+[accompanying paper](https://arxiv.org/abs/2602.17861).
 
 The key building blocks that constitute a DP Mechanism include:
 
