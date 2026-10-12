@@ -53,6 +53,17 @@ def equal(expected, **kwargs):
       )
 
 
+def tree_structure(reference, **kwargs):
+  """Validates that all values have the same PyTree structure as reference."""
+  expected = jax.tree.structure(reference)
+  for name, value in kwargs.items():
+    actual = jax.tree.structure(value)
+    if actual != expected:
+      raise ValueError(
+          f'Expected {name} to have PyTree structure {expected}, got {actual}.'
+      )
+
+
 def is_int(context: str = '', **kwargs):
   """Validates that all values are integers."""
   for name, value in kwargs.items():
