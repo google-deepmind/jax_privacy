@@ -53,4 +53,5 @@ Experimental Modules
 
   experimental.compilation_utils
   experimental.monte_carlo
+  experimental.saliency
 
