@@ -147,8 +147,10 @@ def _batch_iterator(  # pylint: disable=g-doc-args
   """
   num_examples = _validate.batch(dataset)
   if jax.process_count() > 1:
-    crcs = [zlib.crc32(x[:1].tobytes()) for x in jax.tree.leaves(dataset)]
-    seed = copy.deepcopy(np.random.default_rng(rng)).integers(2**63)
+    crcs = [
+        zlib.crc32(x[:1].tobytes()) % 2**31 for x in jax.tree.leaves(dataset)
+    ]
+    seed = copy.deepcopy(np.random.default_rng(rng)).integers(2**31)
     multihost_utils.assert_equal(
         (seed, *crcs), "dataset and rng must match across all JAX processes"
     )
@@ -312,13 +314,15 @@ class DPTrainer:
   def _precompile(
       self,
       dataset: Dataset,
-      params: Params,
+      state: Params | TrainingState,
       *,
       rng_or_seed: np.random.Generator | int | None = None,
   ) -> tuple["DPTrainer", dict[int, PrecompiledFuture]]:
     """[ADVANCED] Resolve config and AOT-compile the steps ``fit`` runs."""
+    if not isinstance(state, TrainingState):
+      state = jax.eval_shape(self.init, state)
     return _compilation.precompile(
-        self, dataset, params, rng_or_seed=rng_or_seed
+        self, dataset, state, rng_or_seed=rng_or_seed
     )
 
   def fit(
@@ -368,7 +372,7 @@ class DPTrainer:
 
     if precompile or isinstance(self.compilation_strategy, AutotuneMicrobatch):
       trainer, futures = self._precompile(
-          dataset, state.params, rng_or_seed=rng_or_seed
+          dataset, state, rng_or_seed=rng_or_seed
       )
     assert isinstance(trainer.compilation_strategy, PadToMultiple)
     warn_on_cache_miss = bool(futures)
