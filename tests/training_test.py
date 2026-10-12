@@ -144,7 +144,7 @@ class BatchIteratorTest(parameterized.TestCase):
     np.testing.assert_allclose(batch[3], [0.0, 0.0])
 
   def test_multihost_checks_seed_and_dataset(self):
-    dataset = np.arange(8, dtype=np.float32).reshape((4, 2))
+    dataset = np.arange(8, dtype=np.int32).reshape((4, 2))
     strategy = batch_selection.FixedBatchSampling(batch_size=2, iterations=1)
     with (
         mock.patch.object(jax, 'process_count', return_value=2),
@@ -154,9 +154,11 @@ class BatchIteratorTest(parameterized.TestCase):
     ):
       [(batch, _)] = list(training._batch_iterator(dataset, strategy, rng=42))
     mock_assert_equal.assert_called_once()
+    training.multihost_utils.assert_equal(*mock_assert_equal.call_args[0])
     checked_seed, checked_crc = mock_assert_equal.call_args[0][0]
-    self.assertEqual(checked_seed, np.random.default_rng(42).integers(2**63))
-    self.assertEqual(checked_crc, training.zlib.crc32(dataset[:1].tobytes()))
+    self.assertEqual(checked_seed, np.random.default_rng(42).integers(2**31))
+    expected_crc = training.zlib.crc32(dataset[:1].tobytes()) % 2**31
+    self.assertEqual(checked_crc, expected_crc)
     expected_idx = next(strategy.batch_iterator(4, rng=42))
     np.testing.assert_allclose(batch, dataset[expected_idx])
 
