@@ -37,11 +37,29 @@ def positive(**kwargs):
       raise ValueError(f'Expected {name}={value} > 0.')
 
 
-def in_range(lo, hi, **kwargs):
-  """Validates that all values are in [lo, hi]."""
+def in_range(lo, hi, closed='both', **kwargs):
+  """Validates that all values are in the interval from lo to hi.
+
+  Args:
+    lo: The lower endpoint of the interval.
+    hi: The upper endpoint of the interval.
+    closed: Which endpoints are included: ``'both'`` for ``[lo, hi]``,
+      ``'left'`` for ``[lo, hi)``, ``'right'`` for ``(lo, hi]``, or
+      ``'neither'`` for ``(lo, hi)``.
+    **kwargs: The named values to validate.
+  """
+  if closed not in ('both', 'left', 'right', 'neither'):
+    raise ValueError(f'Unknown closed={closed!r}.')
+  lo_closed = closed in ('both', 'left')
+  hi_closed = closed in ('both', 'right')
   for name, value in kwargs.items():
-    if not lo <= value <= hi:
-      raise ValueError(f'Expected {name}={value} in [{lo}, {hi}].')
+    lo_ok = lo <= value if lo_closed else lo < value
+    hi_ok = value <= hi if hi_closed else value < hi
+    if not (lo_ok and hi_ok):
+      interval = (
+          f"{'[' if lo_closed else '('}{lo}, {hi}{']' if hi_closed else ')'}"
+      )
+      raise ValueError(f'Expected {name}={value} in {interval}.')
 
 
 def equal(expected, **kwargs):
