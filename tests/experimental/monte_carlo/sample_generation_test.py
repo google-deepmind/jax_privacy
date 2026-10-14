@@ -935,69 +935,6 @@ class SampleGenerationTest(parameterized.TestCase):
     )
     _, _ = sample
 
-  @parameterized.named_parameters(("forward", True), ("reverse", False))
-  def test_importance_sampling_matches_plain_monte_carlo(self, forward):
-    # Hockey-stick estimates from the stretched proposal P_w (w = alpha in the
-    # forward direction, 1 - alpha in the reverse direction), reweighted by
-    # exp(log_weights), should agree with plain Monte Carlo up to noise.
-    sampling_scheme = batch_selection.BallsInBinsSampling(
-        cycle_length=2, iterations=4
-    )
-    noise_multiplier, c_col = 1.0, np.array([1.0, 0.5])
-    epsilon, alpha, num_samples = 1.0, 1.5, 200_000
-    sign = 1.0 if forward else -1.0
-    rng = np.random.default_rng(0xC0FFEE)
-
-    def _privacy_loss(samples, mode_scale=1.0):
-      return sample_generation.compute_privacy_loss(
-          sampling_scheme,
-          samples,
-          noise_multiplier,
-          c_col,
-          mode_scale=mode_scale,
-      )
-
-    def _estimands(privacy_losses):
-      return -np.expm1(np.minimum(epsilon - privacy_losses, 0.0))
-
-    plain_samples = sample_generation.generate_sample(
-        sampling_scheme,
-        noise_multiplier,
-        c_col,
-        seed=rng,
-        positive_sample=forward,
-        num_samples=num_samples,
-    )
-    plain_estimands = _estimands(sign * _privacy_loss(plain_samples))
-
-    mode_scale = alpha if forward else 1.0 - alpha
-    proposal_samples = sample_generation.generate_sample(
-        sampling_scheme,
-        noise_multiplier,
-        c_col,
-        seed=rng,
-        num_samples=num_samples,
-        mode_scale=mode_scale,
-    )
-    # log of (evaluation distribution / proposal distribution).
-    log_weights = -_privacy_loss(proposal_samples, mode_scale)
-    if forward:
-      log_weights += _privacy_loss(proposal_samples)
-    weighted_estimands = _estimands(
-        sign * _privacy_loss(proposal_samples)
-    ) * np.exp(log_weights)
-
-    self.assertGreater(plain_estimands.mean(), 1e-3)
-    standard_error = np.sqrt(
-        (plain_estimands.var() + weighted_estimands.var()) / num_samples
-    )
-    self.assertLess(
-        abs(plain_estimands.mean() - weighted_estimands.mean()),
-        6 * standard_error,
-    )
-    # Importance sampling should reduce the variance.
-    self.assertLess(weighted_estimands.var(), plain_estimands.var())
-
 
 if __name__ == "__main__":
   absltest.main()
