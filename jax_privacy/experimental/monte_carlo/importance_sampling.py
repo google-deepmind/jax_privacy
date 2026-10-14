@@ -40,16 +40,18 @@ Currently only :class:`~jax_privacy.batch_selection.BallsInBinsSampling` is
 supported, since the mixture modes must be enumerable.
 """
 
-from typing import NamedTuple
+import dataclasses
 
 import numpy as np
 import scipy as sp
 
+from ... import _validate
 from ... import batch_selection
 from . import sample_generation
 
 
-class ImportanceSample(NamedTuple):
+@dataclasses.dataclass(frozen=True)
+class ImportanceSample:
   r"""Importance-weighted privacy loss samples.
 
   Attributes:
@@ -85,12 +87,8 @@ def log_support_bound(alpha: float, epsilon: float, kappa: float) -> float:
   Returns:
     :math:`\ln B(\alpha)`.
   """
-  if alpha < 1:
-    raise ValueError('alpha must be at least 1.')
-  if epsilon < 0:
-    raise ValueError('epsilon must be non-negative.')
-  if kappa < 0:
-    raise ValueError('kappa must be non-negative.')
+  _validate.in_range(1, np.inf, alpha=alpha)
+  _validate.non_negative(epsilon=epsilon, kappa=kappa)
   return (
       sp.special.xlogy(alpha - 1, alpha - 1)
       - alpha * np.log(alpha)
@@ -110,10 +108,8 @@ def optimal_stretch(epsilon: float, kappa: float) -> float:
   Returns:
     The minimizing stretch factor, at least 1.
   """
-  if epsilon < 0:
-    raise ValueError('epsilon must be non-negative.')
-  if kappa <= 0:
-    raise ValueError('kappa must be positive.')
+  _validate.non_negative(epsilon=epsilon)
+  _validate.positive(kappa=kappa)
 
   # The derivative of log_support_bound in alpha. It increases from -inf at
   # alpha = 1 to +inf, so it has a unique root which is the minimizer.
@@ -158,8 +154,7 @@ def compute_kappa(
         'Importance sampling is only supported for balls-in-bins sampling, got'
         f' {type(strategy)}.'
     )
-  if noise_multiplier <= 0:
-    raise ValueError('noise_multiplier must be positive.')
+  _validate.positive(noise_multiplier=noise_multiplier)
   modes = sample_generation.balls_in_bins_modes(strategy, c_col)
   return np.max(np.sum(modes**2, axis=0)) / noise_multiplier**2
 

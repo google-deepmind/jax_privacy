@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 from absl.testing import absltest
 from absl.testing import parameterized
 from jax_privacy import batch_selection
@@ -65,16 +67,22 @@ class LogSupportBoundTest(parameterized.TestCase):
 
 class OptimalStretchTest(parameterized.TestCase):
 
-  @parameterized.named_parameters(
-      ("small_kappa", 1.0, 0.01),
-      ("moderate", 1.0, 1.0),
-      ("large_epsilon", 10.0, 0.5),
+  @parameterized.product(
+      alpha=[1.05, 1.5, 3.0, 20.0], kappa_multiplier=[1.01, 2.0, 10.0]
   )
-  def test_minimizes_log_support_bound(self, epsilon, kappa):
-    alpha = importance_sampling.optimal_stretch(epsilon, kappa)
-    self.assertGreater(alpha, 1.0)
+  def test_recovers_minimizer(self, alpha, kappa_multiplier):
+    # alpha minimizes the log support bound exactly when the derivative is 0,
+    # i.e. for epsilon = ln(1 - 1 / alpha) + kappa (2 alpha - 1) / 2, which is
+    # non-negative iff kappa >= kappa_min. The root finder must recover alpha,
+    # and independently of that formula, alpha must beat its neighbors.
+    kappa_min = -2 * math.log1p(-1 / alpha) / (2 * alpha - 1)
+    kappa = kappa_multiplier * kappa_min
+    epsilon = math.log1p(-1 / alpha) + kappa * (2 * alpha - 1) / 2
+    self.assertAlmostEqual(
+        importance_sampling.optimal_stretch(epsilon, kappa), alpha, places=6
+    )
     optimum = importance_sampling.log_support_bound(alpha, epsilon, kappa)
-    for other in [max(1.0, alpha / 1.05), alpha * 1.1]:
+    for other in [max(1.0, alpha / 1.05), alpha * 1.05]:
       self.assertLess(
           optimum, importance_sampling.log_support_bound(other, epsilon, kappa)
       )
