@@ -14,6 +14,8 @@ limitations under the License. -->
 
 # Common Pitfalls in DP Training
 
+<!-- disableFinding(LINK_ID) -->
+
 *Design decisions JAX Privacy makes to prevent them*
 
 *Authors: Ryan McKenna, H. Brendan McMahan, and Tudor Cebere*
@@ -825,7 +827,7 @@ The result is a DP guarantee that holds *exactly* — not up to floating point
 approximation. Combined with
 [cryptographically secure RNG injection](#randomness-and-rng-injection), this
 provides a fully hardened implementation. See the
-[secure noise example](https://github.com/google-deepmind/jax_privacy/blob/main/examples/secure_noise_example.py)
+[secure noise example](https://github.com/google-parfait/jax_privacy/blob/main/examples/secure_noise_example.py)
 for a complete working demonstration.
 
 ```{warning}
@@ -892,7 +894,7 @@ the integers, so there is no floating-point rounding in the sensitivity bound or
 the noise, and the guarantee holds *exactly*. This is the same opt-in path that
 addresses the Theoretical floating-point *attack* surface — it closes both the
 negligible and the adversarial versions of the finite-precision problem at once.
-See the [secure noise example](https://github.com/google-deepmind/jax_privacy/blob/main/examples/secure_noise_example.py)
+See the [secure noise example](https://github.com/google-parfait/jax_privacy/blob/main/examples/secure_noise_example.py)
 for a complete working demonstration.
 
 ---
@@ -1228,6 +1230,6 @@ If you find this guide useful, you can cite it as:
   author       = {McKenna, Ryan and McMahan, H. Brendan and Cebere, Tudor},
   year         = {2026},
   howpublished = {JAX Privacy documentation},
-  url          = {https://github.com/google-deepmind/jax_privacy},
+  url          = {https://github.com/google-parfait/jax_privacy},
 }
 ```
