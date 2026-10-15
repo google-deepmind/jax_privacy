@@ -14,7 +14,11 @@
 
 """Centralized validation utilities for jax_privacy."""
 
+import copy
+import zlib
+
 import jax
+from jax.experimental import multihost_utils
 import jax.numpy as jnp
 import numpy as np
 
@@ -133,6 +137,18 @@ def batch(pytree) -> int:
         f'got sizes: {sorted(sizes)}.'
     )
   return sizes.pop()
+
+
+def multihost(first_example, rng):
+  """Validates that the dataset and RNG match across all JAX processes."""
+  if jax.process_count() > 1:
+    crcs = [
+        zlib.crc32(x.tobytes()) % 2**31 for x in jax.tree.leaves(first_example)
+    ]
+    seed = copy.deepcopy(np.random.default_rng(rng)).integers(2**31)
+    multihost_utils.assert_equal(
+        (seed, *crcs), 'dataset and rng must match across all JAX processes'
+    )
 
 
 def strategy(value, max_size):

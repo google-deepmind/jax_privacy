@@ -20,6 +20,8 @@ from absl.testing import parameterized
 import jax
 import jax.numpy as jnp
 from jax_privacy import _compilation
+from jax_privacy import _data_loading
+from jax_privacy import _validate
 from jax_privacy import batch_selection
 from jax_privacy import execution_plan
 from jax_privacy import noise_addition
@@ -63,7 +65,7 @@ class _FixedPlanConfig:
 
 
 class BatchIteratorTest(parameterized.TestCase):
-  """Tests for training._batch_iterator."""
+  """Tests for _data_loading.batch_iterator."""
 
   def test_padding_zeros_out_padded_examples(self):
     dataset = np.array(
@@ -71,7 +73,9 @@ class BatchIteratorTest(parameterized.TestCase):
     )
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=2)
     batches = list(
-        training._batch_iterator(dataset, strategy, rng=0, pad_to_multiple_of=4)
+        _data_loading.batch_iterator(
+            dataset, strategy, rng=0, pad_to_multiple_of=4
+        )
     )
     self.assertLen(batches, 2)
     expected_indices = list(strategy.batch_iterator(4, rng=0))
@@ -88,7 +92,9 @@ class BatchIteratorTest(parameterized.TestCase):
     )
 
     [(batch, is_padding)] = list(
-        training._batch_iterator(dataset, strategy, rng=0, pad_to_multiple_of=4)
+        _data_loading.batch_iterator(
+            dataset, strategy, rng=0, pad_to_multiple_of=4
+        )
     )
     self.assertEqual(batch.shape, (0, 2))
     self.assertEqual(is_padding.shape, (0,))
@@ -100,7 +106,9 @@ class BatchIteratorTest(parameterized.TestCase):
     }
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=1)
     [(batch, is_padding)] = list(
-        training._batch_iterator(dataset, strategy, rng=0, pad_to_multiple_of=4)
+        _data_loading.batch_iterator(
+            dataset, strategy, rng=0, pad_to_multiple_of=4
+        )
     )
     self.assertEqual(batch['x'].shape, (4, 3))
     self.assertEqual(batch['y'].shape, (4,))
@@ -112,12 +120,12 @@ class BatchIteratorTest(parameterized.TestCase):
     dataset = np.arange(20, dtype=np.float32).reshape((10, 2))
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=5)
     all_batches = list(
-        training._batch_iterator(
+        _data_loading.batch_iterator(
             dataset, strategy, rng=42, pad_to_multiple_of=4
         )
     )
     resumed_batches = list(
-        training._batch_iterator(
+        _data_loading.batch_iterator(
             dataset, strategy, rng=42, pad_to_multiple_of=4, initial_step=2
         )
     )
@@ -130,7 +138,7 @@ class BatchIteratorTest(parameterized.TestCase):
     dataset = np.arange(1, 9, dtype=np.float32).reshape((4, 2))
     strategy = batch_selection.FixedBatchSampling(batch_size=2, iterations=1)
     [(batch, is_padding)] = list(
-        training._batch_iterator(
+        _data_loading.batch_iterator(
             dataset,
             strategy,
             rng=0,
@@ -149,15 +157,17 @@ class BatchIteratorTest(parameterized.TestCase):
     with (
         mock.patch.object(jax, 'process_count', return_value=2),
         mock.patch.object(
-            training.multihost_utils, 'assert_equal'
+            _validate.multihost_utils, 'assert_equal'
         ) as mock_assert_equal,
     ):
-      [(batch, _)] = list(training._batch_iterator(dataset, strategy, rng=42))
+      [(batch, _)] = list(
+          _data_loading.batch_iterator(dataset, strategy, rng=42)
+      )
     mock_assert_equal.assert_called_once()
-    training.multihost_utils.assert_equal(*mock_assert_equal.call_args[0])
+    _validate.multihost_utils.assert_equal(*mock_assert_equal.call_args[0])
     checked_seed, checked_crc = mock_assert_equal.call_args[0][0]
     self.assertEqual(checked_seed, np.random.default_rng(42).integers(2**31))
-    expected_crc = training.zlib.crc32(dataset[:1].tobytes()) % 2**31
+    expected_crc = _validate.zlib.crc32(dataset[:1].tobytes()) % 2**31
     self.assertEqual(checked_crc, expected_crc)
     expected_idx = next(strategy.batch_iterator(4, rng=42))
     np.testing.assert_allclose(batch, dataset[expected_idx])

@@ -31,21 +31,16 @@ Callers are expected to implement these things themselves via dependency
 injection through the callback_fn option.
 """
 
-from collections.abc import Callable, Iterator
-import copy
+from collections.abc import Callable
 import dataclasses
 import functools
-import itertools
 from typing import Protocol, TypeAlias
-import zlib
 
 from absl import logging
 import jax
-from jax.experimental import multihost_utils
 import jax_privacy
 from jax_privacy import _compilation
-from jax_privacy import _validate
-from jax_privacy import batch_selection
+from jax_privacy import _data_loading
 from jax_privacy import execution_plan
 from jax_privacy import optimizers as aug_optimizers
 import numpy as np
@@ -124,61 +119,6 @@ class TrainingState:
 
 
 CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
-
-
-def _batch_iterator(  # pylint: disable=g-doc-args
-    dataset: Dataset,
-    strategy: batch_selection.BatchSelectionStrategy,
-    *,
-    rng: batch_selection.RngType = None,
-    pad_to_multiple_of: int = 1,
-    microbatch_size: int | None = None,
-    initial_step: int = 0,
-    sharding: jax.sharding.NamedSharding | None = None,
-) -> Iterator[tuple[Batch, jax.Array]]:
-  """Yields padded (batch, is_padding_example) pairs from dataset.
-
-  Formal Guarantees:
-    - Non-padding examples are sampled according to ``strategy.batch_iterator``,
-      starting from ``initial_step``.
-    - Padding positions (where ``indices == -1``) are zeroed out in ``batch``
-      (having no dependence on ``dataset``) and marked ``True`` in
-      ``is_padding_example``.
-  """
-  num_examples = _validate.batch(dataset)
-  if jax.process_count() > 1:
-    crcs = [
-        zlib.crc32(x[:1].tobytes()) % 2**31 for x in jax.tree.leaves(dataset)
-    ]
-    seed = copy.deepcopy(np.random.default_rng(rng)).integers(2**31)
-    multihost_utils.assert_equal(
-        (seed, *crcs), "dataset and rng must match across all JAX processes"
-    )
-  index_iterator = strategy.batch_iterator(num_examples, rng=rng)
-
-  # When sharding across a mesh (including multi-controller JAX),
-  # make_array_from_callback slices and transfers only the process-addressable
-  # shards to HBM. In multi-controller setups, every process must hold the
-  # full dataset and use the same rng so each process samples the same global
-  # batch indices before slicing its local device shards.
-  def _to_device(x: np.ndarray) -> jax.Array:
-    if sharding is None:
-      return jax.device_put(x)
-    return jax.make_array_from_callback(x.shape, sharding, lambda idx: x[idx])
-
-  def _index_and_zero(x, indices):
-    mask = np.expand_dims(indices == -1, tuple(range(1, x.ndim)))
-    return _to_device(np.where(mask, 0, x[indices]))
-
-  # Fast-forward the index iterator to initial_step when resuming from a
-  # checkpoint, without materializing or transferring skipped batches.
-  # TODO: Investigate stateful iterator instead of rng replay.
-  for indices in itertools.islice(index_iterator, initial_step, None):
-    indices = batch_selection.pad_to_multiple_of(
-        indices, pad_to_multiple_of, microbatch_size=microbatch_size
-    )
-    fn = functools.partial(_index_and_zero, indices=indices)
-    yield jax.tree.map(fn, dataset), _to_device(indices == -1)
 
 
 # DPTrainer contains static configuration that defines the training step, but
@@ -383,7 +323,7 @@ class DPTrainer:
 
     with _compilation.hoist_closed_over_constants():
       axis = trainer.performance_flags.batch_axis_name
-      batches = _batch_iterator(
+      batches = _data_loading.batch_iterator(
           dataset,
           trainer.plan.batch_selection_strategy,
           rng=rng,
