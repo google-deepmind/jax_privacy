@@ -947,6 +947,42 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
     for log in logs.output:
       self.assertNotIn('Cache Miss', log)
 
+  def test_default_pad_to_max_with_microbatch_size(self):
+    """Default PadToMultiple() pads to max batch size rounded to microbatch."""
+    params = jnp.ones((3,), dtype=jnp.float32)
+    dataset = np.zeros((20, 3), dtype=np.float32)
+    trainer = training.DPTrainer(
+        config=_make_config(iterations=3),
+        performance_flags=execution_plan.PerformanceFlags(microbatch_size=6),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+    )
+
+    resolved, futures = trainer._precompile(dataset, params, rng_or_seed=0)
+    self.assertEqual(resolved.compilation_strategy.multiple % 6, 0)
+    self.assertLen(futures, 1)
+
+    with self.assertLogs(level='INFO') as logs:
+      state = trainer.fit(dataset, params, rng_or_seed=0, precompile=True)
+
+    self.assertEqual(int(state.step), 3)
+    for log in logs.output:
+      self.assertNotIn('Cache Miss', log)
+
+  def test_incompatible_multiple_and_microbatch_size_raises(self):
+    """PadToMultiple(multiple=4) with microbatch_size=6 raises ValueError."""
+    params = jnp.ones((3,), dtype=jnp.float32)
+    dataset = np.zeros((20, 3), dtype=np.float32)
+    trainer = training.DPTrainer(
+        config=_make_config(iterations=3),
+        performance_flags=execution_plan.PerformanceFlags(microbatch_size=6),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+        compilation_strategy=training.PadToMultiple(multiple=4),
+    )
+    with self.assertRaisesRegex(ValueError, 'must be divisible by'):
+      trainer.fit(dataset, params, rng_or_seed=0)
+
 
 class DPTrainerAutotuneTest(parameterized.TestCase):
   """CPU smoke test for microbatch_size autotuning."""
