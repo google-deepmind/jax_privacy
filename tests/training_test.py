@@ -17,6 +17,7 @@ import dataclasses
 from unittest import mock
 from absl.testing import absltest
 from absl.testing import parameterized
+import grain.python as grain
 import jax
 import jax.numpy as jnp
 from jax_privacy import _compilation
@@ -64,13 +65,27 @@ class _FixedPlanConfig:
     return self.plan
 
 
+def _as_map_dataset(dataset):
+  n = jax.tree.leaves(dataset)[0].shape[0]
+  elements = [jax.tree.map(lambda x, i=i: x[i], dataset) for i in range(n)]
+  return grain.MapDataset.source(elements)
+
+
+_DATASET_TYPES = (
+    ('pytree', lambda x: x),
+    ('grain', _as_map_dataset),
+)
+
+
 class BatchIteratorTest(parameterized.TestCase):
   """Tests for _data_loading.batch_iterator."""
 
-  def test_padding_zeros_out_padded_examples(self):
-    dataset = np.array(
+  @parameterized.named_parameters(*_DATASET_TYPES)
+  def test_padding_zeros_out_padded_examples(self, to_dataset):
+    raw = np.array(
         [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]], dtype=np.float32
     )
+    dataset = to_dataset(raw)
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=2)
     batches = list(
         _data_loading.batch_iterator(
@@ -82,11 +97,13 @@ class BatchIteratorTest(parameterized.TestCase):
     for (batch, is_padding), idx in zip(batches, expected_indices):
       self.assertEqual(batch.shape, (4, 2))
       np.testing.assert_array_equal(is_padding, [False, False, False, True])
-      np.testing.assert_allclose(batch[:3], dataset[idx])
+      np.testing.assert_allclose(batch[:3], raw[idx])
       np.testing.assert_allclose(batch[3], [0.0, 0.0])
 
-  def test_empty_batch(self):
-    dataset = np.arange(10, dtype=np.float32).reshape((5, 2))
+  @parameterized.named_parameters(*_DATASET_TYPES)
+  def test_empty_batch(self, to_dataset):
+    raw = np.arange(10, dtype=np.float32).reshape((5, 2))
+    dataset = to_dataset(raw)
     strategy = batch_selection.CyclicPoissonSampling(
         sampling_prob=0.0, iterations=1
     )
@@ -99,11 +116,13 @@ class BatchIteratorTest(parameterized.TestCase):
     self.assertEqual(batch.shape, (0, 2))
     self.assertEqual(is_padding.shape, (0,))
 
-  def test_pytree_dataset(self):
-    dataset = {
+  @parameterized.named_parameters(*_DATASET_TYPES)
+  def test_pytree_dataset(self, to_dataset):
+    raw = {
         'x': np.arange(12, dtype=np.float32).reshape((4, 3)),
         'y': np.arange(4, dtype=np.int32) + 10,
     }
+    dataset = to_dataset(raw)
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=1)
     [(batch, is_padding)] = list(
         _data_loading.batch_iterator(
@@ -116,8 +135,10 @@ class BatchIteratorTest(parameterized.TestCase):
     np.testing.assert_allclose(batch['x'][3], np.zeros(3))
     self.assertEqual(int(batch['y'][3]), 0)
 
-  def test_initial_step_fast_forwards(self):
-    dataset = np.arange(20, dtype=np.float32).reshape((10, 2))
+  @parameterized.named_parameters(*_DATASET_TYPES)
+  def test_initial_step_fast_forwards(self, to_dataset):
+    raw = np.arange(20, dtype=np.float32).reshape((10, 2))
+    dataset = to_dataset(raw)
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=5)
     all_batches = list(
         _data_loading.batch_iterator(
@@ -134,8 +155,10 @@ class BatchIteratorTest(parameterized.TestCase):
       np.testing.assert_allclose(b1, b2)
       np.testing.assert_array_equal(p1, p2)
 
-  def test_microbatch_size_reorders_padding(self):
-    dataset = np.arange(1, 9, dtype=np.float32).reshape((4, 2))
+  @parameterized.named_parameters(*_DATASET_TYPES)
+  def test_microbatch_size_reorders_padding(self, to_dataset):
+    raw = np.arange(1, 9, dtype=np.float32).reshape((4, 2))
+    dataset = to_dataset(raw)
     strategy = batch_selection.FixedBatchSampling(batch_size=2, iterations=1)
     [(batch, is_padding)] = list(
         _data_loading.batch_iterator(
@@ -151,8 +174,10 @@ class BatchIteratorTest(parameterized.TestCase):
     np.testing.assert_allclose(batch[1], [0.0, 0.0])
     np.testing.assert_allclose(batch[3], [0.0, 0.0])
 
-  def test_multihost_checks_seed_and_dataset(self):
-    dataset = np.arange(8, dtype=np.int32).reshape((4, 2))
+  @parameterized.named_parameters(*_DATASET_TYPES)
+  def test_multihost_checks_seed_and_dataset(self, to_dataset):
+    raw = np.arange(8, dtype=np.int32).reshape((4, 2))
+    dataset = to_dataset(raw)
     strategy = batch_selection.FixedBatchSampling(batch_size=2, iterations=1)
     with (
         mock.patch.object(jax, 'process_count', return_value=2),
@@ -167,19 +192,112 @@ class BatchIteratorTest(parameterized.TestCase):
     _validate.multihost_utils.assert_equal(*mock_assert_equal.call_args[0])
     checked_seed, checked_crc = mock_assert_equal.call_args[0][0]
     self.assertEqual(checked_seed, np.random.default_rng(42).integers(2**31))
-    expected_crc = _validate.zlib.crc32(dataset[:1].tobytes()) % 2**31
+    expected_crc = _validate.zlib.crc32(raw[:1].tobytes()) % 2**31
     self.assertEqual(checked_crc, expected_crc)
     expected_idx = next(strategy.batch_iterator(4, rng=42))
-    np.testing.assert_allclose(batch, dataset[expected_idx])
+    np.testing.assert_allclose(batch, raw[expected_idx])
+
+  def test_grain_padding_example_overrides_element_zero(self):
+    class _MismatchedZeroSource(grain.RandomAccessDataSource):
+
+      def __len__(self):
+        return 3
+
+      def __getitem__(self, idx):
+        if idx == 0:
+          return {'x': np.zeros((99,), dtype=np.float32)}
+        return {'x': np.array([float(idx), float(idx)], dtype=np.float32)}
+
+    dataset = grain.MapDataset.source(_MismatchedZeroSource())
+    strategy = mock.Mock(spec=batch_selection.BatchSelectionStrategy)
+    strategy.batch_iterator.return_value = iter([np.array([1, 2])])
+    spec = {'x': jax.ShapeDtypeStruct((2,), np.float32)}
+    [(batch, is_padding)] = list(
+        _data_loading.batch_iterator(
+            dataset,
+            strategy,
+            rng=0,
+            pad_to_multiple_of=4,
+            padding_example=spec,
+        )
+    )
+    self.assertEqual(batch['x'].shape, (4, 2))
+    np.testing.assert_allclose(
+        batch['x'], [[1.0, 1.0], [2.0, 2.0], [0.0, 0.0], [0.0, 0.0]]
+    )
+    np.testing.assert_array_equal(is_padding, [False, False, True, True])
+
+  def test_pytree_padding_example_validation(self):
+    dataset = {'x': np.zeros((4, 2), dtype=np.float32)}
+    strategy = batch_selection.FixedBatchSampling(batch_size=2, iterations=1)
+    valid_spec = {'x': jax.ShapeDtypeStruct((2,), np.float32)}
+    self.assertLen(
+        list(
+            _data_loading.batch_iterator(
+                dataset, strategy, rng=0, padding_example=valid_spec
+            )
+        ),
+        1,
+    )
+    with self.assertRaises(ValueError):
+      list(
+          _data_loading.batch_iterator(
+              dataset,
+              strategy,
+              rng=0,
+              padding_example={'x': jax.ShapeDtypeStruct((3,), np.float32)},
+          )
+      )
+    with self.assertRaises(ValueError):
+      list(
+          _data_loading.batch_iterator(
+              dataset,
+              strategy,
+              rng=0,
+              padding_example={'y': jax.ShapeDtypeStruct((2,), np.float32)},
+          )
+      )
 
 
 class DPTrainerTest(parameterized.TestCase):
   """Tests for the DPTrainer class."""
 
-  def test_basic_training_runs(self):
+  def test_map_dataset_with_padding_example(self):
+    """DPTrainer(padding_example=...) uses padding_example over dataset[0]."""
+
+    class _MismatchedZeroSource(grain.RandomAccessDataSource):
+
+      def __len__(self):
+        return 3
+
+      def __getitem__(self, idx):
+        if idx == 0:
+          return np.zeros((99,), dtype=np.float32)
+        return np.array([float(idx), float(idx)], dtype=np.float32)
+
+    dataset = grain.MapDataset.source(_MismatchedZeroSource())
+    strategy = mock.Mock(spec=batch_selection.BatchSelectionStrategy)
+    strategy.batch_iterator.side_effect = lambda n, rng=None: iter(
+        [np.array([1, 2])]
+    )
+    plan = dataclasses.replace(
+        _make_config(iterations=1).make(),
+        batch_selection_strategy=strategy,
+    )
+    trainer = training.DPTrainer(
+        config=_FixedPlanConfig(plan),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+        padding_example=jax.ShapeDtypeStruct((2,), np.float32),
+    )
+    state = trainer.fit(dataset, jnp.array([5.0, 5.0]), rng_or_seed=0)
+    self.assertEqual(int(state.step), 1)
+
+  @parameterized.named_parameters(*_DATASET_TYPES)
+  def test_basic_training_runs(self, to_dataset):
     """Train loop completes and returns a valid TrainingState."""
     params = jnp.array([5.0, 5.0])
-    dataset = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    dataset = to_dataset(np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]))
     config = _make_config(iterations=3)
     optimizer = optax.sgd(0.01)
 
@@ -193,10 +311,13 @@ class DPTrainerTest(parameterized.TestCase):
     self.assertIsInstance(state, training.TrainingState)
     self.assertEqual(int(state.step), 3)
 
-  def test_resume_from_state_yields_identical_results(self):
+  @parameterized.named_parameters(*_DATASET_TYPES)
+  def test_resume_from_state_yields_identical_results(self, to_dataset):
     """Test that resuming from intermediate steps works as intended."""
     params = jnp.array([5.0, 5.0])
-    dataset = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])
+    dataset = to_dataset(
+        np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])
+    )
 
     trainer = training.DPTrainer(
         config=_make_config(5, noise_multiplier=0.1, expected_participations=1),
@@ -220,6 +341,29 @@ class DPTrainerTest(parameterized.TestCase):
           final_state_resumed.params, expected_final_state.params
       )
       self.assertEqual(final_state_resumed.step, expected_final_state.step)
+
+  def test_map_dataset_pytree_structure(self):
+    """Train loop works with a Grain MapDataset yielding PyTrees."""
+    params = jnp.array([1.0, 2.0])
+    data = [
+        {'x': np.array([1.0, 2.0]), 'y': np.array([0.5])},
+        {'x': np.array([3.0, 4.0]), 'y': np.array([1.5])},
+        {'x': np.array([5.0, 6.0]), 'y': np.array([2.5])},
+    ]
+    dataset = grain.MapDataset.source(data)
+
+    def pytree_loss(params, batch, prng):
+      del prng
+      loss = jnp.mean((params - batch['x']) ** 2) + jnp.mean(batch['y'])
+      return loss, {'loss': loss}
+
+    trainer = training.DPTrainer(
+        config=_make_config(iterations=3),
+        loss_fn=pytree_loss,
+        optimizer=optax.sgd(0.01),
+    )
+    state = trainer.fit(dataset, params, rng_or_seed=0)
+    self.assertEqual(int(state.step), 3)
 
   def test_params_change_after_training(self):
     """Parameters should change from initial values after training."""
@@ -462,7 +606,11 @@ class DPTrainerTest(parameterized.TestCase):
     self.assertEqual(state.params.sharding.mesh, mesh)
     self.assertTrue(jnp.all(jnp.isfinite(state.params)))
 
-  def test_fit_with_batch_axis_name(self):
+  @parameterized.named_parameters(
+      ('array', lambda x: x),
+      ('grain', _as_map_dataset),
+  )
+  def test_fit_with_batch_axis_name(self, to_dataset):
     """fit() shards batches along batch_axis_name on an active mesh."""
     devices = np.array(jax.devices()[:1]).reshape((1, 1))
     mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
@@ -475,7 +623,7 @@ class DPTrainerTest(parameterized.TestCase):
       params = jax.device_put(
           jnp.full((4,), 5.0, dtype=jnp.float32), param_sharding
       )
-      dataset = np.zeros((8, 4), dtype=np.float32)
+      dataset = to_dataset(np.zeros((8, 4), dtype=np.float32))
 
       def loss_with_closed_over_base(p, batch, prng):
         del prng

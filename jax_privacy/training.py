@@ -34,7 +34,7 @@ injection through the callback_fn option.
 from collections.abc import Callable
 import dataclasses
 import functools
-from typing import Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
 from absl import logging
 import jax
@@ -56,7 +56,7 @@ Loss: TypeAlias = jax.Array
 Aux: TypeAlias = optax.ArrayTree
 PerExampleAux: TypeAlias = jax_privacy.clipping.AuxiliaryOutput
 Batch: TypeAlias = optax.ArrayTree
-Dataset: TypeAlias = optax.ArrayTree
+Dataset: TypeAlias = optax.ArrayTree | Any
 Params: TypeAlias = optax.ArrayTree
 OptState: TypeAlias = optax.ArrayTree
 NoiseState: TypeAlias = optax.ArrayTree
@@ -159,6 +159,11 @@ class DPTrainer:
       :class:`~jax_privacy.training.AutotuneMicrobatch` picks the largest
       microbatch size that fits device memory and compiles once. See
       :class:`~jax_privacy.training.CompilationStrategy`.
+    padding_example: Optional single-example PyTree specification (arrays or
+      :class:`jax.ShapeDtypeStruct`) defining the structure, shapes, and dtypes
+      of zero-padded examples. If omitted on a ``grain.MapDataset``, it is
+      inferred from ``dataset[0]``, which requires a non-empty dataset with
+      fixed element shapes.
   """
 
   config: execution_plan.ExecutionPlanConfig
@@ -173,6 +178,7 @@ class DPTrainer:
   compilation_strategy: _compilation.CompilationStrategy = dataclasses.field(
       default_factory=_compilation.PadToMultiple
   )
+  padding_example: Any = None
 
   def __post_init__(self):
     _ = self.plan  # Build untraced so cached PRNG key isn't a leaked tracer.
@@ -277,8 +283,10 @@ class DPTrainer:
     """Runs an end-to-end differentially private training loop.
 
     Args:
-      dataset: The training dataset, as a PyTree of arrays where the first axis
-        of each leaf is the batch / example dimension.
+      dataset: The training dataset, either as a PyTree of arrays where the
+        first axis of each leaf is the batch / example dimension, or as a
+        ``grain.MapDataset`` (or ``grain.RandomAccessDataSource``) where each
+        element is a PyTree of arrays for a single example.
       state: Initial parameter PyTree or a resumable ``TrainingState``. If a
         ``TrainingState`` is provided, training continues from the step recorded
         in the state, and the batch selection iterator safely fast-forwards to
@@ -326,6 +334,7 @@ class DPTrainer:
       batches = _data_loading.batch_iterator(
           dataset,
           trainer.plan.batch_selection_strategy,
+          padding_example=trainer.padding_example,
           rng=rng,
           pad_to_multiple_of=trainer.compilation_strategy.multiple,
           microbatch_size=trainer.performance_flags.microbatch_size,

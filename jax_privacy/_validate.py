@@ -100,21 +100,26 @@ def is_none(context: str = '', **kwargs):
       raise ValueError(f'Expected {name}={value} to be None. {context}')
 
 
-def batch(pytree) -> int:
+def batch(pytree, padding_example=None) -> int:
   """Validates a batch pytree and returns the batch size.
 
   Checks that the pytree has at least one leaf, all leaves are arrays with
   at least one dimension, and all leaves have the same size along axis 0.
+  If ``padding_example`` is provided, also checks that ``pytree`` matches its
+  PyTree structure, per-example shapes, and dtypes.
 
   Args:
     pytree: A pytree of arrays representing a batch of data.
+    padding_example: Optional single-example PyTree specification to validate
+      against.
 
   Returns:
     The batch size (size of the first dimension).
 
   Raises:
     ValueError: If the pytree is empty, contains non-array leaves, leaves
-      with zero dimensions, or leaves with inconsistent first-axis sizes.
+      with zero dimensions, leaves with inconsistent first-axis sizes, or
+      does not match ``padding_example``.
   """
   leaves = jax.tree.leaves(pytree)
   if not leaves:
@@ -136,14 +141,20 @@ def batch(pytree) -> int:
         'All batch leaves must have the same size along axis 0, '
         f'got sizes: {sorted(sizes)}.'
     )
+  if padding_example is not None:
+    tree_structure(padding_example, dataset=pytree)
+    data_meta = [(x.shape[1:], x.dtype) for x in leaves]
+    pad_meta = [(x.shape, x.dtype) for x in jax.tree.leaves(padding_example)]
+    equal(pad_meta, dataset_shape_dtype=data_meta)
   return sizes.pop()
 
 
 def multihost(first_example, rng):
   """Validates that the dataset and RNG match across all JAX processes."""
   if jax.process_count() > 1:
+    to_bytes = lambda x: getattr(x, 'tobytes', lambda: str(x).encode())()
     crcs = [
-        zlib.crc32(x.tobytes()) % 2**31 for x in jax.tree.leaves(first_example)
+        zlib.crc32(to_bytes(x)) % 2**31 for x in jax.tree.leaves(first_example)
     ]
     seed = copy.deepcopy(np.random.default_rng(rng)).integers(2**31)
     multihost_utils.assert_equal(
