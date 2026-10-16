@@ -142,7 +142,7 @@ def matrix_factorization_privatizer(
   the input dtype.
 
   For naming of these parameters, see the `matrix_factorization README
-  <https://github.com/google-deepmind/jax_privacy/blob/main/jax_privacy/matrix_factorization/README.md>`_.
+  <https://github.com/google-parfait/jax_privacy/blob/main/jax_privacy/matrix_factorization/README.md>`_.
 
   Args:
     noising_matrix: A matrix used to generate correlated noise. Noise samples

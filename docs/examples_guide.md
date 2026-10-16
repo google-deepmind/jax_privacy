@@ -15,7 +15,7 @@ limitations under the License. -->
 # Examples Guide
 
 The
-[`examples/`](https://github.com/google-deepmind/jax_privacy/tree/main/examples)
+[`examples/`](https://github.com/google-parfait/jax_privacy/tree/main/examples)
 directory contains runnable scripts and notebooks that demonstrate how to use
 the JAX Privacy building blocks. The examples fall into two broad categories:
 
