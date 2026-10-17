@@ -318,11 +318,15 @@ class DPTrainer:
     if not isinstance(state, TrainingState):
       state = self.init(jax.tree.map(jax.numpy.copy, state))
 
-    if precompile or isinstance(self.compilation_strategy, AutotuneMicrobatch):
+    if (
+        precompile
+        or getattr(self.compilation_strategy, "multiple", None) is None
+    ):
       trainer, futures = self._precompile(
           dataset, state, rng_or_seed=rng_or_seed
       )
     assert isinstance(trainer.compilation_strategy, PadToMultiple)
+    assert trainer.compilation_strategy.multiple is not None
     warn_on_cache_miss = bool(futures)
 
     # We need tight alignment between how rng is used here and in precompile().
