@@ -20,7 +20,7 @@ limitations under the License. -->
 ("DP-FTRL") mechanisms: define, optimize, instantiate, and apply a matrix
 factorization of a workload. This page records the notation used by that
 public API. For a runnable overview, see
-[`dpmf_strategy_optimization.py`](https://github.com/google-deepmind/jax_privacy/blob/main/examples/dpmf_strategy_optimization.py).
+[`dpmf_strategy_optimization.py`](https://github.com/google-parfait/jax_privacy/blob/main/examples/dpmf_strategy_optimization.py).
 
 The full name (left column) is generally used for kwargs on public functions.
 Single-letter names appear in implementations and match the papers cited
