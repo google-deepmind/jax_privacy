@@ -205,9 +205,10 @@ def pad_to_multiple_of(
     indices: A 1D array of batch indices.
     multiple: A positive integer. The input batch will be padded to a multiple
       of this value.
-    microbatch_size: If set, reorders the padded indices so that padding
-      examples cluster into the last microbatches under Fortran-order reshaping.
-      See :func:`~jax_privacy.sharding_utils.compute_early_stopping_order`.
+    microbatch_size: If set, must divide ``multiple``. Reorders the padded
+      indices so that padding examples cluster into the last microbatches under
+      Fortran-order reshaping. See
+      :func:`~jax_privacy.sharding_utils.compute_early_stopping_order`.
 
   Returns:
     The padded array of indices.
@@ -216,6 +217,8 @@ def pad_to_multiple_of(
     raise ValueError('pad_to_multiple_of currently expects 1D indices.')
   if multiple <= 0:
     raise ValueError(f'Padding multiple must be positive, got {multiple}.')
+  if microbatch_size is not None and multiple % microbatch_size != 0:
+    raise ValueError(f'{multiple=} must be divisible by {microbatch_size=}.')
   curr_size = indices.shape[0]
   pad_size = (multiple - curr_size) % multiple
   new_indices = np.full(curr_size + pad_size, -1, dtype=indices.dtype)

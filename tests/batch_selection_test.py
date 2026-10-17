@@ -686,6 +686,19 @@ class BatchPaddingTest(parameterized.TestCase):
           )
         break
 
+  @parameterized.parameters(
+      (4, 6),
+      (32, 128),
+      (12, 5),
+  )
+  def test_pad_to_multiple_of_incompatible_microbatch_size_raises(
+      self, multiple, microbatch_size
+  ):
+    with self.assertRaisesRegex(ValueError, 'must be divisible by'):
+      batch_selection.pad_to_multiple_of(
+          np.arange(10), multiple, microbatch_size=microbatch_size
+      )
+
   def test_pad_to_multiple_of_microbatch_worked_example(self):
     """Worked example: 10 real indices padded to 12 with microbatch_size=3."""
     indices = np.arange(10)
